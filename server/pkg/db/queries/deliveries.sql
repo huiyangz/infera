@@ -20,3 +20,15 @@ UPDATE deliveries
 SET status = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: IncrementDeliveryFailCount :one
+UPDATE deliveries
+SET fail_count = fail_count + 1, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ResetDeliveryFailCount :one
+UPDATE deliveries
+SET fail_count = 0, updated_at = now()
+WHERE id = $1
+RETURNING *;

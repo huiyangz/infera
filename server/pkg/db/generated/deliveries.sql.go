@@ -14,7 +14,7 @@ import (
 const createDelivery = `-- name: CreateDelivery :one
 INSERT INTO deliveries (title, description, repo_url, branch)
 VALUES ($1, $2, $3, $4)
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
 `
 
 type CreateDeliveryParams struct {
@@ -42,12 +42,13 @@ func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) 
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailCount,
 	)
 	return i, err
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at FROM deliveries WHERE id = $1
+SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -63,12 +64,38 @@ func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, er
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailCount,
+	)
+	return i, err
+}
+
+const incrementDeliveryFailCount = `-- name: IncrementDeliveryFailCount :one
+UPDATE deliveries
+SET fail_count = fail_count + 1, updated_at = now()
+WHERE id = $1
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+`
+
+func (q *Queries) IncrementDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
+	row := q.db.QueryRow(ctx, incrementDeliveryFailCount, id)
+	var i Delivery
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.RepoUrl,
+		&i.Branch,
+		&i.Status,
+		&i.CurrentStage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FailCount,
 	)
 	return i, err
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
+SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
 `
 
 type ListDeliveriesParams struct {
@@ -95,6 +122,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 			&i.CurrentStage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FailCount,
 		); err != nil {
 			return nil, err
 		}
@@ -106,11 +134,36 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 	return items, nil
 }
 
+const resetDeliveryFailCount = `-- name: ResetDeliveryFailCount :one
+UPDATE deliveries
+SET fail_count = 0, updated_at = now()
+WHERE id = $1
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+`
+
+func (q *Queries) ResetDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
+	row := q.db.QueryRow(ctx, resetDeliveryFailCount, id)
+	var i Delivery
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.RepoUrl,
+		&i.Branch,
+		&i.Status,
+		&i.CurrentStage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FailCount,
+	)
+	return i, err
+}
+
 const updateDeliveryStage = `-- name: UpdateDeliveryStage :one
 UPDATE deliveries
 SET current_stage = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
 `
 
 type UpdateDeliveryStageParams struct {
@@ -131,6 +184,7 @@ func (q *Queries) UpdateDeliveryStage(ctx context.Context, arg UpdateDeliverySta
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailCount,
 	)
 	return i, err
 }
@@ -139,7 +193,7 @@ const updateDeliveryStatus = `-- name: UpdateDeliveryStatus :one
 UPDATE deliveries
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
 `
 
 type UpdateDeliveryStatusParams struct {
@@ -160,6 +214,7 @@ func (q *Queries) UpdateDeliveryStatus(ctx context.Context, arg UpdateDeliverySt
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailCount,
 	)
 	return i, err
 }
