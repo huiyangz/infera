@@ -117,6 +117,7 @@ type Delivery struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	FailCount    int32              `json:"fail_count"`
+	PendingGate  *string            `json:"pending_gate"`
 }
 
 type TimelineEvent struct {

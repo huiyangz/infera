@@ -32,3 +32,9 @@ UPDATE deliveries
 SET fail_count = 0, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: SetDeliveryPendingGate :one
+UPDATE deliveries SET pending_gate = $2, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: ClearDeliveryPendingGate :one
+UPDATE deliveries SET pending_gate = NULL, updated_at = now() WHERE id = $1 RETURNING *;

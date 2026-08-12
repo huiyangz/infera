@@ -11,10 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearDeliveryPendingGate = `-- name: ClearDeliveryPendingGate :one
+UPDATE deliveries SET pending_gate = NULL, updated_at = now() WHERE id = $1 RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+`
+
+func (q *Queries) ClearDeliveryPendingGate(ctx context.Context, id pgtype.UUID) (Delivery, error) {
+	row := q.db.QueryRow(ctx, clearDeliveryPendingGate, id)
+	var i Delivery
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.RepoUrl,
+		&i.Branch,
+		&i.Status,
+		&i.CurrentStage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FailCount,
+		&i.PendingGate,
+	)
+	return i, err
+}
+
 const createDelivery = `-- name: CreateDelivery :one
 INSERT INTO deliveries (title, description, repo_url, branch)
 VALUES ($1, $2, $3, $4)
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
 `
 
 type CreateDeliveryParams struct {
@@ -43,12 +66,13 @@ func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count FROM deliveries WHERE id = $1
+SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -65,6 +89,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
@@ -73,7 +98,7 @@ const incrementDeliveryFailCount = `-- name: IncrementDeliveryFailCount :one
 UPDATE deliveries
 SET fail_count = fail_count + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
 `
 
 func (q *Queries) IncrementDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -90,12 +115,13 @@ func (q *Queries) IncrementDeliveryFailCount(ctx context.Context, id pgtype.UUID
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
+SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
 `
 
 type ListDeliveriesParams struct {
@@ -123,6 +149,7 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FailCount,
+			&i.PendingGate,
 		); err != nil {
 			return nil, err
 		}
@@ -138,7 +165,7 @@ const resetDeliveryFailCount = `-- name: ResetDeliveryFailCount :one
 UPDATE deliveries
 SET fail_count = 0, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
 `
 
 func (q *Queries) ResetDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -155,6 +182,35 @@ func (q *Queries) ResetDeliveryFailCount(ctx context.Context, id pgtype.UUID) (D
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
+	)
+	return i, err
+}
+
+const setDeliveryPendingGate = `-- name: SetDeliveryPendingGate :one
+UPDATE deliveries SET pending_gate = $2, updated_at = now() WHERE id = $1 RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+`
+
+type SetDeliveryPendingGateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	PendingGate *string     `json:"pending_gate"`
+}
+
+func (q *Queries) SetDeliveryPendingGate(ctx context.Context, arg SetDeliveryPendingGateParams) (Delivery, error) {
+	row := q.db.QueryRow(ctx, setDeliveryPendingGate, arg.ID, arg.PendingGate)
+	var i Delivery
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.RepoUrl,
+		&i.Branch,
+		&i.Status,
+		&i.CurrentStage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
@@ -163,7 +219,7 @@ const updateDeliveryStage = `-- name: UpdateDeliveryStage :one
 UPDATE deliveries
 SET current_stage = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
 `
 
 type UpdateDeliveryStageParams struct {
@@ -185,6 +241,7 @@ func (q *Queries) UpdateDeliveryStage(ctx context.Context, arg UpdateDeliverySta
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
@@ -193,7 +250,7 @@ const updateDeliveryStatus = `-- name: UpdateDeliveryStatus :one
 UPDATE deliveries
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count
+RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
 `
 
 type UpdateDeliveryStatusParams struct {
@@ -215,6 +272,7 @@ func (q *Queries) UpdateDeliveryStatus(ctx context.Context, arg UpdateDeliverySt
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
+		&i.PendingGate,
 	)
 	return i, err
 }
