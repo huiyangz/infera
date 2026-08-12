@@ -1,0 +1,17 @@
+# Go
+server/bin/
+server/tmp/
+*.test
+*.out
+
+# Node / Next.js
+node_modules/
+apps/web/.next/
+apps/web/out/
+
+# Env / OS
+.env
+.env.local
+.DS_Store
+
+# sqlc 生成不忽略（提交进库以保证可构建）

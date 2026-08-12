@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: infera-postgres
+    environment:
+      POSTGRES_USER: infera
+      POSTGRES_PASSWORD: infera
+      POSTGRES_DB: infera
+    ports:
+      - "5433:5432"
+    volumes:
+      - infera-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infera"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+volumes:
+  infera-pgdata:
