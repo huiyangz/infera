@@ -65,9 +65,20 @@ func TestLoopPassesWhenTestsGreen(t *testing.T) {
 	d, _ := svc.Create(context.Background(), CreateInput{Title: "t"})
 	_, _ = pool.Exec(context.Background(), "UPDATE deliveries SET current_stage='code_gen' WHERE id=$1", d.ID)
 
-	// code_gen → unit_test(pass) → code_review(approve) → deploy → completed
-	for d.Status == "active" {
+	// code_gen → unit_test(pass) → code_review（gate 暂停等人）
+	for d.Status == "active" && d.PendingGate == nil {
 		var err error
+		d, err = svc.Advance(context.Background(), d.ID)
+		assert.NoError(t, err)
+	}
+	// 到 code_review gate：人批准 → 前进到 deploy
+	assert.NotNil(t, d.PendingGate)
+	assert.Equal(t, "code_review", *d.PendingGate)
+	var err error
+	d, err = svc.Approve(context.Background(), d.ID)
+	assert.NoError(t, err)
+	// deploy → completed
+	for d.Status == "active" {
 		d, err = svc.Advance(context.Background(), d.ID)
 		assert.NoError(t, err)
 	}

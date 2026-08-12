@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/tokfinity/infera/internal/agent"
 	"github.com/tokfinity/infera/internal/stage"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/pkg/db/generated"
@@ -16,21 +14,19 @@ import (
 
 type DeliveryService struct {
 	q          *generated.Queries
-	executor   *ExecuteService    // 可为 nil（P1 模式 / 测试）
-	testRunner testrunner.Runner  // 可为 nil
+	executor   *ExecuteService   // 可为 nil（P1 模式 / 测试）
+	testRunner testrunner.Runner // 可为 nil
 }
 
 func New(pool *pgxpool.Pool) *DeliveryService {
 	return &DeliveryService{q: generated.New(pool)}
 }
 
-// WithExecutor 注入 Agent 执行层。
 func (s *DeliveryService) WithExecutor(ex *ExecuteService) *DeliveryService {
 	s.executor = ex
 	return s
 }
 
-// WithTestRunner 注入测试判定器（unit_test stage 用）。
 func (s *DeliveryService) WithTestRunner(r testrunner.Runner) *DeliveryService {
 	s.testRunner = r
 	return s
@@ -60,9 +56,7 @@ func (s *DeliveryService) Create(ctx context.Context, in CreateInput) (generated
 	return d, nil
 }
 
-// Advance 推进 Delivery：执行 → 判定 → 前进 / 回退 / 升级。
-// unit_test 不过或 code_review 被打回 → 回退 code_gen 重调 Coder Agent；
-// 连续 3 次失败 → status=blocked。
+// Advance 推进 Delivery：执行 → 判定 → 前进 / 回退 / 升级 / 在 gate 暂停等人。
 func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generated.Delivery, error) {
 	d, err := s.q.GetDelivery(ctx, id)
 	if err != nil {
@@ -84,9 +78,9 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 	}
 	s.timeline(ctx, d.ID, next, "stage_started", map[string]any{})
 
-	// 执行（Agent stage）
+	// 执行（Agent stage；code_review 在 gate 块里跑，不在这）
 	switch next {
-	case "spec", "test_gen", "code_gen", "code_review":
+	case "spec", "test_gen", "code_gen":
 		if s.executor != nil {
 			if _, err := s.executor.ExecuteStage(ctx, d.ID, next, buildPromptForStage(next, d)); err != nil {
 				s.timeline(ctx, d.ID, next, "agent_failed", map[string]any{"error": err.Error()})
@@ -94,7 +88,7 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		}
 	}
 
-	// unit_test：系统跑测试判定
+	// unit_test：系统跑测试判定（自动 loop，不是 gate）
 	if next == "unit_test" && s.testRunner != nil {
 		res, err := s.testRunner.Run(ctx, "/work")
 		if err == nil && !res.Pass {
@@ -102,14 +96,20 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		}
 	}
 
-	// code_review：解析 Reviewer Agent 的 decision
-	if next == "code_review" && s.executor != nil {
-		if decision, err := s.latestReviewDecision(ctx, d.ID); err == nil && decision.Decision == "reject" {
-			return s.retryCodeAt(ctx, d, "code_review", strings.Join(decision.Reasons, "; "))
+	// gate：执行前置 Agent（code_review 跑 Reviewer 预审），然后暂停等人
+	if stage.IsGate(next) {
+		if next == "code_review" && s.executor != nil {
+			_, _ = s.executor.ExecuteStage(ctx, d.ID, next, buildPromptForStage(next, d))
 		}
+		d, err = s.q.SetDeliveryPendingGate(ctx, generated.SetDeliveryPendingGateParams{ID: d.ID, PendingGate: pgString(next)})
+		if err != nil {
+			return generated.Delivery{}, err
+		}
+		s.timeline(ctx, d.ID, next, "gate_waiting", map[string]any{"gate": next})
+		return d, nil // 停下，等人
 	}
 
-	// deploy：等最近 PR 合并（若有 PR 且未合并，暂停在 deploy 写 waiting_for_merge）
+	// deploy：等最近 PR 合并（若有 PR 且未合并，暂停）
 	if next == "deploy" && s.executor != nil {
 		if merged, err := s.executor.IsLatestPRMerged(ctx, d.ID); err == nil && !merged {
 			s.timeline(ctx, d.ID, "deploy", "waiting_for_merge", map[string]any{})
@@ -117,6 +117,55 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		}
 	}
 
+	return d, nil
+}
+
+// Approve 人批准当前 gate：记 gate 名、清 pending_gate、然后前进。
+// 必须在 Clear 前读 PendingGate，否则 Clear 后是 nil。
+func (s *DeliveryService) Approve(ctx context.Context, id pgtype.UUID) (generated.Delivery, error) {
+	d, err := s.q.GetDelivery(ctx, id)
+	if err != nil {
+		return generated.Delivery{}, err
+	}
+	gate := ""
+	if d.PendingGate != nil {
+		gate = *d.PendingGate
+	}
+	if _, err := s.q.ClearDeliveryPendingGate(ctx, id); err != nil {
+		return generated.Delivery{}, err
+	}
+	s.timeline(ctx, id, gate, "gate_approved", map[string]any{})
+	return s.Advance(ctx, id)
+}
+
+// Reject 人打回当前 gate：清 pending_gate，按 gate 类型回退。
+// spec_approval → spec；code_review → code_gen（人打回不计 fail_count 升级）。
+func (s *DeliveryService) Reject(ctx context.Context, id pgtype.UUID, reason string) (generated.Delivery, error) {
+	d, err := s.q.GetDelivery(ctx, id)
+	if err != nil {
+		return generated.Delivery{}, err
+	}
+	gate := ""
+	if d.PendingGate != nil {
+		gate = *d.PendingGate
+	}
+	if _, err := s.q.ClearDeliveryPendingGate(ctx, id); err != nil {
+		return generated.Delivery{}, err
+	}
+	s.timeline(ctx, id, gate, "gate_rejected", map[string]any{"reason": reason})
+
+	target := "code_gen"
+	if gate == "spec_approval" {
+		target = "spec"
+	}
+	d, err = s.q.UpdateDeliveryStage(ctx, generated.UpdateDeliveryStageParams{ID: id, CurrentStage: target})
+	if err != nil {
+		return generated.Delivery{}, err
+	}
+	s.timeline(ctx, id, target, "loop_back", map[string]any{"from": gate, "reason": reason})
+	if s.executor != nil {
+		_, _ = s.executor.ExecuteStage(ctx, id, target, "人打回："+reason+"\n请重做。")
+	}
 	return d, nil
 }
 
@@ -136,7 +185,6 @@ func (s *DeliveryService) retryCodeAt(ctx context.Context, d generated.Delivery,
 		})
 		return d, nil
 	}
-	// 回退到 code_gen 重做
 	d, err = s.q.UpdateDeliveryStage(ctx, generated.UpdateDeliveryStageParams{ID: d.ID, CurrentStage: "code_gen"})
 	if err != nil {
 		return generated.Delivery{}, err
@@ -167,25 +215,8 @@ func (s *DeliveryService) timeline(ctx context.Context, deliveryID pgtype.UUID, 
 	})
 }
 
-// latestReviewDecision 从 timeline 取最近一条 code_review 的 agent_output 并解析。
-func (s *DeliveryService) latestReviewDecision(ctx context.Context, deliveryID pgtype.UUID) (agent.ReviewDecision, error) {
-	events, err := s.q.ListTimelineEvents(ctx, deliveryID)
-	if err != nil {
-		return agent.ReviewDecision{}, err
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		e := events[i]
-		if e.Stage == "code_review" && e.EventType == "agent_output" {
-			var p struct {
-				Output string `json:"output"`
-			}
-			if err := json.Unmarshal(e.Payload, &p); err == nil {
-				return agent.ParseReview(p.Output)
-			}
-		}
-	}
-	return agent.ReviewDecision{}, fmt.Errorf("no review output found")
-}
+// pgString 把 stage 名转 *string（sqlc 对 nullable text 生成 *string）。
+func pgString(s string) *string { return &s }
 
 // buildPromptForStage 为不同 stage 拼给 Agent 的任务描述。
 func buildPromptForStage(stageName string, d generated.Delivery) string {
