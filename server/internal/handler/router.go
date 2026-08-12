@@ -16,6 +16,9 @@ func NewRouter(pool *pgxpool.Pool, svc *service.DeliveryService) *chi.Mux {
 		r.Get("/", dh.List)
 		r.Get("/{id}", dh.Get)
 		r.Post("/{id}/advance", dh.Advance)
+		r.Get("/{id}/gate", dh.Gate)
+		r.Post("/{id}/approve", dh.Approve)
+		r.Post("/{id}/reject", dh.Reject)
 	})
 	return r
 }

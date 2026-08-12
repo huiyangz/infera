@@ -92,6 +92,70 @@ func (h *DeliveryHandler) Advance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+// Gate 返回当前 gate 需要人看的内容：gate 名 + 最近 agent_output（spec/review）+ PR 链接。
+func (h *DeliveryHandler) Gate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	q := generated.New(h.pool)
+	d, err := q.GetDelivery(r.Context(), parseUUID(id))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	gate := ""
+	if d.PendingGate != nil {
+		gate = *d.PendingGate
+	}
+	events, _ := q.ListTimelineEvents(r.Context(), d.ID)
+
+	var latest map[string]any
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].EventType == "agent_output" {
+			_ = json.Unmarshal(events[i].Payload, &latest)
+			break
+		}
+	}
+	var prURL string
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].EventType == "pr_opened" {
+			var p map[string]any
+			_ = json.Unmarshal(events[i].Payload, &p)
+			if u, ok := p["url"].(string); ok {
+				prURL = u
+			}
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"delivery_id": d.ID, "gate": gate, "agent_output": latest, "pr_url": prURL,
+	})
+}
+
+// Approve 人批准当前 gate。
+func (h *DeliveryHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	d, err := h.svc.Approve(r.Context(), parseUUID(id))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// Reject 人打回当前 gate（body: {"reason": "..."}）。
+func (h *DeliveryHandler) Reject(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	d, err := h.svc.Reject(r.Context(), parseUUID(id), body.Reason)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
