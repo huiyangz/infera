@@ -30,6 +30,15 @@ export default function DeliveryDetailPage() {
         {delivery.status} · 创建于 {new Date(delivery.created_at).toLocaleString()}
       </div>
 
+      {delivery.pending_gate && (
+        <Link
+          href={`/deliveries/${params.id}/gate`}
+          className="inline-block bg-yellow-600 text-white rounded px-4 py-2 mb-4"
+        >
+          需审批：{delivery.pending_gate} → 去审批
+        </Link>
+      )}
+
       <h2 className="font-semibold mb-2">流水线</h2>
       <ol className="flex flex-wrap gap-2 mb-8">
         {STAGES.map((s, i) => {

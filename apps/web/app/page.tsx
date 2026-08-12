@@ -57,8 +57,22 @@ export default function Home() {
                 <Link href={`/deliveries/${d.id}`} className="font-medium hover:underline">
                   {d.title}
                 </Link>
-                <div className="text-sm text-gray-500">
-                  {d.current_stage} · {d.status}
+                <div className="text-sm text-gray-500 flex gap-2 items-center">
+                  <span>{d.current_stage}</span>
+                  {d.status === "blocked" && (
+                    <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs">
+                      已升级 · 需人工介入
+                    </span>
+                  )}
+                  {d.pending_gate && (
+                    <Link
+                      href={`/deliveries/${d.id}/gate`}
+                      className="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs"
+                    >
+                      待审批：{d.pending_gate}
+                    </Link>
+                  )}
+                  {!d.pending_gate && d.status === "active" && <span>· {d.status}</span>}
                 </div>
               </div>
               <button

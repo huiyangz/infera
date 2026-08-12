@@ -8,6 +8,8 @@ export interface Delivery {
   branch: string;
   status: DeliveryStatus;
   current_stage: string;
+  pending_gate: string | null;
+  fail_count: number;
   created_at: string;
   updated_at: string;
 }
