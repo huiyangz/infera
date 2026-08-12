@@ -17,8 +17,8 @@ type DeliveryHandler struct {
 	pool *pgxpool.Pool
 }
 
-func NewDeliveryHandler(pool *pgxpool.Pool) *DeliveryHandler {
-	return &DeliveryHandler{svc: service.New(pool), pool: pool}
+func NewDeliveryHandler(svc *service.DeliveryService, pool *pgxpool.Pool) *DeliveryHandler {
+	return &DeliveryHandler{svc: svc, pool: pool}
 }
 
 type createDeliveryReq struct {
