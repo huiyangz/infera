@@ -11,6 +11,7 @@ import (
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/github"
 	"github.com/tokfinity/infera/internal/handler"
+	"github.com/tokfinity/infera/internal/realtime"
 	"github.com/tokfinity/infera/internal/service"
 	"github.com/tokfinity/infera/internal/testrunner"
 )
@@ -24,6 +25,10 @@ func main() {
 	}
 	defer pool.Close()
 
+	// 实时事件 Hub（P6）
+	hub := realtime.NewHub()
+	go hub.Run()
+
 	// Agent 执行层 + 测试 runner：需要 Docker + ANTHROPIC_API_KEY；缺则降级 P1 模式。
 	var executor *service.ExecuteService
 	var testRunner testrunner.Runner
@@ -31,16 +36,19 @@ func main() {
 		ghClient := github.NewClient(cfg.GitHubToken)
 		cloner := github.NewRepoCloner(cfg.GitHubToken)
 		prSvc := github.NewPRService(ghClient)
-		executor = service.NewExecute(pool, dbBackend).WithGitHub(cloner, prSvc, cfg.RepoWorkRoot)
+		executor = service.NewExecute(pool, dbBackend).WithGitHub(cloner, prSvc, cfg.RepoWorkRoot).WithBroadcaster(hub)
 		testRunner = testrunner.NewRealRunner(dbBackend, "")
 		fmt.Println("agent backend: docker (full mode)")
 	} else {
 		fmt.Println("warning: agent backend disabled (P1 mode):", err)
 	}
 
-	deliverySvc := service.New(pool).WithExecutor(executor).WithTestRunner(testRunner)
+	deliverySvc := service.New(pool).
+		WithExecutor(executor).
+		WithTestRunner(testRunner).
+		WithBroadcaster(hub)
 
-	r := handler.NewRouter(pool, deliverySvc)
+	r := handler.NewRouter(pool, deliverySvc, hub)
 	addr := ":" + cfg.Port
 	fmt.Println("infera server listening on", addr)
 	log.Fatal(http.ListenAndServe(addr, r))

@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/tokfinity/infera/internal/realtime"
 	"github.com/tokfinity/infera/internal/stage"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/pkg/db/generated"
 )
 
 type DeliveryService struct {
-	q          *generated.Queries
-	executor   *ExecuteService   // 可为 nil（P1 模式 / 测试）
-	testRunner testrunner.Runner // 可为 nil
+	q           *generated.Queries
+	executor    *ExecuteService        // 可为 nil（P1 模式 / 测试）
+	testRunner  testrunner.Runner      // 可为 nil
+	broadcaster realtime.Broadcaster   // 可为 nil
 }
 
 func New(pool *pgxpool.Pool) *DeliveryService {
@@ -29,6 +32,11 @@ func (s *DeliveryService) WithExecutor(ex *ExecuteService) *DeliveryService {
 
 func (s *DeliveryService) WithTestRunner(r testrunner.Runner) *DeliveryService {
 	s.testRunner = r
+	return s
+}
+
+func (s *DeliveryService) WithBroadcaster(b realtime.Broadcaster) *DeliveryService {
+	s.broadcaster = b
 	return s
 }
 
@@ -207,12 +215,20 @@ func (s *DeliveryService) completeDelivery(ctx context.Context, d generated.Deli
 	return d, nil
 }
 
-// timeline 是写 timeline event 的简写。
+// timeline 是写 timeline event 的简写，写完后广播（P6 实时）。
 func (s *DeliveryService) timeline(ctx context.Context, deliveryID pgtype.UUID, stageName, eventType string, payload map[string]any) {
 	b, _ := json.Marshal(payload)
 	_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
 		DeliveryID: deliveryID, Stage: stageName, EventType: eventType, Payload: b,
 	})
+	s.broadcast(deliveryID, stageName, eventType)
+}
+
+// broadcast 把事件推给前端（若有 broadcaster）。pgtype.UUID → google uuid 边界转换。
+func (s *DeliveryService) broadcast(deliveryID pgtype.UUID, stageName, eventType string) {
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(uuid.UUID(deliveryID.Bytes), realtime.Event{Type: eventType, Stage: stageName})
+	}
 }
 
 // pgString 把 stage 名转 *string（sqlc 对 nullable text 生成 *string）。

@@ -3,12 +3,14 @@ package handler
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/tokfinity/infera/internal/realtime"
 	"github.com/tokfinity/infera/internal/service"
 )
 
-func NewRouter(pool *pgxpool.Pool, svc *service.DeliveryService) *chi.Mux {
+func NewRouter(pool *pgxpool.Pool, svc *service.DeliveryService, hub *realtime.Hub) *chi.Mux {
 	r := chi.NewRouter()
 	r.Get("/health", Health)
+	r.Get("/ws", WS(hub))
 
 	dh := NewDeliveryHandler(svc, pool)
 	r.Route("/api/deliveries", func(r chi.Router) {

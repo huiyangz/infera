@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tokfinity/infera/internal/agent"
 	"github.com/tokfinity/infera/internal/github"
+	"github.com/tokfinity/infera/internal/realtime"
 	"github.com/tokfinity/infera/pkg/db/generated"
 )
 
@@ -26,10 +27,24 @@ type ExecuteService struct {
 	git      github.GitService // 同上
 	pr       *github.PRService // nil=未注入
 	repoRoot string            // 本地 clone 根目录
+
+	broadcaster realtime.Broadcaster // 可为 nil（P6 实时）
 }
 
 func NewExecute(pool *pgxpool.Pool, backend agent.Backend) *ExecuteService {
 	return &ExecuteService{pool: pool, q: generated.New(pool), backend: backend}
+}
+
+// WithBroadcaster 注入实时广播器。
+func (s *ExecuteService) WithBroadcaster(b realtime.Broadcaster) *ExecuteService {
+	s.broadcaster = b
+	return s
+}
+
+func (s *ExecuteService) broadcast(deliveryID pgtype.UUID, stageName, eventType string) {
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(uuid.UUID(deliveryID.Bytes), realtime.Event{Type: eventType, Stage: stageName})
+	}
 }
 
 // WithGitHub 注入仓库上下文（clone/commit/PR）。不调用则走"无仓库模式"（P2/P3）。
@@ -69,6 +84,7 @@ func (s *ExecuteService) ExecuteStage(ctx context.Context, deliveryID pgtype.UUI
 	_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
 		DeliveryID: deliveryID, Stage: stage, EventType: "agent_output", Payload: payload,
 	})
+	s.broadcast(deliveryID, stage, "agent_output")
 
 	// code_gen 后：push 分支 + 开 PR（若有仓库上下文）
 	// 注意（P4 已知局限）：这里 Agent 在容器空 /work 跑，产出是文本；要改真文件需把
@@ -81,6 +97,7 @@ func (s *ExecuteService) ExecuteStage(ctx context.Context, deliveryID pgtype.UUI
 				_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
 					DeliveryID: deliveryID, Stage: stage, EventType: "pr_failed", Payload: ep,
 				})
+				s.broadcast(deliveryID, stage, "pr_failed")
 			}
 		}
 	}
@@ -114,6 +131,7 @@ func (s *ExecuteService) maybePushAndOpenPR(ctx context.Context, d generated.Del
 	_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
 		DeliveryID: d.ID, Stage: "code_gen", EventType: "pr_opened", Payload: payload,
 	})
+	s.broadcast(d.ID, "code_gen", "pr_opened")
 	return nil
 }
 
