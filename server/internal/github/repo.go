@@ -15,7 +15,7 @@ func NewRepoCloner(token string) RepoCloner { return RepoCloner{token: token} }
 // Clone 把 repoURL clone 到 dest（浅克隆）。token 注入到 URL 用于私有仓库鉴权。
 func (c RepoCloner) Clone(ctx context.Context, repoURL, dest string) error {
 	authed := c.withToken(repoURL)
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", authed, dest)
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "--", authed, dest)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git clone: %w: %s", err, string(out))
 	}

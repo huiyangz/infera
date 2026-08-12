@@ -102,6 +102,12 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		if err == nil && !res.Pass {
 			return s.retryCodeAt(ctx, d, "unit_test", res.Detail)
 		}
+		// 测试通过：重置失败计数（"连续 3 次失败"语义）
+		if err == nil && res.Pass && d.FailCount > 0 {
+			if updated, err := s.q.ResetDeliveryFailCount(ctx, d.ID); err == nil {
+				d = updated
+			}
+		}
 	}
 
 	// gate：执行前置 Agent（code_review 跑 Reviewer 预审），然后暂停等人

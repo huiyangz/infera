@@ -148,12 +148,11 @@ func (s *ExecuteService) IsLatestPRMerged(ctx context.Context, deliveryID pgtype
 		e := events[i]
 		if e.EventType == "pr_opened" {
 			var p struct {
-				URL string `json:"url"`
-				Number json.Number `json:"number"`
+				URL    string `json:"url"`
+				Number int    `json:"number"`
 			}
 			if err := json.Unmarshal(e.Payload, &p); err == nil {
-				n, _ := p.Number.Int64()
-				return s.pr.IsMerged(ctx, repoOwnerRepo(p.URL), int(n))
+				return s.pr.IsMerged(ctx, repoOwnerRepo(p.URL), p.Number)
 			}
 		}
 	}
