@@ -81,9 +81,15 @@ func parseUUID(s string) pgtype.UUID {
 	return u
 }
 
-// Advance 在 Task 11 实现。
+// Advance 推进 delivery 到下一 stage（或完成）。
 func (h *DeliveryHandler) Advance(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusNotImplemented, "advance not implemented yet")
+	id := chi.URLParam(r, "id")
+	d, err := h.svc.Advance(r.Context(), parseUUID(id))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
