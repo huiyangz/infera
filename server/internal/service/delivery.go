@@ -109,6 +109,14 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		}
 	}
 
+	// deploy：等最近 PR 合并（若有 PR 且未合并，暂停在 deploy 写 waiting_for_merge）
+	if next == "deploy" && s.executor != nil {
+		if merged, err := s.executor.IsLatestPRMerged(ctx, d.ID); err == nil && !merged {
+			s.timeline(ctx, d.ID, "deploy", "waiting_for_merge", map[string]any{})
+			return d, nil
+		}
+	}
+
 	return d, nil
 }
 
