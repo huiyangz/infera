@@ -3,10 +3,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { getDelivery, advanceDelivery } from "@/lib/api";
+import { useDeliveryEvents } from "@/lib/useDeliveryEvents";
 import { STAGES, GATES } from "@/lib/types";
 
 export default function DeliveryDetailPage() {
   const params = useParams<{ id: string }>();
+  useDeliveryEvents(params.id); // 收到事件自动 invalidate → 重拉 timeline
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ["delivery", params.id],
