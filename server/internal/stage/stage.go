@@ -8,8 +8,7 @@ var order = []string{
 	"test_gen",      // Test Agent 生成用例 + 单测
 	"code_gen",      // Coder Agent 写实现（修复 hub）
 	"unit_test",     // 系统跑单测
-	"code_review",   // Reviewer Agent 预审 + 人批准（gate）
-	"deploy",        // 部署
+	"code_review",   // Reviewer Agent 预审 + 人批准（gate，终点）
 }
 
 var gates = map[string]bool{

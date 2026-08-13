@@ -14,7 +14,6 @@ func TestNextOfEachStage(t *testing.T) {
 		{"test_gen", "code_gen"},
 		{"code_gen", "unit_test"},
 		{"unit_test", "code_review"},
-		{"code_review", "deploy"},
 	}
 	for _, c := range cases {
 		got, ok := Next(c.from)
@@ -23,9 +22,9 @@ func TestNextOfEachStage(t *testing.T) {
 	}
 }
 
-func TestNextOfDeployIsEmpty(t *testing.T) {
-	_, ok := Next("deploy")
-	assert.False(t, ok, "deploy has no next")
+func TestNextOfCodeReviewIsEmpty(t *testing.T) {
+	_, ok := Next("code_review")
+	assert.False(t, ok, "code_review is terminal")
 }
 
 func TestIsGate(t *testing.T) {
