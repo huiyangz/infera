@@ -95,7 +95,11 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 
 	// unit_test：系统跑测试判定（自动 loop，不是 gate）
 	if next == "unit_test" && s.testRunner != nil {
-		res, err := s.testRunner.Run(ctx, "/work")
+		wd := ""
+		if s.executor != nil {
+			wd = s.executor.WorkdirFor(d.ID)
+		}
+		res, err := s.testRunner.Run(ctx, wd)
 		if err == nil && !res.Pass {
 			return s.retryCodeAt(ctx, d, "unit_test", res.Detail)
 		}
@@ -118,14 +122,6 @@ func (s *DeliveryService) Advance(ctx context.Context, id pgtype.UUID) (generate
 		}
 		s.timeline(ctx, d.ID, next, "gate_waiting", map[string]any{"gate": next})
 		return d, nil // 停下，等人
-	}
-
-	// deploy：等最近 PR 合并（若有 PR 且未合并，暂停）
-	if next == "deploy" && s.executor != nil {
-		if merged, err := s.executor.IsLatestPRMerged(ctx, d.ID); err == nil && !merged {
-			s.timeline(ctx, d.ID, "deploy", "waiting_for_merge", map[string]any{})
-			return d, nil
-		}
 	}
 
 	return d, nil

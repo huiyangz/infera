@@ -165,30 +165,6 @@ func (s *ExecuteService) maybePushAndOpenPR(ctx context.Context, deliveryID pgty
 	return nil
 }
 
-// IsLatestPRMerged 取 timeline 最近一条 pr_opened 的 PR 号，查是否已合并。
-func (s *ExecuteService) IsLatestPRMerged(ctx context.Context, deliveryID pgtype.UUID) (bool, error) {
-	if s.pr == nil {
-		return false, fmt.Errorf("no pr service")
-	}
-	events, err := s.q.ListTimelineEvents(ctx, deliveryID)
-	if err != nil {
-		return false, err
-	}
-	for i := len(events) - 1; i >= 0; i-- {
-		e := events[i]
-		if e.EventType == "pr_opened" {
-			var p struct {
-				URL    string `json:"url"`
-				Number int    `json:"number"`
-			}
-			if err := json.Unmarshal(e.Payload, &p); err == nil {
-				return s.pr.IsMerged(ctx, repoOwnerRepo(p.URL), p.Number)
-			}
-		}
-	}
-	return false, fmt.Errorf("no pr_opened event")
-}
-
 func parseAgentConfig(row generated.AgentConfig) agent.AgentConfig {
 	var cfg struct {
 		SystemPrompt string `json:"system_prompt"`
