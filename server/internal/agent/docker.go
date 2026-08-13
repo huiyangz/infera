@@ -13,9 +13,10 @@ import (
 
 // DockerBackend 用本地 Docker daemon 起容器跑命令（Claude Code 或 go test 等）。
 type DockerBackend struct {
-	cli    *client.Client
-	image  string // 如 "infera-agent"
-	apiKey string // ANTHROPIC_API_KEY
+	cli      *client.Client
+	image    string   // 如 "infera-agent"
+	apiKey   string   // ANTHROPIC_API_KEY
+	extraEnv []string // 透传给容器：ANTHROPIC_BASE_URL / HTTPS_PROXY 等
 }
 
 func NewDockerBackend(image string) (*DockerBackend, error) {
@@ -25,9 +26,21 @@ func NewDockerBackend(image string) (*DockerBackend, error) {
 	}
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		return nil, fmt.Errorf("ANTHROPIC_API_KEY not set")
+		// 也接受 ANTHROPIC_AUTH_TOKEN（兼容第三方/代理端点）
+		if tok := os.Getenv("ANTHROPIC_AUTH_TOKEN"); tok != "" {
+			apiKey = tok
+		} else {
+			return nil, fmt.Errorf("ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) not set")
+		}
 	}
-	return &DockerBackend{cli: cli, image: image, apiKey: apiKey}, nil
+	// 透传端点/代理（claude CLI 与 go test 都可能需要）
+	var extra []string
+	for _, k := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "GOPROXY"} {
+		if v := os.Getenv(k); v != "" {
+			extra = append(extra, k+"="+v)
+		}
+	}
+	return &DockerBackend{cli: cli, image: image, apiKey: apiKey, extraEnv: extra}, nil
 }
 
 // runContainer 起一个容器跑 cmd（完整命令，清空镜像的 claude entrypoint），
@@ -42,7 +55,7 @@ func (b *DockerBackend) runContainer(ctx context.Context, cmd []string, workdir 
 			Image:      b.image,
 			Cmd:        cmd,
 			Entrypoint: []string{}, // 清空 claude entrypoint，让 cmd 是完整命令（Execute 跑 claude，RunCommand 跑 sh/go test）
-			Env:        []string{"ANTHROPIC_API_KEY=" + b.apiKey},
+			Env:        append([]string{"ANTHROPIC_API_KEY=" + b.apiKey}, b.extraEnv...),
 			WorkingDir: "/work",
 		},
 		&container.HostConfig{Binds: binds, AutoRemove: false},
