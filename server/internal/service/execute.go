@@ -70,9 +70,15 @@ func (s *ExecuteService) ExecuteStage(ctx context.Context, deliveryID pgtype.UUI
 	}
 	cfg := parseAgentConfig(cfgRow)
 
+	workdir := ""
+	if stage == "code_gen" {
+		_ = s.ensureClone(ctx, deliveryID)
+		workdir = s.WorkdirFor(deliveryID)
+	}
 	res, err := s.backend.Execute(ctx, agent.ExecInput{
-		Role:   role,
-		Prompt: fmt.Sprintf("%s\n\n# 本次任务\n%s", cfg.SystemPrompt, prompt),
+		Role:    role,
+		Prompt:  fmt.Sprintf("%s\n\n# 本次任务\n%s", cfg.SystemPrompt, prompt),
+		Workdir: workdir,
 	})
 	if err != nil {
 		return res, fmt.Errorf("execute agent %s: %w", role, err)
@@ -91,8 +97,7 @@ func (s *ExecuteService) ExecuteStage(ctx context.Context, deliveryID pgtype.UUI
 	// clone 目录传进 ExecInput.Workdir（P5+ 再补）。当前 PR 会提交空改动。
 	if stage == "code_gen" {
 		if d, err := s.q.GetDelivery(ctx, deliveryID); err == nil {
-			branch := "infera/" + pgUUIDString(deliveryID)
-			if err := s.maybePushAndOpenPR(ctx, d, branch); err != nil {
+			if err := s.maybePushAndOpenPR(ctx, deliveryID, d.Title); err != nil {
 				ep, _ := json.Marshal(map[string]any{"error": err.Error()})
 				_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
 					DeliveryID: deliveryID, Stage: stage, EventType: "pr_failed", Payload: ep,
@@ -104,34 +109,59 @@ func (s *ExecuteService) ExecuteStage(ctx context.Context, deliveryID pgtype.UUI
 	return res, nil
 }
 
-// maybePushAndOpenPR 克隆仓库、提交改动、推分支、开 PR，记 pr_opened。
-// 无仓库上下文（pr==nil）或无 repo_url 时跳过。
-func (s *ExecuteService) maybePushAndOpenPR(ctx context.Context, d generated.Delivery, branch string) error {
-	if s.pr == nil || d.RepoUrl == "" {
-		return nil
+// WorkdirFor 返回某 delivery 的本地 clone 目录路径。
+func (s *ExecuteService) WorkdirFor(deliveryID pgtype.UUID) string {
+	return filepath.Join(s.repoRoot, pgUUIDString(deliveryID))
+}
+
+// ensureClone 确保该 delivery 的项目仓库已 clone 到 workdir（首次才 clone）。
+func (s *ExecuteService) ensureClone(ctx context.Context, deliveryID pgtype.UUID) error {
+	if s.pr == nil {
+		return nil // 无仓库模式
+	}
+	wd := s.WorkdirFor(deliveryID)
+	if _, err := os.Stat(wd); err == nil {
+		return nil // 已存在
+	}
+	proj, err := s.q.GetProjectByDeliveryID(ctx, deliveryID)
+	if err != nil {
+		return fmt.Errorf("load project: %w", err)
+	}
+	if proj.RepoUrl == "" {
+		return nil // 绿地空仓库，不 clone
 	}
 	_ = os.MkdirAll(s.repoRoot, 0o755)
-	workdir := filepath.Join(s.repoRoot, pgUUIDString(d.ID))
-	if _, err := os.Stat(workdir); os.IsNotExist(err) {
-		if err := s.cloner.Clone(ctx, d.RepoUrl, workdir); err != nil {
-			return err
-		}
+	return s.cloner.Clone(ctx, proj.RepoUrl, wd)
+}
+
+// maybePushAndOpenPR 克隆仓库、提交改动、推分支、开 PR，记 pr_opened。
+// 无仓库上下文（pr==nil）或无 repo_url 时跳过。
+func (s *ExecuteService) maybePushAndOpenPR(ctx context.Context, deliveryID pgtype.UUID, title string) error {
+	if s.pr == nil {
+		return nil
 	}
-	if err := s.git.WithWorkdir(workdir).CommitAndPush(ctx, branch, "infera: "+d.Title); err != nil {
+	proj, err := s.q.GetProjectByDeliveryID(ctx, deliveryID)
+	if err != nil {
+		return fmt.Errorf("load project: %w", err)
+	}
+	if proj.RepoUrl == "" {
+		return nil // 无仓库
+	}
+	workdir := s.WorkdirFor(deliveryID)
+	branch := "infera/" + pgUUIDString(deliveryID)
+	if err := s.git.WithWorkdir(workdir).CommitAndPush(ctx, branch, "infera: "+title); err != nil {
 		return err
 	}
-	pr, err := s.pr.Create(ctx, repoOwnerRepo(d.RepoUrl), branch, "main",
-		"["+d.Title+"] by Coder Agent", "由 infera Coder Agent 自动生成")
+	pr, err := s.pr.Create(ctx, repoOwnerRepo(proj.RepoUrl), branch, proj.DefaultBranch,
+		"["+title+"] by Coder Agent", "由 infera Coder Agent 自动生成")
 	if err != nil {
 		return err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"url": pr.GetHTMLURL(), "number": pr.GetNumber(),
-	})
+	payload, _ := json.Marshal(map[string]any{"url": pr.GetHTMLURL(), "number": pr.GetNumber()})
 	_, _ = s.q.CreateTimelineEvent(ctx, generated.CreateTimelineEventParams{
-		DeliveryID: d.ID, Stage: "code_gen", EventType: "pr_opened", Payload: payload,
+		DeliveryID: deliveryID, Stage: "code_gen", EventType: "pr_opened", Payload: payload,
 	})
-	s.broadcast(d.ID, "code_gen", "pr_opened")
+	s.broadcast(deliveryID, "code_gen", "pr_opened")
 	return nil
 }
 
