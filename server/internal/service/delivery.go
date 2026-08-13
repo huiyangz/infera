@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -19,10 +20,13 @@ type DeliveryService struct {
 	executor    *ExecuteService        // 可为 nil（P1 模式 / 测试）
 	testRunner  testrunner.Runner      // 可为 nil
 	broadcaster realtime.Broadcaster   // 可为 nil
+
+	runMu   sync.Mutex
+	running map[pgtype.UUID]struct{}
 }
 
 func New(pool *pgxpool.Pool) *DeliveryService {
-	return &DeliveryService{q: generated.New(pool)}
+	return &DeliveryService{q: generated.New(pool), running: map[pgtype.UUID]struct{}{}}
 }
 
 func (s *DeliveryService) WithExecutor(ex *ExecuteService) *DeliveryService {
@@ -38,6 +42,50 @@ func (s *DeliveryService) WithTestRunner(r testrunner.Runner) *DeliveryService {
 func (s *DeliveryService) WithBroadcaster(b realtime.Broadcaster) *DeliveryService {
 	s.broadcaster = b
 	return s
+}
+
+// Get 包装 GetDelivery（供 handler / 测试取最新状态）。
+func (s *DeliveryService) Get(ctx context.Context, id pgtype.UUID) (generated.Delivery, error) {
+	return s.q.GetDelivery(ctx, id)
+}
+
+// RunUntilGate 连续推进直到遇到 gate / blocked / completed。
+func (s *DeliveryService) RunUntilGate(ctx context.Context, id pgtype.UUID) error {
+	for {
+		d, err := s.q.GetDelivery(ctx, id)
+		if err != nil {
+			return err
+		}
+		if d.Status != generated.DeliveryStatusActive {
+			return nil
+		}
+		if d.PendingGate != nil && *d.PendingGate != "" {
+			return nil
+		}
+		if _, err := s.Advance(ctx, id); err != nil {
+			return err
+		}
+	}
+}
+
+// Start 异步跑 RunUntilGate（用 background ctx，不绑请求）。重复启动会被 guard 拦住。
+func (s *DeliveryService) Start(id pgtype.UUID) {
+	s.runMu.Lock()
+	if _, ok := s.running[id]; ok {
+		s.runMu.Unlock()
+		return
+	}
+	s.running[id] = struct{}{}
+	s.runMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.runMu.Lock()
+			delete(s.running, id)
+			s.runMu.Unlock()
+		}()
+		_ = s.RunUntilGate(context.Background(), id)
+	}()
 }
 
 type CreateInput struct {
@@ -142,7 +190,15 @@ func (s *DeliveryService) Approve(ctx context.Context, id pgtype.UUID) (generate
 		return generated.Delivery{}, err
 	}
 	s.timeline(ctx, id, gate, "gate_approved", map[string]any{})
-	return s.Advance(ctx, id)
+	if _, err := s.Advance(ctx, id); err != nil {
+		return generated.Delivery{}, err
+	}
+	d, err = s.q.GetDelivery(ctx, id)
+	if err != nil {
+		return generated.Delivery{}, err
+	}
+	s.Start(id) // 异步继续跑到下个 gate / completed
+	return d, nil
 }
 
 // Reject 人打回当前 gate：清 pending_gate，按 gate 类型回退。
