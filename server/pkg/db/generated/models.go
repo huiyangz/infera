@@ -110,14 +110,22 @@ type Delivery struct {
 	ID           pgtype.UUID        `json:"id"`
 	Title        string             `json:"title"`
 	Description  string             `json:"description"`
-	RepoUrl      string             `json:"repo_url"`
-	Branch       string             `json:"branch"`
 	Status       DeliveryStatus     `json:"status"`
 	CurrentStage string             `json:"current_stage"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	FailCount    int32              `json:"fail_count"`
 	PendingGate  *string            `json:"pending_gate"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+}
+
+type Project struct {
+	ID            pgtype.UUID        `json:"id"`
+	Name          string             `json:"name"`
+	RepoUrl       string             `json:"repo_url"`
+	DefaultBranch string             `json:"default_branch"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TimelineEvent struct {

@@ -12,7 +12,7 @@ import (
 )
 
 const clearDeliveryPendingGate = `-- name: ClearDeliveryPendingGate :one
-UPDATE deliveries SET pending_gate = NULL, updated_at = now() WHERE id = $1 RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+UPDATE deliveries SET pending_gate = NULL, updated_at = now() WHERE id = $1 RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 func (q *Queries) ClearDeliveryPendingGate(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -22,57 +22,49 @@ func (q *Queries) ClearDeliveryPendingGate(ctx context.Context, id pgtype.UUID) 
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const createDelivery = `-- name: CreateDelivery :one
-INSERT INTO deliveries (title, description, repo_url, branch)
-VALUES ($1, $2, $3, $4)
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+INSERT INTO deliveries (project_id, title, description)
+VALUES ($1, $2, $3)
+RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 type CreateDeliveryParams struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	RepoUrl     string `json:"repo_url"`
-	Branch      string `json:"branch"`
+	ProjectID   pgtype.UUID `json:"project_id"`
+	Title       string      `json:"title"`
+	Description string      `json:"description"`
 }
 
 func (q *Queries) CreateDelivery(ctx context.Context, arg CreateDeliveryParams) (Delivery, error) {
-	row := q.db.QueryRow(ctx, createDelivery,
-		arg.Title,
-		arg.Description,
-		arg.RepoUrl,
-		arg.Branch,
-	)
+	row := q.db.QueryRow(ctx, createDelivery, arg.ProjectID, arg.Title, arg.Description)
 	var i Delivery
 	err := row.Scan(
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate FROM deliveries WHERE id = $1
+SELECT id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -82,14 +74,13 @@ func (q *Queries) GetDelivery(ctx context.Context, id pgtype.UUID) (Delivery, er
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -98,7 +89,7 @@ const incrementDeliveryFailCount = `-- name: IncrementDeliveryFailCount :one
 UPDATE deliveries
 SET fail_count = fail_count + 1, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 func (q *Queries) IncrementDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -108,20 +99,19 @@ func (q *Queries) IncrementDeliveryFailCount(ctx context.Context, id pgtype.UUID
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const listDeliveries = `-- name: ListDeliveries :many
-SELECT id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
+SELECT id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id FROM deliveries ORDER BY created_at DESC LIMIT $1 OFFSET $2
 `
 
 type ListDeliveriesParams struct {
@@ -142,14 +132,54 @@ func (q *Queries) ListDeliveries(ctx context.Context, arg ListDeliveriesParams) 
 			&i.ID,
 			&i.Title,
 			&i.Description,
-			&i.RepoUrl,
-			&i.Branch,
 			&i.Status,
 			&i.CurrentStage,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.FailCount,
 			&i.PendingGate,
+			&i.ProjectID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeliveriesByProject = `-- name: ListDeliveriesByProject :many
+SELECT id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id FROM deliveries WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+`
+
+type ListDeliveriesByProjectParams struct {
+	ProjectID pgtype.UUID `json:"project_id"`
+	Limit     int32       `json:"limit"`
+	Offset    int32       `json:"offset"`
+}
+
+func (q *Queries) ListDeliveriesByProject(ctx context.Context, arg ListDeliveriesByProjectParams) ([]Delivery, error) {
+	rows, err := q.db.Query(ctx, listDeliveriesByProject, arg.ProjectID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Delivery
+	for rows.Next() {
+		var i Delivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.CurrentStage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FailCount,
+			&i.PendingGate,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -165,7 +195,7 @@ const resetDeliveryFailCount = `-- name: ResetDeliveryFailCount :one
 UPDATE deliveries
 SET fail_count = 0, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 func (q *Queries) ResetDeliveryFailCount(ctx context.Context, id pgtype.UUID) (Delivery, error) {
@@ -175,20 +205,19 @@ func (q *Queries) ResetDeliveryFailCount(ctx context.Context, id pgtype.UUID) (D
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const setDeliveryPendingGate = `-- name: SetDeliveryPendingGate :one
-UPDATE deliveries SET pending_gate = $2, updated_at = now() WHERE id = $1 RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+UPDATE deliveries SET pending_gate = $2, updated_at = now() WHERE id = $1 RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 type SetDeliveryPendingGateParams struct {
@@ -203,14 +232,13 @@ func (q *Queries) SetDeliveryPendingGate(ctx context.Context, arg SetDeliveryPen
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -219,7 +247,7 @@ const updateDeliveryStage = `-- name: UpdateDeliveryStage :one
 UPDATE deliveries
 SET current_stage = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 type UpdateDeliveryStageParams struct {
@@ -234,14 +262,13 @@ func (q *Queries) UpdateDeliveryStage(ctx context.Context, arg UpdateDeliverySta
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -250,7 +277,7 @@ const updateDeliveryStatus = `-- name: UpdateDeliveryStatus :one
 UPDATE deliveries
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, description, repo_url, branch, status, current_stage, created_at, updated_at, fail_count, pending_gate
+RETURNING id, title, description, status, current_stage, created_at, updated_at, fail_count, pending_gate, project_id
 `
 
 type UpdateDeliveryStatusParams struct {
@@ -265,14 +292,13 @@ func (q *Queries) UpdateDeliveryStatus(ctx context.Context, arg UpdateDeliverySt
 		&i.ID,
 		&i.Title,
 		&i.Description,
-		&i.RepoUrl,
-		&i.Branch,
 		&i.Status,
 		&i.CurrentStage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.FailCount,
 		&i.PendingGate,
+		&i.ProjectID,
 	)
 	return i, err
 }

@@ -1,6 +1,6 @@
 -- name: CreateDelivery :one
-INSERT INTO deliveries (title, description, repo_url, branch)
-VALUES ($1, $2, $3, $4)
+INSERT INTO deliveries (project_id, title, description)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: GetDelivery :one
@@ -38,3 +38,6 @@ UPDATE deliveries SET pending_gate = $2, updated_at = now() WHERE id = $1 RETURN
 
 -- name: ClearDeliveryPendingGate :one
 UPDATE deliveries SET pending_gate = NULL, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: ListDeliveriesByProject :many
+SELECT * FROM deliveries WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3;
