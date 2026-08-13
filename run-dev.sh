@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 启动 infera 本地开发：后端(:8080) + 前端(:3000)。
-# 前置：postgres 已起（docker compose up -d）、迁移已跑（已是 v6）、infera-agent 镜像已构建。
+# 前置：postgres 已起（docker compose up -d）、迁移已跑（已是 v7）、infera-agent 镜像已构建。
 # 用法：cp .env.example .env 填密钥 → ./run-dev.sh
 set -euo pipefail
 cd "$(dirname "$0")"
