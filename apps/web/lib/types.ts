@@ -2,14 +2,22 @@ export type DeliveryStatus = "active" | "completed" | "blocked";
 
 export interface Delivery {
   id: string;
+  project_id: string;
   title: string;
   description: string;
-  repo_url: string;
-  branch: string;
   status: DeliveryStatus;
   current_stage: string;
   pending_gate: string | null;
   fail_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  repo_url: string;
+  default_branch: string;
   created_at: string;
   updated_at: string;
 }
@@ -37,7 +45,6 @@ export const STAGES = [
   "code_gen",
   "unit_test",
   "code_review",
-  "deploy",
 ] as const;
 
 export const GATES = new Set(["spec_approval", "code_review"]);
