@@ -62,3 +62,8 @@ export async function rejectGate(id: string, reason: string): Promise<Delivery> 
   if (!r.ok) throw new Error("reject failed");
   return r.json();
 }
+
+export async function logout(): Promise<boolean> {
+  const r = await fetch("/api/logout", { method: "POST" });
+  return r.ok;
+}
