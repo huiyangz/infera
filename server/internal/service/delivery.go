@@ -43,20 +43,17 @@ func (s *DeliveryService) WithBroadcaster(b realtime.Broadcaster) *DeliveryServi
 type CreateInput struct {
 	Title       string
 	Description string
-	RepoURL     string
-	Branch      string
 }
 
-// Create 建一条新 Delivery，初始 stage = intake。
-func (s *DeliveryService) Create(ctx context.Context, in CreateInput) (generated.Delivery, error) {
+// Create 在指定项目下建一条新 Delivery，初始 stage = intake。
+func (s *DeliveryService) Create(ctx context.Context, projectID pgtype.UUID, in CreateInput) (generated.Delivery, error) {
 	if in.Title == "" {
 		return generated.Delivery{}, fmt.Errorf("title is required")
 	}
 	d, err := s.q.CreateDelivery(ctx, generated.CreateDeliveryParams{
+		ProjectID:   projectID,
 		Title:       in.Title,
 		Description: in.Description,
-		RepoUrl:     in.RepoURL,
-		Branch:      in.Branch,
 	})
 	if err != nil {
 		return generated.Delivery{}, fmt.Errorf("create delivery: %w", err)

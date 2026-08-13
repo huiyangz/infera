@@ -14,7 +14,8 @@ func TestExecuteRunsAgentAndWritesTimeline(t *testing.T) {
 	dbtest.Migrate(t)
 	pool := dbtest.Pool(t)
 	defer pool.Close()
-	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "agent_configs")
+	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "projects", "agent_configs")
+	pid := dbtest.SeedProject(t, pool, "p1")
 
 	// 手动 seed 一个 spec agent（覆盖 migration 之外的隔离测试）
 	_, _ = pool.Exec(context.Background(),
@@ -24,7 +25,7 @@ func TestExecuteRunsAgentAndWritesTimeline(t *testing.T) {
 	fake.Stub(agent.RoleSpec, "## spec\n忘记密码流程…")
 	svc := NewExecute(pool, fake)
 
-	d, err := New(pool).Create(context.Background(), CreateInput{Title: "忘记密码"})
+	d, err := New(pool).Create(context.Background(), pid, CreateInput{Title: "忘记密码"})
 	assert.NoError(t, err)
 
 	res, err := svc.ExecuteStage(context.Background(), d.ID, "spec", "需求：忘记密码")
@@ -43,12 +44,13 @@ func TestExecuteSkipsForHumanSystemStage(t *testing.T) {
 	dbtest.Migrate(t)
 	pool := dbtest.Pool(t)
 	defer pool.Close()
-	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "agent_configs")
+	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "projects", "agent_configs")
+	pid := dbtest.SeedProject(t, pool, "p1")
 
 	fake := agent.NewFakeBackend()
 	svc := NewExecute(pool, fake)
 
-	d, _ := New(pool).Create(context.Background(), CreateInput{Title: "t"})
+	d, _ := New(pool).Create(context.Background(), pid, CreateInput{Title: "t"})
 
 	_, err := svc.ExecuteStage(context.Background(), d.ID, "intake", "")
 	assert.Error(t, err) // intake 不该调 agent

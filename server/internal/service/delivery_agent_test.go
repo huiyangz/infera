@@ -13,7 +13,8 @@ func TestAdvanceRunsSpecAgent(t *testing.T) {
 	dbtest.Migrate(t)
 	pool := dbtest.Pool(t)
 	defer pool.Close()
-	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "agent_configs")
+	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "projects", "agent_configs")
+	pid := dbtest.SeedProject(t, pool, "p1")
 	_, _ = pool.Exec(context.Background(),
 		`INSERT INTO agent_configs (name, role, config) VALUES ('Spec Agent','spec','{"system_prompt":"x"}')`)
 
@@ -21,7 +22,7 @@ func TestAdvanceRunsSpecAgent(t *testing.T) {
 	fake.Stub(agent.RoleSpec, "spec 产出")
 	svc := New(pool).WithExecutor(NewExecute(pool, fake))
 
-	d, _ := svc.Create(context.Background(), CreateInput{Title: "忘记密码"})
+	d, _ := svc.Create(context.Background(), pid, CreateInput{Title: "忘记密码"})
 	_, err := svc.Advance(context.Background(), d.ID)
 	assert.NoError(t, err)
 

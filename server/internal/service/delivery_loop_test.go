@@ -25,7 +25,7 @@ func TestLoopRetriesThenBlocksAtThree(t *testing.T) {
 	dbtest.Migrate(t)
 	pool := dbtest.Pool(t)
 	defer pool.Close()
-	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "agent_configs")
+	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "projects", "agent_configs")
 	seedAgentsForLoop(t, pool)
 
 	// unit_test 永远失败 → 每次回退 code_gen，3 次后 blocked
@@ -33,7 +33,8 @@ func TestLoopRetriesThenBlocksAtThree(t *testing.T) {
 	fake := agent.NewFakeBackend()
 	svc := New(pool).WithExecutor(NewExecute(pool, fake)).WithTestRunner(runner)
 
-	d, _ := svc.Create(context.Background(), CreateInput{Title: "t"})
+	pid := dbtest.SeedProject(t, pool, "p1")
+	d, _ := svc.Create(context.Background(), pid, CreateInput{Title: "t"})
 	// 直接把 stage 设到 code_gen，下一步即 unit_test，聚焦 loop
 	_, _ = pool.Exec(context.Background(), "UPDATE deliveries SET current_stage='code_gen' WHERE id=$1", d.ID)
 
@@ -54,7 +55,7 @@ func TestLoopPassesWhenTestsGreen(t *testing.T) {
 	dbtest.Migrate(t)
 	pool := dbtest.Pool(t)
 	defer pool.Close()
-	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "agent_configs")
+	dbtest.Truncate(t, pool, "timeline_events", "deliveries", "projects", "agent_configs")
 	seedAgentsForLoop(t, pool)
 
 	runner := testrunner.NewFakeRunner(true) // 测试通过
@@ -62,7 +63,8 @@ func TestLoopPassesWhenTestsGreen(t *testing.T) {
 	fake.Stub(agent.RoleReviewer, `{"decision":"approve","reasons":[]}`)
 	svc := New(pool).WithExecutor(NewExecute(pool, fake)).WithTestRunner(runner)
 
-	d, _ := svc.Create(context.Background(), CreateInput{Title: "t"})
+	pid := dbtest.SeedProject(t, pool, "p1")
+	d, _ := svc.Create(context.Background(), pid, CreateInput{Title: "t"})
 	_, _ = pool.Exec(context.Background(), "UPDATE deliveries SET current_stage='code_gen' WHERE id=$1", d.ID)
 
 	// code_gen → unit_test(pass) → code_review（gate 暂停等人）

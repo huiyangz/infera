@@ -11,8 +11,21 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// SeedProject 建一个测试项目并返回其 id（供需要 project_id 的测试用）。
+func SeedProject(t *testing.T, pool *pgxpool.Pool, name string) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	err := pool.QueryRow(context.Background(),
+		`INSERT INTO projects (name, repo_url) VALUES ($1, '') RETURNING id`, name).Scan(&id)
+	if err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	return id
+}
 
 const testDBURL = "postgres://infera:infera@localhost:5433/infera_test?sslmode=disable"
 
