@@ -21,27 +21,44 @@ func NewDeliveryHandler(svc *service.DeliveryService, pool *pgxpool.Pool) *Deliv
 	return &DeliveryHandler{svc: svc, pool: pool}
 }
 
-type createDeliveryReq struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	RepoURL     string `json:"repo_url"`
-	Branch      string `json:"branch"`
-}
-
+// Create 在项目下建 Delivery，并异步自动推进到下个 gate。
 func (h *DeliveryHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req createDeliveryReq
+	projectID := chi.URLParam(r, "id")
+	var req struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	d, err := h.svc.Create(r.Context(), service.CreateInput{
-		Title: req.Title, Description: req.Description, RepoURL: req.RepoURL, Branch: req.Branch,
+	d, err := h.svc.Create(r.Context(), parseUUID(projectID), service.CreateInput{
+		Title: req.Title, Description: req.Description,
 	})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.svc.Start(d.ID) // 异步推进到 gate
 	writeJSON(w, http.StatusCreated, d)
+}
+
+func (h *DeliveryHandler) ListByProject(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "id")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	q := generated.New(h.pool)
+	items, err := q.ListDeliveriesByProject(r.Context(), generated.ListDeliveriesByProjectParams{
+		ProjectID: parseUUID(projectID), Limit: int32(limit), Offset: int32(offset),
+	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
 }
 
 func (h *DeliveryHandler) List(w http.ResponseWriter, r *http.Request) {
