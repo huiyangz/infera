@@ -1,0 +1,5 @@
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS stage_runs;
+DROP TABLE IF EXISTS deliveries;
+DROP TABLE IF EXISTS projects;
