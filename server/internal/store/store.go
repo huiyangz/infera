@@ -1,0 +1,86 @@
+package store
+
+import (
+	"context"
+	"time"
+)
+
+type Project struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	RepoURL       string    `json:"repo_url"`
+	DefaultBranch string    `json:"default_branch"`
+	Pinned        bool      `json:"pinned"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type ProjectStats struct {
+	Active  int       `json:"active"`
+	Pending int       `json:"pending"`
+	Last    time.Time `json:"last_activity"`
+}
+
+type Delivery struct {
+	ID           string    `json:"id"`
+	ProjectID    string    `json:"project_id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Status       string    `json:"status"` // active|completed|blocked
+	CurrentStage string    `json:"current_stage"`
+	PendingGate  string    `json:"pending_gate"`
+	FailCount    int       `json:"fail_count"`
+	BaseCommit   string    `json:"base_commit"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type Event struct {
+	ID         string    `json:"id"`
+	DeliveryID string    `json:"delivery_id"`
+	Stage      string    `json:"stage"`
+	EventType  string    `json:"event_type"`
+	Payload    []byte    `json:"payload"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type Artifact struct {
+	ID         string    `json:"id"`
+	DeliveryID string    `json:"delivery_id"`
+	Stage      string    `json:"stage"`
+	Kind       string    `json:"kind"`
+	Content    string    `json:"content"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type StageRun struct {
+	ID         string     `json:"id"`
+	DeliveryID string     `json:"delivery_id"`
+	Stage      string     `json:"stage"`
+	Attempt    int        `json:"attempt"`
+	Status     string     `json:"status"` // running|done|failed
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+}
+
+type Store interface {
+	// projects
+	CreateProject(ctx context.Context, p *Project) error
+	ListProjects(ctx context.Context) ([]Project, error)
+	GetProject(ctx context.Context, id string) (*Project, error)
+	PatchProjectPinned(ctx context.Context, id string, pinned bool) error
+	ProjectStats(ctx context.Context, id string) (ProjectStats, error)
+	// deliveries
+	CreateDelivery(ctx context.Context, d *Delivery) error
+	GetDelivery(ctx context.Context, id string) (*Delivery, error)
+	ListProjectDeliveries(ctx context.Context, projectID string) ([]Delivery, error)
+	UpdateDelivery(ctx context.Context, d *Delivery) error
+	// events / artifacts / stage_runs
+	AppendEvent(ctx context.Context, e *Event) error
+	ListEvents(ctx context.Context, deliveryID string) ([]Event, error)
+	SaveArtifact(ctx context.Context, a *Artifact) error
+	ListArtifacts(ctx context.Context, deliveryID string) ([]Artifact, error)
+	StartStageRun(ctx context.Context, r *StageRun) error
+	FinishStageRun(ctx context.Context, id string, status string) error
+	LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error)
+}
