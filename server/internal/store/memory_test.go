@@ -16,6 +16,7 @@ func TestMemoryProjectPinnedAndStats(t *testing.T) {
 	got, err := m.GetProject(ctx, p.ID)
 	require.NoError(t, err)
 	require.True(t, got.Pinned)
+	require.ErrorIs(t, m.PatchProjectPinned(ctx, "nope", true), ErrNotFound)
 
 	d := &Delivery{ProjectID: p.ID, Title: "t", Status: "active", PendingGate: "spec_approval"}
 	require.NoError(t, m.CreateDelivery(ctx, d))
@@ -34,11 +35,25 @@ func TestMemoryDeliveryAndArtifacts(t *testing.T) {
 	require.NoError(t, m.CreateDelivery(ctx, d))
 
 	require.NoError(t, m.SaveArtifact(ctx, &Artifact{DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: "S"}))
-	require.NoError(t, m.AppendEvent(ctx, &Event{DeliveryID: d.ID, Stage: "spec", EventType: "stage_started", Payload: []byte(`{}`)}))
-	require.NoError(t, m.StartStageRun(ctx, &StageRun{DeliveryID: d.ID, Stage: "spec", Attempt: 1}))
-	runs, err := m.ListEvents(ctx, d.ID)
+	arts, err := m.ListArtifacts(ctx, d.ID)
 	require.NoError(t, err)
-	require.Len(t, runs, 1)
+	require.Len(t, arts, 1)
+
+	require.NoError(t, m.AppendEvent(ctx, &Event{DeliveryID: d.ID, Stage: "spec", EventType: "stage_started", Payload: []byte(`{}`)}))
+	events, err := m.ListEvents(ctx, d.ID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	run := &StageRun{DeliveryID: d.ID, Stage: "spec", Attempt: 1}
+	require.NoError(t, m.StartStageRun(ctx, run))
+	require.NoError(t, m.FinishStageRun(ctx, run.ID, "done"))
+	latest, err := m.LatestStageRun(ctx, d.ID, "spec")
+	require.NoError(t, err)
+	require.Equal(t, "done", latest.Status)
+	require.NotNil(t, latest.FinishedAt)
+
+	_, err = m.LatestStageRun(ctx, d.ID, "missing_stage")
+	require.ErrorIs(t, err, ErrNotFound)
 
 	d.Status = "completed"
 	require.NoError(t, m.UpdateDelivery(ctx, d))

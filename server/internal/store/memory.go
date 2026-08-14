@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,16 +52,8 @@ func (m *Memory) ListProjects(ctx context.Context) ([]Project, error) {
 	for _, p := range m.projects {
 		out = append(out, *p)
 	}
-	sortByCreatedAtProject(out)
+	slices.SortFunc(out, func(a, b Project) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return out, nil
-}
-
-func sortByCreatedAtProject(ps []Project) {
-	for i := 1; i < len(ps); i++ {
-		for j := i; j > 0 && ps[j].CreatedAt.Before(ps[j-1].CreatedAt); j-- {
-			ps[j], ps[j-1] = ps[j-1], ps[j]
-		}
-	}
 }
 
 func (m *Memory) GetProject(ctx context.Context, id string) (*Project, error) {
@@ -147,16 +140,8 @@ func (m *Memory) ListProjectDeliveries(ctx context.Context, projectID string) ([
 			out = append(out, *d)
 		}
 	}
-	sortByCreatedAtDelivery(out)
+	slices.SortFunc(out, func(a, b Delivery) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return out, nil
-}
-
-func sortByCreatedAtDelivery(ds []Delivery) {
-	for i := 1; i < len(ds); i++ {
-		for j := i; j > 0 && ds[j].CreatedAt.Before(ds[j-1].CreatedAt); j-- {
-			ds[j], ds[j-1] = ds[j-1], ds[j]
-		}
-	}
 }
 
 func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
