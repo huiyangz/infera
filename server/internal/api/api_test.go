@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -90,5 +93,190 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 
 	// 404
 	r, _ = c.Get(ts.URL + "/api/projects/00000000-0000-0000-0000-000000000000")
+	require.Equal(t, 404, r.StatusCode)
+}
+
+// --- deliveries ---
+
+// fakeEngine 记录调用但不改 store（真实引擎会推进状态），
+// 因此断言只依赖 handler 自身行为；内部加锁避免异步 driver 的数据竞争。
+type fakeEngine struct {
+	mu        sync.Mutex
+	started   []string
+	approved  []string
+	rejected  []string
+	failStart bool
+}
+
+func (f *fakeEngine) Start(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failStart {
+		return errors.New("engine boom")
+	}
+	f.started = append(f.started, id)
+	return nil
+}
+
+func (f *fakeEngine) Approve(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.approved = append(f.approved, id)
+	return nil
+}
+
+func (f *fakeEngine) Reject(_ context.Context, id, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rejected = append(f.rejected, id)
+	return nil
+}
+
+func (f *fakeEngine) startCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.started)
+}
+
+func (f *fakeEngine) approvedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.approved...)
+}
+
+func (f *fakeEngine) rejectedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.rejected...)
+}
+
+func newServerWithEngine(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine) {
+	st := store.NewMemory()
+	fe := &fakeEngine{}
+	srv := NewServer(st, "secret-pass", fe)
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+	return ts, st, fe
+}
+
+func TestDeliveryLifecycleAPI(t *testing.T) {
+	ts, st, fe := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+
+	p := &store.Project{Name: "p"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"需求A","description":"描述"}`))
+	require.Equal(t, 200, r.StatusCode)
+	var d store.Delivery
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
+	require.Equal(t, "intake", d.CurrentStage)
+	require.Equal(t, "active", d.Status)
+	require.NotEmpty(t, d.ID)
+	// 引擎被异步触发（至少一次 Start）
+	require.Eventually(t, func() bool { return fe.startCount() >= 1 }, 2*time.Second, 20*time.Millisecond)
+
+	// 列表
+	r, _ = c.Get(ts.URL + "/api/projects/" + p.ID + "/deliveries")
+	require.Equal(t, 200, r.StatusCode)
+	var list []store.Delivery
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&list))
+	require.Len(t, list, 1)
+	require.Equal(t, "需求A", list[0].Title)
+
+	// 尚无门禁 → gate 400
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 400, r.StatusCode)
+
+	// 引擎跑到 spec 门禁（直接改 store 模拟引擎推进）
+	got, _ := st.GetDelivery(ctx, d.ID)
+	got.CurrentStage, got.PendingGate = "spec_approval", "spec_approval"
+	require.NoError(t, st.UpdateDelivery(ctx, got))
+	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: "# spec 正文"}))
+	require.NoError(t, st.AppendEvent(ctx, &store.Event{DeliveryID: d.ID, Stage: "spec", EventType: "stage_done", Payload: []byte(`{}`)}))
+
+	// 详情：delivery + timeline + artifacts
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID)
+	require.Equal(t, 200, r.StatusCode)
+	var detail struct {
+		Delivery  store.Delivery   `json:"delivery"`
+		Timeline  []store.Event    `json:"timeline"`
+		Artifacts []store.Artifact `json:"artifacts"`
+	}
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&detail))
+	require.Equal(t, "spec_approval", detail.Delivery.PendingGate)
+	require.Len(t, detail.Timeline, 2) // delivery_created（handler 记录）+ stage_done（模拟引擎）
+	require.Equal(t, "delivery_created", detail.Timeline[0].EventType)
+	require.Equal(t, "stage_done", detail.Timeline[1].EventType)
+	require.Len(t, detail.Artifacts, 1)
+
+	// gate：spec 全文
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	var gate struct {
+		DeliveryID string `json:"delivery_id"`
+		Gate       string `json:"gate"`
+		AgentOutput *struct {
+			Agent  string `json:"agent"`
+			Output string `json:"output"`
+		} `json:"agent_output"`
+		PRURL string `json:"pr_url"`
+	}
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
+	require.Equal(t, d.ID, gate.DeliveryID)
+	require.Equal(t, "spec_approval", gate.Gate)
+	require.NotNil(t, gate.AgentOutput)
+	require.Equal(t, "spec", gate.AgentOutput.Agent)
+	require.Contains(t, gate.AgentOutput.Output, "spec 正文")
+
+	// approve：fake 不改 store，只记录调用并返回 200（真实引擎会清 gate 并继续推进）
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "", nil)
+	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, []string{d.ID}, fe.approvedIDs())
+
+	// 推进到 code_review 门禁再 reject
+	got, _ = st.GetDelivery(ctx, d.ID)
+	got.CurrentStage, got.PendingGate = "code_review", "code_review"
+	require.NoError(t, st.UpdateDelivery(ctx, got))
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d.ID+"/reject", "application/json", bytes.NewBufferString(`{"reason":"x"}`))
+	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, []string{d.ID}, fe.rejectedIDs())
+
+	// 404：详情与 gate
+	r, _ = c.Get(ts.URL + "/api/deliveries/00000000-0000-0000-0000-000000000000")
+	require.Equal(t, 404, r.StatusCode)
+	r, _ = c.Get(ts.URL + "/api/deliveries/00000000-0000-0000-0000-000000000000/gate")
+	require.Equal(t, 404, r.StatusCode)
+	// fake 未清 gate → gate 仍 200（真实引擎 Reject 会清 gate 并回退）
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+}
+
+// 引擎 Start 报错不拖垮创建：异步 driver 吞掉错误（状态由引擎自己承载）。
+func TestDeliveryEngineStartErrorSwallowed(t *testing.T) {
+	ts, st, fe := newServerWithEngine(t)
+	fe.failStart = true
+	c := login(t, ts.URL)
+	ctx := context.Background()
+
+	p := &store.Project{Name: "p"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"需求B"}`))
+	require.Equal(t, 200, r.StatusCode)
+	var d store.Delivery
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
+	require.Equal(t, "active", d.Status)
+
+	// 缺 title → 400
+	r, _ = c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"  "}`))
+	require.Equal(t, 400, r.StatusCode)
+	// 项目不存在 → 404
+	r, _ = c.Post(ts.URL+"/api/projects/00000000-0000-0000-0000-000000000000/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"x"}`))
 	require.Equal(t, 404, r.StatusCode)
 }
