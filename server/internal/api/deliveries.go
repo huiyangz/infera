@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -233,6 +234,7 @@ func (s *Server) driveLocked(deliveryID string) {
 		}
 		err := s.engine.Start(context.Background(), deliveryID)
 		if err != nil {
+			log.Printf("engine start %s: %v", deliveryID, err)
 			return // 引擎报错：blocked/completed/agent 失败都由状态承载
 		}
 		d, err := s.st.GetDelivery(context.Background(), deliveryID)

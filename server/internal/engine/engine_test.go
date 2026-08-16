@@ -64,6 +64,15 @@ func (f *FakeWS) Path(deliveryID string) string { return "/tmp/infera-ws/" + del
 
 func (f *FakeWS) Release(string) { f.released = true }
 
+// errAcquireWS 的 Acquire 一律失败（验证 workspace 获取失败 → blocked 路径），其余行为同 FakeWS。
+type errAcquireWS struct{ FakeWS }
+
+func (f *errAcquireWS) Acquire(_ context.Context, deliveryID, _, _ string) (string, string, error) {
+	f.acquireCalled = true
+	f.acquireCount++
+	return "", "", errors.New("git clone: repository not found")
+}
+
 // passTR / failTR 可注入的 TestRunner。
 type passTR struct{}
 
@@ -313,6 +322,44 @@ func TestAgentFailureBlocks(t *testing.T) {
 	r, err := st.LatestStageRun(ctx, d.ID, "spec")
 	require.NoError(t, err)
 	require.Equal(t, "failed", r.Status)
+}
+
+func TestWorkspaceAcquireFailureBlocks(t *testing.T) {
+	st := store.NewMemory()
+	ws := &errAcquireWS{}
+	ar := &fakeRunner{}
+	e := New(st, ar, ws, passTR{})
+	d := seed(t, st)
+	ctx := context.Background()
+
+	// Acquire 失败 → stage_failed(intake) + blocked，错误上抛（同 agent 失败约定）。
+	err := e.Start(ctx, d.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "repository not found")
+
+	got := get(t, st, d.ID)
+	require.Equal(t, StatusBlocked, got.Status)
+	require.Empty(t, got.BaseCommit)
+	require.True(t, ws.acquireCalled)
+	require.True(t, ws.released) // block 的 Release：acquire 已失败，幂等无害
+	require.Empty(t, ar.calls)   // 引擎未推进到任何 agent 节点
+
+	// stage_failed 事件：stage=intake，payload 携带错误信息；随后 delivery_blocked。
+	evs, err := st.ListEvents(ctx, d.ID)
+	require.NoError(t, err)
+	var stageFailed, blocked *store.Event
+	for i := range evs {
+		switch evs[i].EventType {
+		case "stage_failed":
+			stageFailed = &evs[i]
+		case "delivery_blocked":
+			blocked = &evs[i]
+		}
+	}
+	require.NotNil(t, stageFailed, "stage_failed event not found")
+	require.Equal(t, "intake", stageFailed.Stage)
+	require.Contains(t, string(stageFailed.Payload), "repository not found")
+	require.NotNil(t, blocked, "delivery_blocked event not found")
 }
 
 func TestStartOnCompletedDeliveryErrors(t *testing.T) {

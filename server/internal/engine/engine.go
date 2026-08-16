@@ -141,7 +141,10 @@ func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 	}
 	_, base, err := e.ws.Acquire(ctx, d.ID, proj.RepoURL, proj.DefaultBranch)
 	if err != nil {
-		return err
+		// workspace 获取失败同 agent 失败约定：记 stage_failed 事件 + blocked 终态，
+		// 错误上抛（调用方决定记日志），避免 delivery 永远停在 intake 无痕迹。
+		e.emit(ctx, d, "intake", "stage_failed", map[string]string{"error": err.Error()})
+		return e.block(ctx, d, fmt.Errorf("workspace acquire: %w", err))
 	}
 	d.BaseCommit = base
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
