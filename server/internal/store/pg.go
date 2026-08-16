@@ -33,6 +33,32 @@ const (
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
+// scan helpers：单行查询与列表路径共用同一份 scan 目标列表（pgx.Rows 满足 pgx.Row）。
+
+func scanProject(row pgx.Row) (*Project, error) {
+	p := &Project{}
+	if err := row.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		return nil, mapErr(err)
+	}
+	return p, nil
+}
+
+func scanDelivery(row pgx.Row) (*Delivery, error) {
+	d := &Delivery{}
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		return nil, mapErr(err)
+	}
+	return d, nil
+}
+
+func scanStageRun(row pgx.Row) (*StageRun, error) {
+	r := &StageRun{}
+	if err := row.Scan(&r.ID, &r.DeliveryID, &r.Stage, &r.Attempt, &r.Status, &r.StartedAt, &r.FinishedAt); err != nil {
+		return nil, mapErr(err)
+	}
+	return r, nil
+}
+
 // projects
 
 func (pg *Pg) CreateProject(ctx context.Context, p *Project) error {
@@ -62,23 +88,17 @@ func (pg *Pg) ListProjects(ctx context.Context) ([]Project, error) {
 	defer rows.Close()
 	out := make([]Project, 0)
 	for rows.Next() {
-		var p Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	return out, rows.Err()
 }
 
 func (pg *Pg) GetProject(ctx context.Context, id string) (*Project, error) {
-	p := &Project{}
-	err := pg.pool.QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE id=$1`, id).
-		Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.CreatedAt, &p.UpdatedAt)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	return p, nil
+	return scanProject(pg.pool.QueryRow(ctx, `SELECT `+projectCols+` FROM projects WHERE id=$1`, id))
 }
 
 func (pg *Pg) PatchProjectPinned(ctx context.Context, id string, pinned bool) error {
@@ -137,13 +157,7 @@ func (pg *Pg) CreateDelivery(ctx context.Context, d *Delivery) error {
 }
 
 func (pg *Pg) GetDelivery(ctx context.Context, id string) (*Delivery, error) {
-	d := &Delivery{}
-	err := pg.pool.QueryRow(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE id=$1`, id).
-		Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.CreatedAt, &d.UpdatedAt)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	return d, nil
+	return scanDelivery(pg.pool.QueryRow(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE id=$1`, id))
 }
 
 func (pg *Pg) ListProjectDeliveries(ctx context.Context, projectID string) ([]Delivery, error) {
@@ -154,11 +168,11 @@ func (pg *Pg) ListProjectDeliveries(ctx context.Context, projectID string) ([]De
 	defer rows.Close()
 	out := make([]Delivery, 0)
 	for rows.Next() {
-		var d Delivery
-		if err := rows.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		d, err := scanDelivery(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, d)
+		out = append(out, *d)
 	}
 	return out, rows.Err()
 }
@@ -251,9 +265,12 @@ func (pg *Pg) StartStageRun(ctx context.Context, r *StageRun) error {
 	if err != nil {
 		return err
 	}
-	err = pg.pool.QueryRow(ctx, `SELECT `+stageRunCols+` FROM stage_runs WHERE id=$1`, r.ID).
-		Scan(&r.ID, &r.DeliveryID, &r.Stage, &r.Attempt, &r.Status, &r.StartedAt, &r.FinishedAt)
-	return mapErr(err)
+	got, err := scanStageRun(pg.pool.QueryRow(ctx, `SELECT `+stageRunCols+` FROM stage_runs WHERE id=$1`, r.ID))
+	if err != nil {
+		return err
+	}
+	*r = *got
+	return nil
 }
 
 func (pg *Pg) FinishStageRun(ctx context.Context, id string, status string) error {
@@ -268,13 +285,7 @@ func (pg *Pg) FinishStageRun(ctx context.Context, id string, status string) erro
 }
 
 func (pg *Pg) LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error) {
-	r := &StageRun{}
-	err := pg.pool.QueryRow(ctx,
+	return scanStageRun(pg.pool.QueryRow(ctx,
 		`SELECT `+stageRunCols+` FROM stage_runs WHERE delivery_id=$1 AND stage=$2 ORDER BY started_at DESC LIMIT 1`,
-		deliveryID, stage).
-		Scan(&r.ID, &r.DeliveryID, &r.Stage, &r.Attempt, &r.Status, &r.StartedAt, &r.FinishedAt)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	return r, nil
+		deliveryID, stage))
 }

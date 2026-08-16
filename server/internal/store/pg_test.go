@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -75,4 +76,49 @@ func TestPgProjectAndDelivery(t *testing.T) {
 	_, err = p.GetDelivery(ctx, "00000000-0000-0000-0000-000000000000")
 	require.ErrorIs(t, err, ErrNotFound)
 	require.ErrorIs(t, p.PatchProjectPinned(ctx, "00000000-0000-0000-0000-000000000000", false), ErrNotFound)
+}
+
+func TestPgListPaths(t *testing.T) {
+	p := testPool(t)
+	ctx := context.Background()
+
+	// ListProjects：2 条，按 CreatedAt 升序。
+	proj1 := &Project{Name: "alpha", RepoURL: "https://github.com/x/y", DefaultBranch: "main"}
+	require.NoError(t, p.CreateProject(ctx, proj1))
+	time.Sleep(2 * time.Millisecond) // 时间戳来自 DB now()，保证严格递增
+	proj2 := &Project{Name: "beta", RepoURL: "https://github.com/x/z", DefaultBranch: "main"}
+	require.NoError(t, p.CreateProject(ctx, proj2))
+	projects, err := p.ListProjects(ctx)
+	require.NoError(t, err)
+	require.Len(t, projects, 2)
+	require.Equal(t, proj1.ID, projects[0].ID)
+	require.Equal(t, proj2.ID, projects[1].ID)
+	require.False(t, projects[0].CreatedAt.After(projects[1].CreatedAt))
+
+	// ListProjectDeliveries：同项目 2 条，按 CreatedAt 升序。
+	d1 := &Delivery{ProjectID: proj1.ID, Title: "需求A", Status: "active", CurrentStage: "spec"}
+	require.NoError(t, p.CreateDelivery(ctx, d1))
+	time.Sleep(2 * time.Millisecond)
+	d2 := &Delivery{ProjectID: proj1.ID, Title: "需求B", Status: "active", CurrentStage: "spec"}
+	require.NoError(t, p.CreateDelivery(ctx, d2))
+	deliveries, err := p.ListProjectDeliveries(ctx, proj1.ID)
+	require.NoError(t, err)
+	require.Len(t, deliveries, 2)
+	require.Equal(t, d1.ID, deliveries[0].ID)
+	require.Equal(t, d2.ID, deliveries[1].ID)
+	require.False(t, deliveries[0].CreatedAt.After(deliveries[1].CreatedAt))
+
+	// 同一 stage 第二次 run 后，LatestStageRun 返回最新一次。
+	run1 := &StageRun{DeliveryID: d1.ID, Stage: "spec", Attempt: 1}
+	require.NoError(t, p.StartStageRun(ctx, run1))
+	require.NoError(t, p.FinishStageRun(ctx, run1.ID, "done"))
+	time.Sleep(2 * time.Millisecond)
+	run2 := &StageRun{DeliveryID: d1.ID, Stage: "spec", Attempt: 2}
+	require.NoError(t, p.StartStageRun(ctx, run2))
+	require.NoError(t, p.FinishStageRun(ctx, run2.ID, "failed"))
+	latest, err := p.LatestStageRun(ctx, d1.ID, "spec")
+	require.NoError(t, err)
+	require.Equal(t, run2.ID, latest.ID)
+	require.Equal(t, "failed", latest.Status)
+	require.Equal(t, 2, latest.Attempt)
 }
