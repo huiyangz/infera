@@ -25,6 +25,11 @@ func TestBuildPrompt(t *testing.T) {
 	p = BuildPrompt("test_gen", "写 README", "SPEC 正文")
 	require.Contains(t, p, "SPEC 正文")
 	require.NotContains(t, p, "{spec}")
+
+	// code_review 模板含 {spec}：审查需对照规格。
+	p = BuildPrompt("code_review", "写 README", "SPEC 正文")
+	require.Contains(t, p, "SPEC 正文")
+	require.NotContains(t, p, "{spec}")
 }
 
 func TestLocalRunner(t *testing.T) {
