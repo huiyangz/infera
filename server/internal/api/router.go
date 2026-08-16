@@ -32,16 +32,20 @@ type Server struct {
 	// locks per-delivery 驱动锁（deliveryID → *sync.Mutex）：
 	// 引擎无并发保护，创建的异步 driver 与 approve/reject 借此互斥。
 	locks sync.Map
+
+	// hub per-delivery websocket 订阅；Server.Publish 供 engine.Notify 注入。
+	hub *hub
 }
 
 func NewServer(st store.Store, password string, engine EngineAPI) *Server {
-	return &Server{st: st, auth: newSessionManager(password), engine: engine}
+	return &Server{st: st, auth: newSessionManager(password), engine: engine, hub: newHub()}
 }
 
 func (s *Server) SetEngine(e EngineAPI) { s.engine = e }
 func (s *Server) SetGit(g *git.Git)    { s.g = g }
 
-// Mux 装配全部路由。公开：health/login/logout/me；其余需认证。
+// Mux 装配全部路由。公开：health/login/logout/me/ws；其余需认证。
+// /ws 暂挂公开组（MVP：前端带 cookie 连接），后续可加 requireAuth。
 func (s *Server) Mux() http.Handler {
 	r := chi.NewRouter()
 
@@ -51,6 +55,7 @@ func (s *Server) Mux() http.Handler {
 	r.Post("/api/login", s.handleLogin)
 	r.Post("/api/logout", s.handleLogout)
 	r.Get("/api/me", s.handleMe)
+	r.Get("/ws", s.handleWS)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
