@@ -1,10 +1,18 @@
 // Package git 封装 git 命令行。agent 无关、引擎无关的纯库。
 // token 注入 https URL（GitHub PAT），本地路径原样使用（测试/自托管）。
+//
+// 安全约定：
+//   - 所有 git 子进程走同一个 run()：ctx 可取消/超时、禁用终端与 askpass
+//     提示、忽略宿主机 global/system git 配置（credential helper 不干扰）。
+//   - token 只存在于一次性命令行 URL 参数里；错误信息一律 redact；
+//     克隆成功后立即把 origin 重置回 rawURL，secret 不落 .git/config。
 package git
 
 import (
+	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -25,55 +33,97 @@ func injectToken(rawURL, token string) string {
 	return u.String()
 }
 
-func (g *Git) run(cwd string, args ...string) (string, error) {
+// gitEnv 给所有 git 子进程的环境变量：非交互（无 terminal prompt / askpass，
+// CI 环境绝不挂起）+ hermetic（忽略 global/system 配置，宿主 credential
+// helper 等不干扰）。同名继承变量先移除，保证覆盖一定生效。
+func gitEnv() []string {
+	const terminalPrompt = "GIT_TERMINAL_PROMPT=0"
+	const askpass = "GIT_ASKPASS=/bin/true"
+	const configGlobal = "GIT_CONFIG_GLOBAL=/dev/null"
+	const configSystem = "GIT_CONFIG_SYSTEM=/dev/null"
+	overrides := []string{terminalPrompt, askpass, configGlobal, configSystem}
+
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, kv := range os.Environ() {
+		dup := false
+		for _, o := range overrides {
+			if strings.HasPrefix(kv, strings.SplitN(o, "=", 2)[0]+"=") {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			env = append(env, kv)
+		}
+	}
+	return append(env, overrides...)
+}
+
+// redact 把输出/错误信息里的 token（含 URL 转义形态）抹掉，防止 secret 进日志。
+func (g *Git) redact(s string) string {
+	if g.Token == "" {
+		return s
+	}
+	s = strings.ReplaceAll(s, g.Token, "***")
+	if esc := url.QueryEscape(g.Token); esc != g.Token {
+		s = strings.ReplaceAll(s, esc, "***")
+	}
+	return s
+}
+
+// run 是所有 git 调用的唯一出口：ctx 取消即杀进程，错误信息 redact token。
+func (g *Git) run(ctx context.Context, cwd string, args ...string) (string, error) {
 	full := append([]string{"-c", "user.email=agent@infera.dev", "-c", "user.name=infera-agent"}, args...)
-	cmd := exec.Command("git", full...)
+	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = cwd
+	cmd.Env = gitEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("git %s: %w: %s", args[0], err, out)
+		redacted := g.redact(string(out))
+		return redacted, fmt.Errorf("git %s: %w: %s", args[0], err, redacted)
 	}
 	return string(out), nil
 }
 
 // LsRemote 毫秒级可达性/权限校验（不落盘）。
-func (g *Git) LsRemote(rawURL string) error {
-	cmd := exec.Command("git", "ls-remote", "--heads", injectToken(rawURL, g.Token))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ls-remote: %w: %s", err, out)
-	}
-	return nil
+func (g *Git) LsRemote(ctx context.Context, rawURL string) error {
+	_, err := g.run(ctx, "", "ls-remote", "--heads", injectToken(rawURL, g.Token))
+	return err
 }
 
-// Clone 浅克隆指定分支。
-func (g *Git) Clone(rawURL, branch, dir string) error {
-	_, err := g.run("", "clone", "--depth", "1", "--branch", branch, injectToken(rawURL, g.Token), dir)
+// Clone 浅克隆指定分支。成功后立刻把 origin 的 URL 重置为 rawURL：
+// token 只出现在本次 clone 的命令行参数里，不写进 workdir 的 .git/config。
+// （CommitAndPush 用显式 pushURL 推送，不依赖存储的 remote。）
+func (g *Git) Clone(ctx context.Context, rawURL, branch, dir string) error {
+	if _, err := g.run(ctx, "", "clone", "--depth", "1", "--branch", branch, injectToken(rawURL, g.Token), dir); err != nil {
+		return err
+	}
+	_, err := g.run(ctx, dir, "remote", "set-url", "origin", rawURL)
 	return err
 }
 
 // Head 返回当前 HEAD commit（快照基准）。
-func (g *Git) Head(dir string) (string, error) {
-	out, err := g.run(dir, "rev-parse", "HEAD")
+func (g *Git) Head(ctx context.Context, dir string) (string, error) {
+	out, err := g.run(ctx, dir, "rev-parse", "HEAD")
 	return strings.TrimSpace(out), err
 }
 
 // CommitAndPush 提交 workdir 全部变更并推到远端分支；无变更时返回 (false, nil)。
-func (g *Git) CommitAndPush(dir, msg, ref, pushURL string) (bool, error) {
-	if _, err := g.run(dir, "add", "-A"); err != nil {
+func (g *Git) CommitAndPush(ctx context.Context, dir, msg, ref, pushURL string) (bool, error) {
+	if _, err := g.run(ctx, dir, "add", "-A"); err != nil {
 		return false, err
 	}
-	st, err := g.run(dir, "status", "--porcelain")
+	st, err := g.run(ctx, dir, "status", "--porcelain")
 	if err != nil {
 		return false, err
 	}
 	if strings.TrimSpace(st) == "" {
 		return false, nil
 	}
-	if _, err := g.run(dir, "commit", "-m", msg); err != nil {
+	if _, err := g.run(ctx, dir, "commit", "-m", msg); err != nil {
 		return false, err
 	}
-	if _, err := g.run(dir, "push", injectToken(pushURL, g.Token), "HEAD:"+ref); err != nil {
+	if _, err := g.run(ctx, dir, "push", injectToken(pushURL, g.Token), "HEAD:"+ref); err != nil {
 		return false, err
 	}
 	return true, nil
