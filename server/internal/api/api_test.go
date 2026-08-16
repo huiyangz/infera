@@ -216,8 +216,8 @@ func TestDeliveryLifecycleAPI(t *testing.T) {
 	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
 	require.Equal(t, 200, r.StatusCode)
 	var gate struct {
-		DeliveryID string `json:"delivery_id"`
-		Gate       string `json:"gate"`
+		DeliveryID  string `json:"delivery_id"`
+		Gate        string `json:"gate"`
 		AgentOutput *struct {
 			Agent  string `json:"agent"`
 			Output string `json:"output"`

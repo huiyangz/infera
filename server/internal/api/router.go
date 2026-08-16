@@ -42,7 +42,7 @@ func NewServer(st store.Store, password string, engine EngineAPI) *Server {
 }
 
 func (s *Server) SetEngine(e EngineAPI) { s.engine = e }
-func (s *Server) SetGit(g *git.Git)    { s.g = g }
+func (s *Server) SetGit(g *git.Git)     { s.g = g }
 
 // Mux 装配全部路由。公开：health/login/logout/me/ws；其余需认证。
 // /ws 暂挂公开组（MVP：前端带 cookie 连接），后续可加 requireAuth。

@@ -38,7 +38,8 @@ func TestGreenfieldHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
 
 	st := store.NewPg(pool)
 
@@ -86,6 +87,7 @@ esac
 	// 3. gate 拿到 spec artifact
 	var gate gateJSON
 	get(t, client, base+"/api/deliveries/"+d.ID+"/gate", &gate)
+	require.Equal(t, "spec_approval", gate.Gate)
 	require.Contains(t, gate.AgentOutput.Output, "规格")
 
 	// 4. 批准 spec → code_review 门禁（经过 test_gen/code_gen/unit_test）
@@ -136,7 +138,8 @@ func TestUnitTestLoopRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
 	st := store.NewPg(pool)
 
 	// code_gen 首次不写 hello.txt，重试（第二次运行）才写：用标记文件计数
@@ -186,6 +189,13 @@ fi
 	var det detailJSON
 	get(t, client, ts.URL+"/api/deliveries/"+d.ID, &det)
 	require.Equal(t, 0, det.Delivery.FailCount) // 最终通过后重置
+
+	// 事件链里有 test_failed（第一次 unit_test 失败的证据）
+	eventTypes := []string{}
+	for _, e := range det.Timeline {
+		eventTypes = append(eventTypes, e.EventType)
+	}
+	require.Contains(t, eventTypes, "test_failed")
 }
 
 // --- HTTP 测试辅助 ---

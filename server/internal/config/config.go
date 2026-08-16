@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	Addr         string // HTTP 监听地址
@@ -14,9 +17,13 @@ type Config struct {
 }
 
 func Load() Config {
+	addr := getenv("PORT", ":8080")
+	if !strings.HasPrefix(addr, ":") {
+		addr = ":" + addr // 容错：PORT=8080 与 PORT=:8080 等价
+	}
 	return Config{
-		Addr:         getenv("PORT", ":8080"),
-		DatabaseURL:  getenv("DATABASE_URL", "postgres://infera:infera@localhost:5433/infera?sslmode=disable"),
+		Addr:         addr,
+		DatabaseURL:  getenv("DATABASE_URL", "postgres://infera:infera@localhost:5433/infera_v2?sslmode=disable"),
 		Password:     os.Getenv("INFERA_PASSWORD"),
 		GitHubToken:  os.Getenv("GITHUB_TOKEN"),
 		AgentImage:   getenv("AGENT_IMAGE", "infera-agent"),
