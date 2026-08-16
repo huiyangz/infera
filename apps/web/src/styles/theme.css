@@ -1,0 +1,128 @@
+/*
+ * infera 主题 —— 严格映射自 apps/web/DESIGN.md（Runwai 编辑风单色系统）。
+ * 亮色 = DESIGN.md 原始 token；暗色 = 同语言灰阶反转。
+ * 全系统无彩色：状态、强调一律用灰阶层次 + 表面 infill 表达。
+ */
+:root {
+  --radius: 0.5rem; /* DESIGN.md rounded.md：卡片 8px；按钮另行覆盖为 full */
+
+  /* surface */
+  --background: #ffffff; /* canvas */
+  --foreground: #030303; /* ink */
+  --card: #ffffff; /* canvas */
+  --card-foreground: #030303;
+  --popover: #ffffff;
+  --popover-foreground: #030303;
+
+  /* 主操作：黑色实心，唯一品牌动作色 */
+  --primary: #000000; /* primary */
+  --primary-foreground: #ffffff; /* on-primary */
+  --secondary: #e7eaf0; /* hairline = featured infill */
+  --secondary-foreground: #030303;
+  --muted: #eef1f5; /* 比 hairline 更轻的阅读面 */
+  --muted-foreground: #676f7b; /* slate：次级文本 */
+  --accent: #e7eaf0; /* hairline：hover/选中 infill */
+  --accent-foreground: #030303;
+
+  /* 单色系统不引入信号色；destructive 落到深墨 */
+  --destructive: #1a1a1a; /* ink-soft */
+  --destructive-foreground: #ffffff;
+
+  --border: #e7eaf0; /* hairline */
+  --input: #c9ccd1; /* hairline-soft：表单下划线/描边 */
+  --ring: #030303; /* ink */
+  /* 图表灰阶（chart 1→5 由深至浅） */
+  --chart-1: #030303;
+  --chart-2: #404040;
+  --chart-3: #676f7b;
+  --chart-4: #939393;
+  --chart-5: #e7eaf0;
+
+  --sidebar: #fefefe; /* canvas-warm */
+  --sidebar-foreground: #030303;
+  --sidebar-primary: #000000;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e7eaf0;
+  --sidebar-accent-foreground: #030303;
+  --sidebar-border: #e7eaf0;
+  --sidebar-ring: #030303;
+}
+.dark {
+  --background: #0b0b0c;
+  --foreground: #ffffff;
+  --card: #0f0f11;
+  --card-foreground: #ffffff;
+  --popover: #111113;
+  --popover-foreground: #ffffff;
+
+  --primary: #ffffff;
+  --primary-foreground: #000000;
+  --secondary: #23252b;
+  --secondary-foreground: #ffffff;
+  --muted: #16171a;
+  --muted-foreground: #8f959f;
+  --accent: #23252b;
+  --accent-foreground: #ffffff;
+
+  --destructive: #ececec;
+  --destructive-foreground: #030303;
+
+  --border: #23252b;
+  --input: #36393f;
+  --ring: #ffffff;
+  --chart-1: #ffffff;
+  --chart-2: #c2c2c2;
+  --chart-3: #8f959f;
+  --chart-4: #6e6e6e;
+  --chart-5: #23252b;
+
+  --sidebar: #0b0b0c;
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #ffffff;
+  --sidebar-primary-foreground: #000000;
+  --sidebar-accent: #23252b;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #23252b;
+  --sidebar-ring: #ffffff;
+}
+
+@theme inline {
+  --font-inter: 'Inter', 'sans-serif';
+  --font-manrope: 'Manrope', 'sans-serif';
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
