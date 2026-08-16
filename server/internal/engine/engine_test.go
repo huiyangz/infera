@@ -77,6 +77,20 @@ func (failTR) RunTests(context.Context, string) (bool, string, error) {
 	return false, "--- FAIL: TestAdd\nFAIL", nil
 }
 
+// seqTR 按调用序返回：前 fail 次失败，之后通过（验证 FailCount 在通过时清零）。
+type seqTR struct {
+	fail  int
+	calls int
+}
+
+func (s *seqTR) RunTests(_ context.Context, _ string) (bool, string, error) {
+	s.calls++
+	if s.calls <= s.fail {
+		return false, "--- FAIL: TestAdd\nFAIL", nil
+	}
+	return true, "ok 2 tests\nPASS", nil
+}
+
 func newEnv(t *testing.T, tr TestRunner) (*Engine, *store.Memory, *FakeWS, *fakeRunner) {
 	t.Helper()
 	st := store.NewMemory()
@@ -299,4 +313,65 @@ func TestAgentFailureBlocks(t *testing.T) {
 	r, err := st.LatestStageRun(ctx, d.ID, "spec")
 	require.NoError(t, err)
 	require.Equal(t, "failed", r.Status)
+}
+
+func TestStartOnCompletedDeliveryErrors(t *testing.T) {
+	e, st, _, _ := newEnv(t, passTR{})
+	d := seed(t, st)
+	ctx := context.Background()
+
+	// 一路放行到 completed。
+	require.NoError(t, e.Start(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID))
+	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
+
+	// 已完成的 delivery 不可再驱动："not active" 守卫报错。
+	err := e.Start(ctx, d.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not active")
+}
+
+func TestStartWhileGatePendingIsNoop(t *testing.T) {
+	e, st, _, ar := newEnv(t, passTR{})
+	d := seed(t, st)
+	ctx := context.Background()
+
+	// 停在 spec_approval 门禁后再次 Start：安全 no-op。
+	require.NoError(t, e.Start(ctx, d.ID))
+	before := get(t, st, d.ID)
+	eventsBefore := eventTypes(t, st, d.ID)
+	callsBefore := len(ar.calls)
+
+	require.NoError(t, e.Start(ctx, d.ID))
+
+	require.Equal(t, before, get(t, st, d.ID))              // delivery 原样
+	require.Equal(t, eventsBefore, eventTypes(t, st, d.ID)) // 无新事件
+	require.Equal(t, callsBefore, len(ar.calls))            // agent 未被重跑
+}
+
+func TestFailCountResetsOnPass(t *testing.T) {
+	tr := &seqTR{fail: 2} // 前 2 次 unit_test 失败，第 3 次通过
+	e, st, _, _ := newEnv(t, tr)
+	d := seed(t, st)
+	ctx := context.Background()
+
+	require.NoError(t, e.Start(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID)) // → unit_test 失败 #1，回环 code_gen
+	got := get(t, st, d.ID)
+	require.Equal(t, 1, got.FailCount)
+	require.Equal(t, "code_gen", got.CurrentStage)
+
+	require.NoError(t, e.Start(ctx, d.ID)) // code_gen 重跑 → unit_test 失败 #2
+	got = get(t, st, d.ID)
+	require.Equal(t, 2, got.FailCount)
+	require.Equal(t, "code_gen", got.CurrentStage)
+
+	// 第 3 次通过：FailCount 清零，抵达 code_review 门禁。
+	require.NoError(t, e.Start(ctx, d.ID))
+	got = get(t, st, d.ID)
+	require.Equal(t, "code_review", got.CurrentStage)
+	require.Equal(t, "code_review", got.PendingGate)
+	require.Equal(t, 0, got.FailCount)
+	require.Equal(t, StatusActive, got.Status)
 }

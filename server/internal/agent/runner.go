@@ -9,7 +9,7 @@ import (
 
 // Request 是引擎交给 runner 的最小契约：角色、组装好的 prompt、工作目录。
 type Request struct {
-	Role    string            // spec | test_gen | code_gen | code_review
+	Role    string // spec | test_gen | code_gen | code_review
 	Prompt  string
 	Workdir string
 	Inputs  map[string]string // 上游产物（预留，引擎拼 prompt 用）

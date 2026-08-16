@@ -6,10 +6,10 @@ package engine
 type Kind int
 
 const (
-	KindAgent   Kind = iota // 需要 workdir 的 agent 节点
-	KindGate                // 人工门禁（暂停）
-	KindCommand             // 命令节点（intake=Acquire 标志 / unit_test=跑测试）
-	KindTerminal
+	KindAgent    Kind = iota // 需要 workdir 的 agent 节点
+	KindGate                 // 人工门禁（暂停）
+	KindCommand              // 命令节点（intake=Acquire 标志 / unit_test=跑测试）
+	KindTerminal             // 预留：当前图无此类节点，终态统一由 advance 的 DONE 处理
 )
 
 // Node 图节点：成功下一跳 + 失败下一跳（回环）。

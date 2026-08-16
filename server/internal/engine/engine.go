@@ -90,9 +90,13 @@ func (e *Engine) Approve(ctx context.Context, deliveryID string) error {
 	if !ok {
 		return fmt.Errorf("engine: unknown gate stage %q", d.PendingGate)
 	}
-	e.emit(ctx, d, node.Stage, "gate_approved", nil)
-	e.finishLatestRun(ctx, d.ID, node.Stage, "done")
+	gate := d.PendingGate
 	d.PendingGate = ""
+	if err := e.st.UpdateDelivery(ctx, d); err != nil {
+		return err
+	}
+	e.finishLatestRun(ctx, d.ID, gate, "done")
+	e.emit(ctx, d, gate, "gate_approved", nil)
 	if err := e.advance(ctx, d, node.Next); err != nil {
 		return err
 	}
@@ -109,15 +113,19 @@ func (e *Engine) Reject(ctx context.Context, deliveryID, reason string) error {
 	if d.PendingGate == "" {
 		return fmt.Errorf("engine: delivery %s has no pending gate", d.ID)
 	}
-	e.emit(ctx, d, d.PendingGate, "gate_rejected", map[string]string{"reason": reason})
-	e.finishLatestRun(ctx, d.ID, d.PendingGate, "failed")
-	back, ok := RejectLoopBack[d.PendingGate]
+	gate := d.PendingGate
+	back, ok := RejectLoopBack[gate]
 	if !ok {
-		return fmt.Errorf("engine: no reject loop-back for gate %q", d.PendingGate)
+		return fmt.Errorf("engine: no reject loop-back for gate %q", gate)
 	}
 	d.PendingGate = ""
 	d.CurrentStage = back
-	return e.st.UpdateDelivery(ctx, d)
+	if err := e.st.UpdateDelivery(ctx, d); err != nil {
+		return err
+	}
+	e.finishLatestRun(ctx, d.ID, gate, "failed")
+	e.emit(ctx, d, gate, "gate_rejected", map[string]string{"reason": reason})
+	return nil
 }
 
 // --- 内部推进 ---
@@ -187,14 +195,6 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 		default:
 			return e.block(ctx, d, fmt.Errorf("engine: unhandled command stage %q", node.Stage))
 		}
-	case KindTerminal:
-		d.Status = StatusCompleted
-		if err := e.st.UpdateDelivery(ctx, d); err != nil {
-			return err
-		}
-		e.ws.Release(d.ID)
-		e.emit(ctx, d, node.Stage, "delivery_completed", nil)
-		return errStop
 	default:
 		return e.block(ctx, d, fmt.Errorf("engine: unknown node kind %v", node.Kind))
 	}
