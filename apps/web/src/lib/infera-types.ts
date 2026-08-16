@@ -13,13 +13,21 @@ export interface Delivery {
   updated_at: string
 }
 
+export interface ProjectStats {
+  active: number
+  pending: number
+  last_activity: string
+}
+
 export interface Project {
   id: string
   name: string
   repo_url: string
   default_branch: string
+  pinned: boolean
   created_at: string
   updated_at: string
+  stats?: ProjectStats
 }
 
 export interface TimelineEvent {

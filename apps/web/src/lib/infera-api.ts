@@ -31,8 +31,9 @@ export async function me(): Promise<{ logged_in: boolean }> {
 }
 
 // —— projects ——
-export async function listProjects(): Promise<Project[]> {
-  return json(await fetch('/api/projects'))
+export async function listProjects(includeStats = false): Promise<Project[]> {
+  const q = includeStats ? '?include=stats' : ''
+  return json(await fetch(`/api/projects${q}`))
 }
 export async function createProject(input: {
   name: string
@@ -49,6 +50,15 @@ export async function createProject(input: {
 }
 export async function getProject(id: string): Promise<Project> {
   return json(await fetch(`/api/projects/${id}`))
+}
+export async function patchProjectPinned(id: string, pinned: boolean): Promise<Project> {
+  return json(
+    await fetch(`/api/projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }),
+  )
 }
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
   return json(await fetch(`/api/projects/${id}/deliveries`))

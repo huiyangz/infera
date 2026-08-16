@@ -1,19 +1,10 @@
-import { useEffect, useState } from 'react'
-import {
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { FolderGit2, Pin, PinOff, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import {
-  createProject,
-  listProjectDeliveries,
-  listProjects,
-} from '@/lib/infera-api'
-import type { Delivery, Project } from '@/lib/infera-types'
+import { createProject, listProjects, patchProjectPinned } from '@/lib/infera-api'
+import type { Project } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { Header } from '@/components/layout/header'
@@ -39,41 +30,14 @@ import {
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 
-const PIN_KEY = 'infera:pinned-projects'
-
-function loadPins(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(PIN_KEY) ?? '[]')
-  } catch {
-    return []
-  }
-}
-
-/** 项目卡上的实时摘要：活跃数 / 待审批 / 最近活动 */
-function projectSummary(deliveries: Delivery[] | undefined, proj: Project) {
-  if (!deliveries)
-    return { active: undefined, pending: undefined, last: proj.updated_at }
-  const active = deliveries.filter((d) => d.status === 'active').length
-  const pending = deliveries.filter((d) => d.pending_gate).length
-  const last = deliveries.reduce(
-    (m, d) => (d.updated_at > m ? d.updated_at : m),
-    proj.updated_at,
-  )
-  return { active, pending, last }
-}
-
 function ProjectCard({
   proj,
-  deliveries,
-  pinned,
   onTogglePin,
 }: {
   proj: Project
-  deliveries: Delivery[] | undefined
-  pinned: boolean
   onTogglePin: () => void
 }) {
-  const s = projectSummary(deliveries, proj)
+  const s = proj.stats
   return (
     <Card className='group relative gap-3 py-5 transition-colors hover:bg-accent/50'>
       <CardHeader className='px-5'>
@@ -90,10 +54,10 @@ function ProjectCard({
           <Button
             variant='ghost'
             size='icon'
-            aria-label={pinned ? '取消置顶' : '置顶'}
+            aria-label={proj.pinned ? '取消置顶' : '置顶'}
             onClick={onTogglePin}
           >
-            {pinned ? (
+            {proj.pinned ? (
               <PinOff />
             ) : (
               <Pin className='opacity-0 transition-opacity group-hover:opacity-100' />
@@ -106,7 +70,7 @@ function ProjectCard({
           {proj.repo_url || '（未绑仓库）'}
         </p>
         <div className='flex min-h-6 flex-wrap items-center gap-1.5'>
-          {s.pending ? (
+          {s?.pending ? (
             <Badge>
               <Link
                 to='/projects/$id'
@@ -117,19 +81,19 @@ function ProjectCard({
               </Link>
             </Badge>
           ) : null}
-          {s.active ? (
+          {s?.active ? (
             <Badge variant='outline' className='gap-1.5'>
               <span className='size-1.5 animate-pulse rounded-full bg-foreground' />
               {s.active} 个进行中
             </Badge>
           ) : null}
-          {!s.pending && !s.active && deliveries && (
+          {s && !s.pending && !s.active && (
             <span className='text-xs text-muted-foreground'>没有活跃需求</span>
           )}
-          {!deliveries && <Skeleton className='h-5 w-24' />}
+          {!s && <Skeleton className='h-5 w-24' />}
         </div>
         <p className='text-xs tabular-nums text-muted-foreground'>
-          活动 {timeAgo(s.last)}
+          活动 {timeAgo(s?.last_activity ?? proj.updated_at)}
         </p>
       </CardContent>
     </Card>
@@ -140,32 +104,27 @@ export function ProjectsList() {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['projects'],
-    queryFn: listProjects,
+    queryFn: () => listProjects(true),
   })
-  const [pinned, setPinned] = useState<string[]>([])
-  useEffect(() => setPinned(loadPins()), [])
 
-  const togglePin = (id: string) => {
-    setPinned((prev) => {
-      const next = prev.includes(id)
-        ? prev.filter((p) => p !== id)
-        : [...prev, id]
-      localStorage.setItem(PIN_KEY, JSON.stringify(next))
-      return next
-    })
-  }
-
-  // 并发拉每个项目的需求列表（项目数少，聚合接口以后再加）
-  const deliveriesQueries = useQueries({
-    queries: (data ?? []).map((p) => ({
-      queryKey: ['project-deliveries', p.id],
-      queryFn: () => listProjectDeliveries(p.id),
-    })),
+  // 置顶走服务端持久化，本地先乐观更新缓存
+  const togglePin = useMutation({
+    mutationFn: ({ id, next }: { id: string; next: boolean }) =>
+      patchProjectPinned(id, next),
+    onMutate: async ({ id, next }) => {
+      await qc.cancelQueries({ queryKey: ['projects'] })
+      const prev = qc.getQueryData<Project[]>(['projects'])
+      qc.setQueryData<Project[]>(
+        ['projects'],
+        prev?.map((p) => (p.id === id ? { ...p, pinned: next } : p)),
+      )
+      return { prev }
+    },
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['projects'], ctx.prev)
+      toast.error(e.message)
+    },
   })
-  const summaryOf = (proj: Project) => {
-    const idx = data?.findIndex((d) => d.id === proj.id) ?? -1
-    return projectSummary(idx >= 0 ? deliveriesQueries[idx]?.data : undefined, proj)
-  }
 
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -185,16 +144,12 @@ export function ProjectsList() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  // 排序：置顶在前（按置顶先后），其余按最近活动倒序
+  // 排序：置顶在前，其余按最近活动倒序
   const sorted = [...(data ?? [])].sort((a, b) => {
-    const pa = pinned.indexOf(a.id)
-    const pb = pinned.indexOf(b.id)
-    if (pa !== -1 || pb !== -1) {
-      if (pa === -1) return 1
-      if (pb === -1) return -1
-      return pa - pb
-    }
-    return summaryOf(b).last.localeCompare(summaryOf(a).last)
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    const la = a.stats?.last_activity ?? a.updated_at
+    const lb = b.stats?.last_activity ?? b.updated_at
+    return lb.localeCompare(la)
   })
 
   return (
@@ -293,9 +248,7 @@ export function ProjectsList() {
               <ProjectCard
                 key={p.id}
                 proj={p}
-                deliveries={summaryOf(p).active === undefined ? undefined : deliveriesQueries[data.findIndex((d) => d.id === p.id)]?.data}
-                pinned={pinned.includes(p.id)}
-                onTogglePin={() => togglePin(p.id)}
+                onTogglePin={() => togglePin.mutate({ id: p.id, next: !p.pinned })}
               />
             ))}
           </div>
