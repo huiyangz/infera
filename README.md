@@ -20,8 +20,9 @@ Agent 主导的代码交付流水线：提需求 → agent 生成规格 → 人�
 ## 本地开发
 
 ```bash
-docker compose up -d        # postgres（:5433，库 infera_v2）
+docker compose up -d        # postgres（:5433，库 infera_v2；首次启动自动建库）
 cp .env.example .env        # 填 INFERA_PASSWORD 等
+(cd apps/web && pnpm install)  # 前端依赖（首次需要；pnpm，npm 不可用）
 ./run-dev.sh                # 后端 :8080 + 前端 vite :5173（/api 代理到 8080）
 ```
 

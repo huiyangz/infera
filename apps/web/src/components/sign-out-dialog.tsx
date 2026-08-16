@@ -1,6 +1,7 @@
 import { useNavigate, useLocation } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { logout } from '@/lib/infera-api'
 
 interface SignOutDialogProps {
   open: boolean
@@ -13,14 +14,20 @@ export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
   const { auth } = useAuthStore()
 
   const handleSignOut = () => {
-    auth.reset()
-    // Preserve current location for redirect after sign-in
     const currentPath = location.href
-    navigate({
-      to: '/sign-in',
-      search: { redirect: currentPath },
-      replace: true,
-    })
+    // ConfirmDialog 不 await handleConfirm，这里 fire-and-forget：
+    // 先请求后端撤销 session（HttpOnly cookie 只能由后端清），无论成败都回登录页。
+    logout()
+      .catch(() => false)
+      .finally(() => {
+        auth.reset()
+        // Preserve current location for redirect after sign-in
+        navigate({
+          to: '/sign-in',
+          search: { redirect: currentPath },
+          replace: true,
+        })
+      })
   }
 
   return (
