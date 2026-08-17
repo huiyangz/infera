@@ -8,7 +8,6 @@ import {
   Copy,
   DoorOpen,
   Loader2,
-  Minus,
   X,
 } from 'lucide-react'
 import { getDelivery, mergeResume } from '@/lib/infera-api'
@@ -102,7 +101,7 @@ function stageState(
 
 function StageIcon({ state, idle }: { state: StageState; idle?: boolean }) {
   if (state === 'done') return <Check className='size-3.5' strokeWidth={2.5} />
-  if (state === 'skipped') return <Minus className='size-3.5' strokeWidth={2.5} />
+  if (state === 'skipped') return <Check className='size-3.5' strokeWidth={2.5} />
   if (state === 'failed') return <X className='size-3.5' strokeWidth={2.5} />
   if (state === 'current' || state === 'gate-waiting')
     return idle ? (
