@@ -31,9 +31,9 @@ export function AuthLayout({ children }: AuthLayoutProps) {
             className='mt-4 text-5xl font-normal leading-[1.05] xl:text-6xl'
             style={{ letterSpacing: '-1.2px' }}
           >
-            需求进来，
+            你提需求，
             <br />
-            PR 出去。
+            Agent 交付。
           </h2>
           <p className='mt-6 max-w-sm text-base leading-relaxed text-[#676f7b]'>
             从一句话需求到合并请求：规格、测试、实现、审查由
@@ -70,9 +70,6 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           </span>
         </div>
         <div className='w-full max-w-sm'>{children}</div>
-        <p className='mt-10 text-xs text-muted-foreground'>
-          单租户部署 · 工作区数据保存在本地
-        </p>
       </main>
     </div>
   )
