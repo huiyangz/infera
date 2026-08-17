@@ -4,7 +4,6 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { Check, ChevronLeft, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { approveGate, getGate, rejectGate } from '@/lib/infera-api'
-import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -15,6 +14,26 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Header } from '@/components/layout/header'
+
+/** 门禁类型 → 展示配置；未知门禁回退通用文案，不崩。 */
+const GATE_META: Record<
+  string,
+  { title: string; approveHint: string; artifactLabel: string; showPR: boolean }
+> = {
+  spec_approval: {
+    title: 'Spec 审批',
+    approveHint: '批准后进入测试生成；打回则 Spec Agent 重写',
+    artifactLabel: 'Spec 内容',
+    showPR: false,
+  },
+  code_review: {
+    title: '代码审查',
+    approveHint: '批准后合入（PR 已就绪）；打回则 Coder Agent 重做',
+    artifactLabel: 'Reviewer 意见',
+    showPR: true,
+  },
+}
 
 export function GatePage({ deliveryId }: { deliveryId: string }) {
   const navigate = useNavigate()
@@ -25,7 +44,8 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   })
   const [reason, setReason] = useState('')
 
-  const back = () => navigate({ to: '/deliveries/$id', params: { id: deliveryId } })
+  const back = () =>
+    navigate({ to: '/deliveries/$id', params: { id: deliveryId } })
 
   const approve = useMutation({
     mutationFn: () => approveGate(deliveryId),
@@ -58,7 +78,12 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
       </>
     )
 
-  const isSpec = data.gate === 'spec_approval'
+  const meta = GATE_META[data.gate] ?? {
+    title: '审批',
+    approveHint: '批准后流水线继续',
+    artifactLabel: '产出内容',
+    showPR: false,
+  }
 
   return (
     <>
@@ -73,33 +98,25 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
             返回详情
           </Link>
           <span>/</span>
-          <span className='text-foreground'>
-            {isSpec ? '规格审批' : '代码审查'}
-          </span>
+          <span className='text-foreground'>{meta.title}</span>
         </div>
       </Header>
 
       <div className='mx-auto max-w-3xl p-6'>
         <Card>
           <CardHeader>
-            <CardTitle>{isSpec ? 'Spec 审批' : '代码审查'}</CardTitle>
-            <CardDescription>
-              {isSpec
-                ? '批准后进入测试生成；打回则 Spec Agent 重写'
-                : '批准后开出 PR；打回则 Coder Agent 重做'}
-            </CardDescription>
+            <CardTitle>{meta.title}</CardTitle>
+            <CardDescription>{meta.approveHint}</CardDescription>
           </CardHeader>
           <CardContent className='space-y-5'>
             <div>
-              <h3 className='mb-2 text-sm font-medium'>
-                {isSpec ? 'Spec 内容' : 'Reviewer 意见'}
-              </h3>
-              <pre className='min-h-24 whitespace-pre-wrap rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed'>
+              <h3 className='mb-2 text-sm font-medium'>{meta.artifactLabel}</h3>
+              <pre className='min-h-24 rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
                 {data.agent_output?.output || '（无 Agent 产出）'}
               </pre>
             </div>
 
-            {!isSpec && data.pr_url && (
+            {meta.showPR && data.pr_url && (
               <p className='text-sm'>
                 PR：
                 <a

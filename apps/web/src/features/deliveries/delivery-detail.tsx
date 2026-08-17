@@ -1,15 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Check, ChevronLeft, Circle, DoorOpen, Loader2 } from 'lucide-react'
+import { Check, ChevronLeft, Circle, DoorOpen, Loader2, X } from 'lucide-react'
 import { getDelivery } from '@/lib/infera-api'
-import { useDeliveryEvents } from '@/hooks/use-delivery-events'
 import {
   GATES,
   STAGES,
+  STAGE_META,
+  stageLabel,
+  type DeliveryStatus,
   type StageName,
   type TimelineEvent,
 } from '@/lib/infera-types'
-import { Header } from '@/components/layout/header'
+import { dateTime, timeAgo } from '@/lib/time'
+import { useDeliveryEvents } from '@/hooks/use-delivery-events'
 import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import {
@@ -19,40 +22,52 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { timeAgo } from '@/lib/time'
+import { Header } from '@/components/layout/header'
+import { StatusBadge } from '@/components/status-badge'
 
-const STAGE_META: Record<StageName, { label: string; hint: string }> = {
-  intake: { label: '需求受理', hint: '记录需求原文，建立交付档案' },
-  spec: { label: '规格生成', hint: 'Spec Agent 依据需求与仓库代码撰写规格说明' },
-  spec_approval: { label: '规格审批', hint: '人工门禁：确认规格无误后流水线继续' },
-  test_gen: { label: '测试生成', hint: 'Test Agent 依据规格生成测试用例' },
-  code_gen: { label: '实现', hint: 'Coder Agent 在仓库工作区内实现需求' },
-  unit_test: { label: '单元测试', hint: '在容器中运行测试，失败自动回环至实现' },
-  code_review: { label: '审查与交付', hint: 'Reviewer Agent 预审，人工确认后开出 PR' },
-}
+type StageState = 'done' | 'current' | 'gate-waiting' | 'pending' | 'failed'
 
-type StageState = 'done' | 'current' | 'gate-waiting' | 'pending'
-
+/** 后端真实事件词表（见 server engine）；未知事件回退原文。 */
 const EVENT_LABEL: Record<string, string> = {
   delivery_created: '需求创建',
+  workspace_ready: '工作区就绪',
   stage_started: '阶段开始',
-  stage_done: '阶段完成',
   gate_pending: '进入门禁',
   gate_approved: '审批通过',
   gate_rejected: '审批打回',
   test_failed: '测试失败',
-  retry: '回环重试',
-  blocked: '流水线阻塞',
+  stage_failed: '阶段失败',
+  delivery_completed: '交付完成',
+  delivery_blocked: '流水线阻塞',
+  persist_done: '产出已推送',
+  pr_failed: 'PR 开具失败',
+  persist_failed: '产出持久化失败',
 }
 
+/**
+ * 阶段状态需结合 delivery 终态判定：
+ * completed → 全部 done；blocked → 当前阶段 failed（无 spinner），之前 done，之后 pending。
+ */
 function stageState(
   stage: StageName,
   currentIdx: number,
   idx: number,
   pendingGate: string | null,
+  status: DeliveryStatus
 ): StageState {
+  if (status === 'completed') return 'done'
+  if (status === 'blocked') {
+    if (idx < currentIdx) return 'done'
+    if (idx === currentIdx) return 'failed'
+    return 'pending'
+  }
   if (stage === pendingGate) return 'gate-waiting'
   if (idx < currentIdx) return 'done'
   if (idx === currentIdx) return 'current'
@@ -61,9 +76,18 @@ function stageState(
 
 function StageIcon({ state }: { state: StageState }) {
   if (state === 'done') return <Check className='size-3.5' strokeWidth={2.5} />
+  if (state === 'failed') return <X className='size-3.5' strokeWidth={2.5} />
   if (state === 'current' || state === 'gate-waiting')
     return <Loader2 className='size-3.5 animate-spin' />
   return <Circle className='size-3.5' />
+}
+
+const STAGE_STATUS_TEXT: Record<StageState, string> = {
+  done: '完成',
+  current: '进行中',
+  'gate-waiting': '等待你的审批',
+  pending: '',
+  failed: '已阻塞',
 }
 
 export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
@@ -87,12 +111,16 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
       </>
     )
 
-  const { delivery, timeline } = data
+  const { delivery, timeline, artifacts } = data
   const currentIdx = STAGES.indexOf(delivery.current_stage as StageName)
+  const stateOf = (s: StageName, i: number) =>
+    stageState(s, currentIdx, i, delivery.pending_gate, delivery.status)
   const eventsOf = (s: StageName) => timeline.filter((e) => e.stage === s)
-  const doneCount = STAGES.filter(
-    (s, i) => stageState(s, currentIdx, i, delivery.pending_gate) === 'done',
-  ).length
+  const doneCount = STAGES.filter((s, i) => stateOf(s, i) === 'done').length
+  // 最新一次实现产出的真实 git diff（从新往旧找第一条）
+  const latestDiff = [...artifacts]
+    .reverse()
+    .find((a) => a.stage === 'code_gen' && a.kind === 'diff')
 
   return (
     <>
@@ -116,16 +144,10 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
               {delivery.description || '（无补充描述）'}
             </p>
           </div>
-          <Badge
-            variant={delivery.status === 'blocked' ? 'default' : 'secondary'}
+          <StatusBadge
+            status={delivery.status}
             className='mt-1 shrink-0 px-3 py-1 text-sm'
-          >
-            {delivery.status === 'active'
-              ? '流水线进行中'
-              : delivery.status === 'blocked'
-                ? '已阻塞'
-                : '已完成'}
-          </Badge>
+          />
         </div>
       </Header>
 
@@ -144,8 +166,9 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
           <CardContent>
             <ol className='flex items-start'>
               {STAGES.map((s, i) => {
-                const state = stageState(s, currentIdx, i, delivery.pending_gate)
-                const featured = state === 'current' || state === 'gate-waiting'
+                const state = stateOf(s, i)
+                const active = state === 'current' || state === 'gate-waiting'
+                const filled = state === 'done' || state === 'failed'
                 const isLast = i === STAGES.length - 1
                 return (
                   <li key={s} className='flex min-w-0 flex-1 flex-col'>
@@ -153,14 +176,14 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                       <div
                         className={
                           'flex size-7 shrink-0 items-center justify-center rounded-full border ' +
-                          (state === 'done'
+                          (filled
                             ? 'border-primary bg-primary text-primary-foreground'
-                            : featured
+                            : active
                               ? 'border-primary text-foreground'
                               : 'border-input text-muted-foreground')
                         }
                       >
-                        {GATES.has(s) && state !== 'done' ? (
+                        {GATES.has(s) && !filled ? (
                           <DoorOpen className='size-3.5' />
                         ) : (
                           <StageIcon state={state} />
@@ -178,13 +201,13 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                     <div className='mt-2 pr-2'>
                       <div
                         className={
-                          'text-xs font-medium leading-tight ' +
+                          'text-xs leading-tight font-medium ' +
                           (state === 'pending'
                             ? 'text-muted-foreground'
                             : 'text-foreground')
                         }
                       >
-                        {STAGE_META[s].label}
+                        {stageLabel(s)}
                         {GATES.has(s) && (
                           <span className='ml-1 font-normal text-muted-foreground'>
                             门禁
@@ -192,13 +215,7 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                         )}
                       </div>
                       <div className='mt-0.5 text-[11px] text-muted-foreground'>
-                        {state === 'gate-waiting'
-                          ? '等待你的审批'
-                          : state === 'current'
-                            ? '进行中'
-                            : state === 'done'
-                              ? '完成'
-                              : ''}
+                        {STAGE_STATUS_TEXT[state]}
                       </div>
                     </div>
                   </li>
@@ -212,7 +229,7 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                 <div className='flex items-center justify-between gap-4'>
                   <div className='text-sm'>
                     <span className='font-medium'>
-                      {STAGE_META[delivery.pending_gate as StageName].label}
+                      {stageLabel(delivery.pending_gate)}
                     </span>
                     <span className='ml-2 text-muted-foreground'>
                       正在等待你的决定，流水线在此暂停
@@ -241,7 +258,7 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
           </CardHeader>
           <CardContent>
             {STAGES.map((s, i) => {
-              const state = stageState(s, currentIdx, i, delivery.pending_gate)
+              const state = stateOf(s, i)
               const events = eventsOf(s)
               return (
                 <div key={s}>
@@ -258,36 +275,48 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                               : 'text-foreground')
                           }
                         >
-                          {STAGE_META[s].label}
+                          {stageLabel(s)}
                         </span>
                         {GATES.has(s) && (
-                          <Badge variant='outline' className='px-1.5 text-[10px]'>
+                          <Badge
+                            variant='outline'
+                            className='px-1.5 text-[10px]'
+                          >
                             门禁
                           </Badge>
                         )}
                       </div>
                       {state !== 'pending' && (
                         <p className='mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground'>
-                          {STAGE_META[s].hint}
+                          {STAGE_META[s]?.hint}
                         </p>
                       )}
                       {events.length > 0 && (
                         <ul className='mt-2 space-y-1 pl-6 font-mono text-[11px] leading-relaxed text-muted-foreground'>
                           {events.map((e: TimelineEvent) => (
-                            <li
-                              key={e.id}
-                              title={new Date(e.created_at).toLocaleString()}
-                            >
+                            <li key={e.id} title={dateTime(e.created_at)}>
                               {timeAgo(e.created_at)} ·{' '}
                               {EVENT_LABEL[e.event_type] ?? e.event_type}
                             </li>
                           ))}
                         </ul>
                       )}
+                      {s === 'code_gen' && latestDiff && (
+                        <Collapsible className='mt-2 pl-6'>
+                          <CollapsibleTrigger className='text-[11px] text-muted-foreground underline underline-offset-4 hover:text-foreground'>
+                            查看代码变更 diff
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <pre className='mt-2 max-h-72 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-[11px] leading-relaxed'>
+                              {latestDiff.content}
+                            </pre>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      )}
                     </div>
                     <Badge
                       variant={
-                        state === 'gate-waiting'
+                        state === 'gate-waiting' || state === 'failed'
                           ? 'default'
                           : state === 'pending'
                             ? 'outline'
@@ -299,9 +328,11 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                         ? '等待审批'
                         : state === 'current'
                           ? '进行中'
-                          : state === 'done'
-                            ? '完成'
-                            : '未开始'}
+                          : state === 'failed'
+                            ? '已阻塞'
+                            : state === 'done'
+                              ? '完成'
+                              : '未开始'}
                     </Badge>
                   </div>
                 </div>

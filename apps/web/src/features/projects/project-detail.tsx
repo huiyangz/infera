@@ -8,9 +8,8 @@ import {
   getProject,
   listProjectDeliveries,
 } from '@/lib/infera-api'
-import { type StageName } from '@/lib/infera-types'
+import { stageLabel } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
-import { Header } from '@/components/layout/header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -24,42 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-
-const STAGE_LABEL: Record<StageName, string> = {
-  intake: '需求受理',
-  spec: '规格生成',
-  spec_approval: '规格审批',
-  test_gen: '测试生成',
-  code_gen: '实现',
-  unit_test: '单元测试',
-  code_review: '审查与交付',
-}
-
-/**
- * 单色状态徽标（DESIGN.md：无信号色，靠灰阶层次表达）。
- * 进行中 = 描边 + 墨点；已完成 = hairline infill；阻塞 = 墨底白字（最强层级）。
- */
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'active')
-    return (
-      <Badge variant='outline' className='gap-1.5'>
-        <span className='size-1.5 animate-pulse rounded-full bg-foreground' />
-        进行中
-      </Badge>
-    )
-  if (status === 'blocked')
-    return (
-      <Badge className='gap-1.5 bg-primary text-primary-foreground'>
-        已阻塞
-      </Badge>
-    )
-  return (
-    <Badge variant='secondary' className='gap-1.5'>
-      <span className='size-1.5 rounded-full bg-foreground/40' />
-      已完成
-    </Badge>
-  )
-}
+import { Header } from '@/components/layout/header'
+import { StatusBadge } from '@/components/status-badge'
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
@@ -196,13 +161,12 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                         ) : null}
                       </TableCell>
                       <TableCell className='text-sm text-muted-foreground'>
-                        {STAGE_LABEL[d.current_stage as StageName] ??
-                          d.current_stage}
+                        {stageLabel(d.current_stage)}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={d.status} />
                       </TableCell>
-                      <TableCell className='text-right text-xs tabular-nums text-muted-foreground'>
+                      <TableCell className='text-right text-xs text-muted-foreground tabular-nums'>
                         {timeAgo(d.updated_at)}
                       </TableCell>
                     </TableRow>
