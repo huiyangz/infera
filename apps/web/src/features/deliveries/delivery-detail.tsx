@@ -120,7 +120,7 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
   // 最新一次实现产出的真实 git diff（从新往旧找第一条）
   const latestDiff = [...artifacts]
     .reverse()
-    .find((a) => a.stage === 'code_gen' && a.kind === 'diff')
+    .find((a) => a.stage === 'code_review' && a.kind === 'diff')
 
   return (
     <>
