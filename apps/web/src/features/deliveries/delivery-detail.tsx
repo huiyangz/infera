@@ -8,6 +8,7 @@ import {
   Copy,
   DoorOpen,
   Loader2,
+  Minus,
   X,
 } from 'lucide-react'
 import { getDelivery, mergeResume } from '@/lib/infera-api'
@@ -41,7 +42,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
 import { StatusBadge } from '@/components/status-badge'
 
-type StageState = 'done' | 'current' | 'gate-waiting' | 'pending' | 'failed'
+type StageState =
+  | 'done'
+  | 'current'
+  | 'gate-waiting'
+  | 'pending'
+  | 'failed'
+  | 'skipped'
 
 /** 后端真实事件词表（见 server engine）；未知事件回退原文。 */
 const EVENT_LABEL: Record<string, string> = {
@@ -76,8 +83,11 @@ function stageState(
   currentIdx: number,
   idx: number,
   pendingGate: string | null,
-  status: DeliveryStatus
+  status: DeliveryStatus,
+  splitMode = false
 ): StageState {
+  // 拆分执行：父的测试生成不跑（子需求各自生成、父合并后统一跑单元测试）
+  if (splitMode && stage === 'test_gen') return 'skipped'
   if (status === 'completed') return 'done'
   if (status === 'blocked') {
     if (idx < currentIdx) return 'done'
@@ -92,6 +102,7 @@ function stageState(
 
 function StageIcon({ state, idle }: { state: StageState; idle?: boolean }) {
   if (state === 'done') return <Check className='size-3.5' strokeWidth={2.5} />
+  if (state === 'skipped') return <Minus className='size-3.5' strokeWidth={2.5} />
   if (state === 'failed') return <X className='size-3.5' strokeWidth={2.5} />
   if (state === 'current' || state === 'gate-waiting')
     return idle ? (
@@ -106,6 +117,7 @@ const STAGE_STATUS_TEXT: Record<StageState, string> = {
   done: '完成',
   current: '进行中',
   'gate-waiting': '等待你的审批',
+  'skipped': '跳过',
   pending: '',
   failed: '已阻塞',
 }
@@ -163,7 +175,14 @@ export function DeliveryDetail({
     | undefined
   const currentIdx = STAGES.indexOf(delivery.current_stage as StageName)
   const stateOf = (s: StageName, i: number) =>
-    stageState(s, currentIdx, i, delivery.pending_gate, delivery.status)
+    stageState(
+      s,
+      currentIdx,
+      i,
+      delivery.pending_gate,
+      delivery.status,
+      delivery.split_mode,
+    )
   const eventsOf = (s: StageName) => timeline.filter((e) => e.stage === s)
   const doneCount = STAGES.filter((s, i) => stateOf(s, i) === 'done').length
   // 最新一次实现产出的真实 git diff（从新往旧找第一条）
@@ -451,10 +470,16 @@ export function DeliveryDetail({
                           </Badge>
                         )}
                       </div>
-                      {state !== 'pending' && (
+                      {state === 'skipped' ? (
                         <p className='mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground'>
-                          {STAGE_META[s]?.hint}
+                          拆分执行：子需求各自生成测试，父在合并后统一跑单元测试
                         </p>
+                      ) : (
+                        state !== 'pending' && (
+                          <p className='mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground'>
+                            {STAGE_META[s]?.hint}
+                          </p>
+                        )
                       )}
                       {events.length > 0 && (
                         <ul className='mt-2 space-y-1 pl-6 font-mono text-[11px] leading-relaxed text-muted-foreground'>
@@ -483,7 +508,7 @@ export function DeliveryDetail({
                       variant={
                         state === 'gate-waiting' || state === 'failed'
                           ? 'default'
-                          : state === 'pending'
+                          : state === 'pending' || state === 'skipped'
                             ? 'outline'
                             : 'secondary'
                       }
@@ -491,11 +516,13 @@ export function DeliveryDetail({
                     >
                       {state === 'gate-waiting'
                         ? '等待审批'
-                        : state === 'current'
-                          ? '进行中'
-                          : state === 'failed'
-                            ? '已阻塞'
-                            : state === 'done'
+                        : state === 'skipped'
+                          ? '跳过'
+                          : state === 'current'
+                            ? '进行中'
+                            : state === 'failed'
+                              ? '已阻塞'
+                              : state === 'done'
                               ? '完成'
                               : '未开始'}
                     </Badge>
