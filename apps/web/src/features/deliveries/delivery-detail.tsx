@@ -137,7 +137,7 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                 返回项目
               </Link>
             </div>
-            <h1 className='mt-1 truncate text-3xl font-semibold tracking-[-0.9px]'>
+            <h1 className='mt-1 truncate text-2xl font-semibold tracking-[-0.4px]'>
               {delivery.title}
             </h1>
             <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
