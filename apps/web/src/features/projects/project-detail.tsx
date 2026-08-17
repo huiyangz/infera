@@ -101,19 +101,19 @@ export function ProjectDetail({
         </div>
       </Header>
 
-      <div className='flex h-[calc(100svh-4rem)] p-4 pt-16'>
-        {/* 左：需求列表 */}
-        <div
+      <div className='flex h-svh pt-16'>
+        {/* 左：需求列表（通栏，hairline 分隔，不做卡片盒） */}
+        <aside
           className={cn(
-            'flex w-80 shrink-0 flex-col overflow-hidden rounded-xl border bg-card',
+            'flex w-80 shrink-0 flex-col border-r',
             effectiveId && 'max-lg:hidden',
           )}
         >
-          <div className='flex items-center justify-between border-b px-4 py-3'>
-            <span className='text-sm font-medium'>
+          <div className='flex h-12 items-center justify-between px-4'>
+            <span className='text-xs font-medium uppercase tracking-wider text-muted-foreground'>
               需求
               {deliveries?.length ? (
-                <span className='ml-1.5 text-muted-foreground'>
+                <span className='ml-1.5'>
                   {deliveries.length}
                 </span>
               ) : null}
@@ -154,19 +154,19 @@ export function ProjectDetail({
               ))
             )}
           </div>
-        </div>
+        </aside>
 
-        {/* 右：详情面板 */}
-        <div
+        {/* 右：详情面板（通栏阅读面） */}
+        <main
           className={cn(
-            'ml-4 min-w-0 flex-1 overflow-y-auto rounded-xl border bg-card',
+            'min-w-0 flex-1 overflow-y-auto',
             !effectiveId && 'max-lg:hidden',
           )}
         >
           {effectiveId ? (
             <DeliveryDetail deliveryId={effectiveId} embedded />
           ) : null}
-        </div>
+        </main>
       </div>
     </>
   )

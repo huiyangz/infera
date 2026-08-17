@@ -105,7 +105,13 @@ export function DeliveryDetail({
 
   if (isLoading || !data)
     return (
-      <div className='mx-auto max-w-4xl space-y-6 p-6'>
+      <div
+        className={
+          embedded
+            ? 'mx-auto max-w-3xl space-y-6 px-8 py-6'
+            : 'mx-auto max-w-4xl space-y-6 p-6'
+        }
+      >
         <Skeleton className='h-36 w-full rounded-xl' />
         <Skeleton className='h-72 w-full rounded-xl' />
       </div>
@@ -142,7 +148,9 @@ export function DeliveryDetail({
   return (
     <>
       {embedded ? (
-        <div className='border-b px-6 pb-4 pt-5'>{titleBlock}</div>
+        <div className='border-b px-8 pb-4 pt-6'>
+          {titleBlock}
+        </div>
       ) : (
         <Header fixed>
           <div className='flex w-full items-start justify-between gap-4'>
@@ -173,7 +181,13 @@ export function DeliveryDetail({
         </Header>
       )}
 
-      <div className='mx-auto max-w-4xl space-y-6 p-6'>
+      <div
+        className={
+          embedded
+            ? 'mx-auto max-w-3xl space-y-6 px-8 py-6'
+            : 'mx-auto max-w-4xl space-y-6 p-6'
+        }
+      >
         {/* 阶段推进 */}
         <Card>
           <CardHeader className='pb-4'>
