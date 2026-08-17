@@ -124,3 +124,30 @@ func TestApproveWithoutSplitUnchanged(t *testing.T) {
 	require.Empty(t, got.PendingGate)
 	require.Empty(t, *started)
 }
+
+// TestContinueOnParkedSplitParentRoutesToMerge gap 守卫：拆分父停在 code_gen 时，
+// Continue/run 必须走合并推进（MaybeDriveParent），绝不能执行 code_gen AGENT 节点
+// （否则重启恢复/approve 后重点火会让父自己"实现"，覆盖子需求合并语义）。
+func TestContinueOnParkedSplitParentRoutesToMerge(t *testing.T) {
+	e, st, proj := newRealEnv(t)
+	ctx := context.Background()
+
+	parent := &store.Delivery{ProjectID: proj.ID, Title: "父", Status: StatusActive,
+		CurrentStage: "code_gen", SplitMode: true}
+	require.NoError(t, st.CreateDelivery(ctx, parent))
+	child := &store.Delivery{ProjectID: proj.ID, Title: "子", Status: StatusCompleted,
+		CurrentStage: "code_review", ParentID: parent.ID, Wave: 1}
+	require.NoError(t, st.CreateDelivery(ctx, child))
+	// 子需求分支已推（真 git）：Continue 应把它合进父并收尾推进。
+	pushChildBranch(t, proj, child.ID, "a.txt", "aaa")
+
+	require.NoError(t, e.Continue(ctx, parent.ID))
+
+	got := get(t, st, parent.ID)
+	require.Equal(t, "code_review", got.PendingGate, "应经合并收尾推进到 code_review 门")
+	require.Equal(t, 1, mergedChildCount(t, st, parent.ID))
+	// 证据：父从未执行过 code_gen 阶段（AGENT 路径会留下 code_gen StageRun）。
+	if _, err := st.LatestStageRun(ctx, parent.ID, "code_gen"); err == nil {
+		t.Fatal("split parent must never run the code_gen agent step")
+	}
+}

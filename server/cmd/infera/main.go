@@ -54,6 +54,9 @@ func main() {
 	// 复用带 token 的 git 实例；PR 创建用同一 token。
 	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(g, cfg.GitHubToken))
 	eng.Notify = srv.Publish
+	// 拆分子需求的批次点火：engine 不能反向 import api，经闭包转接 RunDelivery
+	// （拿 per-delivery 锁后驱动到稳定）。
+	eng.OnStartDelivery = func(id string) { go srv.RunDelivery(id) }
 	srv.SetEngine(eng)
 
 	// 重启恢复：重启前仍 active 的交付重新点火后台驱动

@@ -175,7 +175,13 @@ func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 }
 
 // run 推进直到停止条件（门禁 / 回环 / 终态 / 错误）。
+// 拆分父停在 code_gen 是"等子需求 / 合并"语义，不是 agent 执行：
+// 路由到 MaybeDriveParent（幂等——mergeLoop 的 durable 合并标记保证不重复合并），
+// 防止重启恢复 / approve 后的重点火误跑 code_gen AGENT 节点。
 func (e *Engine) run(ctx context.Context, d *store.Delivery) error {
+	if d.SplitMode && d.CurrentStage == "code_gen" && d.Status == StatusActive {
+		return e.MaybeDriveParent(ctx, d.ID)
+	}
 	for d.Status == StatusActive && d.PendingGate == "" {
 		if err := e.step(ctx, d); err != nil {
 			if errors.Is(err, errStop) {

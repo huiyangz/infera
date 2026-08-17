@@ -122,17 +122,21 @@ func normalizeSplit(split []store.ChildSpec) ([]store.ChildSpec, int, error) {
 	return out, maxWave, nil
 }
 
-// MaybeDriveParent 子需求完成后的父推进入口（advance DONE 时异步调用，也可显式调用）。
+// MaybeDriveParent 子需求完成后的父推进入口（advance DONE 时异步调用，也可显式调用；
+// run() 对停在 code_gen 的拆分父也路由到这里）。返回 error 供显式调用方（api 重启恢复）
+// 记日志；异步路径忽略——merge_failed 事件已记录，下一次子需求完成会重试。
 // per-parent 互斥串行化：多个子需求并行完成时，合并与批次调度不会交错。
-// 错误不上抛（异步上下文）：merge_failed 事件已记录，下一次子需求完成会重试。
-func (e *Engine) MaybeDriveParent(ctx context.Context, parentID string) {
+func (e *Engine) MaybeDriveParent(ctx context.Context, parentID string) error {
 	unlock := e.lockParent(parentID)
 	defer unlock()
 	parent, err := e.st.GetDelivery(ctx, parentID)
-	if err != nil || !parent.SplitMode {
-		return
+	if err != nil {
+		return err
 	}
-	_ = e.mergeLoop(ctx, parent)
+	if !parent.SplitMode {
+		return nil
+	}
+	return e.mergeLoop(ctx, parent)
 }
 
 // ResumeMerge 冲突恢复：校验 split 父且 conflict → fetch 人工解决后的

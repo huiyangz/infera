@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -110,11 +114,24 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	if artifacts == nil {
 		artifacts = []store.Artifact{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"delivery":  d,
 		"timeline":  timeline,
 		"artifacts": artifacts,
-	})
+	}
+	// 拆分父附子需求清单（前端自建树；普通交付不含该字段）。
+	if d.SplitMode {
+		children, err := s.st.ListChildDeliveries(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取子需求失败")
+			return
+		}
+		if children == nil {
+			children = []store.Delivery{}
+		}
+		resp["children"] = children
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // gateArtifactKind 门禁 → 待展示产物 kind：spec 门禁看 spec 全文，其余看 agent 产物。
@@ -156,18 +173,89 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 			prURL = arts[i].Content
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"delivery_id":  d.ID,
 		"gate":         d.PendingGate,
 		"agent_output": map[string]string{"agent": agent, "output": output},
 		"pr_url":       prURL,
+	}
+	// spec 审批门附 AI 拆分建议（spec 末尾的 infera-split fenced block；无/坏 = nil）。
+	if d.PendingGate == "spec_approval" {
+		resp["split_plan"] = parseSplitPlan(output)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// splitPlanRe 从 spec 全文里提取 ```infera-split fenced block（AI 的拆分建议）。
+var splitPlanRe = regexp.MustCompile("```infera-split\\n([\\s\\S]*?)\\n```")
+
+// parseSplitPlan 解析 spec 文本里的拆分建议；无 block / 解析失败返回 nil（按无建议处理）。
+func parseSplitPlan(spec string) []store.ChildSpec {
+	m := splitPlanRe.FindStringSubmatch(spec)
+	if m == nil {
+		return nil
+	}
+	var plan []store.ChildSpec
+	if err := json.Unmarshal([]byte(m[1]), &plan); err != nil {
+		return nil
+	}
+	return plan
+}
+
+// handleApprove 通过当前门禁。body 可选 `{"split":[{title,description,wave}]}`：
+// 带 split 且停在 spec_approval = 「批准并拆分」；空/缺 body = 普通批准。
+// wave-1 子需求的点火由 engine 的 OnStartDelivery 回调完成（main 组装时注入 RunDelivery）。
+func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	var body struct {
+		Split []store.ChildSpec `json:"split"`
+	}
+	if raw, err := io.ReadAll(r.Body); err == nil && len(bytes.TrimSpace(raw)) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "请求体不合法")
+			return
+		}
+	}
+	s.withGateAction(w, r, func(ctx context.Context) error {
+		_, err := s.engine.ApproveWithSplit(ctx, id, body.Split)
+		return err
 	})
 }
 
-func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	s.withGateAction(w, r, func(ctx context.Context) error {
-		return s.engine.Approve(ctx, chi.URLParam(r, "id"))
-	})
+// handleMergeResume 拆分父的冲突恢复：人工解冲突推 infera/<父前8位> 分支后调用。
+// ResumeMerge fetch+reset 并重跑合并队列（可能又停在等剩余子需求）；随后照常点火驱动
+// （run() 对停在 code_gen 的拆分父路由 MaybeDriveParent，幂等无害）。
+func (s *Server) handleMergeResume(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine 未装配")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mu := s.lockFor(id)
+	mu.Lock()
+	if err := s.engine.ResumeMerge(ctx, id); err != nil {
+		mu.Unlock()
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "交付不存在")
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// 锁移交：与 approve 同款——后台驱动跑完才放锁，响应立即写回当前状态。
+	go func() {
+		defer mu.Unlock()
+		s.driveLocked(id)
+	}()
+	s.writeDeliveryNow(w, r, id)
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
@@ -239,9 +327,21 @@ func (s *Server) runDelivery(deliveryID string) {
 	s.driveLocked(deliveryID)
 }
 
+// RunDelivery 是 runDelivery 的导出版本：engine 的 OnStartDelivery 回调
+// （批次点火）由 main 组装注入，engine 不能反向 import api，所以由 main 闭包转接。
+func (s *Server) RunDelivery(deliveryID string) {
+	s.runDelivery(deliveryID)
+}
+
+// resumeParentTimeout 重启恢复驱动拆分父（合并队列，可能包含多次 fetch/merge）的时间上限。
+const resumeParentTimeout = 30 * time.Minute
+
 // ResumeActive 服务重启后的恢复：对所有 active 交付重新点火后台驱动。
 // gate-parked 的被驱动循环的状态检查直接跳过（零引擎调用）；停在 code_gen 回环 /
 // 中断在半路的从 CurrentStage 继续（workspace 未就绪则由 Start 重新 Acquire）。
+// 拆分父（split_mode 且停在 code_gen）例外：那是"等子需求/合并"语义，
+// runDelivery 的 Continue 路径虽已被引擎 run() 守卫兜底，但恢复时直接走
+// MaybeDriveParent（合并/批次调度推进），不绕 agent 驱动循环。
 func (s *Server) ResumeActive(ctx context.Context) {
 	if s.engine == nil {
 		return
@@ -252,6 +352,17 @@ func (s *Server) ResumeActive(ctx context.Context) {
 		return
 	}
 	for _, d := range ds {
+		if d.SplitMode && d.CurrentStage == "code_gen" {
+			id := d.ID
+			go func() {
+				pctx, cancel := context.WithTimeout(context.Background(), resumeParentTimeout)
+				defer cancel()
+				if err := s.engine.MaybeDriveParent(pctx, id); err != nil {
+					log.Printf("resume: drive split parent %s: %v", id, err)
+				}
+			}()
+			continue
+		}
 		go s.runDelivery(d.ID)
 	}
 	log.Printf("resume: resumed %d active deliveries", len(ds))

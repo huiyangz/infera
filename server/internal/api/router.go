@@ -19,8 +19,13 @@ import (
 type EngineAPI interface {
 	Start(ctx context.Context, deliveryID string) error
 	Continue(ctx context.Context, deliveryID string) error
-	Approve(ctx context.Context, deliveryID string) error
+	// ApproveWithSplit 普通批准（split=nil）或「批准并拆分」（spec_approval 专用）。
+	ApproveWithSplit(ctx context.Context, deliveryID string, split []store.ChildSpec) ([]store.Delivery, error)
 	Reject(ctx context.Context, deliveryID string, reason string) error
+	// ResumeMerge 拆分父冲突恢复（fetch 人工分支 reset 后重跑合并队列）。
+	ResumeMerge(ctx context.Context, deliveryID string) error
+	// MaybeDriveParent 拆分父的合并/批次调度推进入口（重启恢复对停在 code_gen 的父调用）。
+	MaybeDriveParent(ctx context.Context, parentID string) error
 }
 
 type Server struct {
@@ -70,6 +75,7 @@ func (s *Server) Mux() http.Handler {
 		r.Get("/api/deliveries/{id}/gate", s.handleGate)
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)
 		r.Post("/api/deliveries/{id}/reject", s.handleReject)
+		r.Post("/api/deliveries/{id}/merge/resume", s.handleMergeResume)
 	})
 	return r
 }

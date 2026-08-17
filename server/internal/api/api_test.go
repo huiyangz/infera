@@ -102,12 +102,16 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 // fakeEngine 记录调用但不改 store（真实引擎会推进状态），
 // 因此断言只依赖 handler 自身行为；内部加锁避免异步 driver 的数据竞争。
 type fakeEngine struct {
-	mu        sync.Mutex
-	started   []string
-	continued []string
-	approved  []string
-	rejected  []string
-	failStart bool
+	mu              sync.Mutex
+	started         []string
+	continued       []string
+	approved        []string
+	approveSplits   map[string][]store.ChildSpec
+	rejected        []string
+	resumeMerges    []string
+	droveParents    []string
+	failStart       bool
+	failResumeMerge bool
 }
 
 func (f *fakeEngine) Start(_ context.Context, id string) error {
@@ -127,17 +131,40 @@ func (f *fakeEngine) Continue(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeEngine) Approve(_ context.Context, id string) error {
+func (f *fakeEngine) ApproveWithSplit(_ context.Context, id string, split []store.ChildSpec) ([]store.Delivery, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.approved = append(f.approved, id)
-	return nil
+	if len(split) > 0 {
+		if f.approveSplits == nil {
+			f.approveSplits = map[string][]store.ChildSpec{}
+		}
+		f.approveSplits[id] = split
+	}
+	return nil, nil
 }
 
 func (f *fakeEngine) Reject(_ context.Context, id, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rejected = append(f.rejected, id)
+	return nil
+}
+
+func (f *fakeEngine) ResumeMerge(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failResumeMerge {
+		return errors.New("not in conflict")
+	}
+	f.resumeMerges = append(f.resumeMerges, id)
+	return nil
+}
+
+func (f *fakeEngine) MaybeDriveParent(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.droveParents = append(f.droveParents, id)
 	return nil
 }
 
@@ -169,6 +196,24 @@ func (f *fakeEngine) rejectedIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.rejected...)
+}
+
+func (f *fakeEngine) resumeMergeIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.resumeMerges...)
+}
+
+func (f *fakeEngine) droveParentIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.droveParents...)
+}
+
+func (f *fakeEngine) splitFor(id string) []store.ChildSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.approveSplits[id]
 }
 
 func newServerWithEngine(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine) {
@@ -351,6 +396,10 @@ func TestResumeActive(t *testing.T) {
 	gated := mk("gated", "active", "spec_approval") // 停在门禁
 	mid := mk("mid", "active", "")                  // 中断在半路（workspace 未就绪 → Start 路径）
 	done := mk("done", "completed", "")             // 终态
+	// 拆分父停在 code_gen（等子需求/合并语义）：恢复时走 MaybeDriveParent，不走 agent 驱动。
+	split := &store.Delivery{ProjectID: p.ID, Title: "split parent", Status: "active",
+		CurrentStage: "code_gen", SplitMode: true}
+	require.NoError(t, st.CreateDelivery(ctx, split))
 
 	srv.ResumeActive(ctx)
 
@@ -358,11 +407,163 @@ func TestResumeActive(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return slices.Contains(fe.startedIDs(), mid.ID)
 	}, 2*time.Second, 10*time.Millisecond)
+	// 拆分父：MaybeDriveParent 被调用
+	require.Eventually(t, func() bool {
+		return slices.Contains(fe.droveParentIDs(), split.ID)
+	}, 2*time.Second, 10*time.Millisecond)
 	// gated（门禁停车零引擎调用）与 done（不在 active 列表）：Start/Continue 均不被调用
 	require.Never(t, func() bool {
 		return slices.Contains(fe.startedIDs(), gated.ID) || slices.Contains(fe.continuedIDs(), gated.ID) ||
 			slices.Contains(fe.startedIDs(), done.ID) || slices.Contains(fe.continuedIDs(), done.ID)
 	}, 200*time.Millisecond, 20*time.Millisecond)
+	// 拆分父不走 agent 驱动（Start/Continue 都不出现）
+	require.Never(t, func() bool {
+		return slices.Contains(fe.startedIDs(), split.ID) || slices.Contains(fe.continuedIDs(), split.ID)
+	}, 200*time.Millisecond, 20*time.Millisecond)
+}
+
+// --- split deliveries：approve 带拆分 / gate 返回 split_plan / merge resume / children ---
+
+// seedSpecGate 建一个停在 spec_approval 门禁、spec artifact 已就位的交付。
+func seedSpecGate(t *testing.T, st *store.Memory, projID, spec string) *store.Delivery {
+	t.Helper()
+	ctx := context.Background()
+	d := &store.Delivery{ProjectID: projID, Title: "父", Status: "active",
+		CurrentStage: "spec_approval", PendingGate: "spec_approval"}
+	require.NoError(t, st.CreateDelivery(ctx, d))
+	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: spec,
+	}))
+	return d
+}
+
+func TestApproveWithSplitPassesBodyThrough(t *testing.T) {
+	ts, st, fe := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	d := seedSpecGate(t, st, p.ID, "# spec")
+
+	body := `{"split":[{"title":"子A","description":"写入 a.txt","wave":1},{"title":"子B","description":"写入 b.txt","wave":2}]}`
+	r, _ := c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "application/json", bytes.NewBufferString(body))
+	require.Equal(t, 200, r.StatusCode)
+
+	split := fe.splitFor(d.ID)
+	require.NotNil(t, split, "split 应透传给引擎")
+	require.Len(t, split, 2)
+	require.Equal(t, "子A", split[0].Title)
+	require.Equal(t, 2, split[1].Wave)
+
+	// 坏 JSON → 400
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "application/json", bytes.NewBufferString("{bad"))
+	require.Equal(t, 400, r.StatusCode)
+}
+
+func TestGateReturnsSplitPlan(t *testing.T) {
+	ts, st, _ := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	spec := "# 规格\n\n```infera-split\n[{\"title\":\"子A\",\"description\":\"写入 a.txt\",\"wave\":1},{\"title\":\"子C\",\"description\":\"写入 c.txt\",\"wave\":2}]\n```\n"
+	d := seedSpecGate(t, st, p.ID, spec)
+
+	var gate struct {
+		Gate      string             `json:"gate"`
+		SplitPlan *[]store.ChildSpec `json:"split_plan"`
+	}
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
+	require.Equal(t, "spec_approval", gate.Gate)
+	require.NotNil(t, gate.SplitPlan)
+	require.Len(t, *gate.SplitPlan, 2)
+	require.Equal(t, "子A", (*gate.SplitPlan)[0].Title)
+	require.Equal(t, 1, (*gate.SplitPlan)[0].Wave)
+	require.Equal(t, 2, (*gate.SplitPlan)[1].Wave)
+
+	// 无 block → split_plan 为 null；坏 JSON 块同样按无建议处理。
+	for _, s := range []string{"# 普通 spec", "# s\n\n```infera-split\n{not json}\n```"} {
+		d2 := seedSpecGate(t, st, p.ID, s)
+		var g2 struct {
+			SplitPlan *[]store.ChildSpec `json:"split_plan"`
+		}
+		r, _ = c.Get(ts.URL + "/api/deliveries/" + d2.ID + "/gate")
+		require.Equal(t, 200, r.StatusCode)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&g2))
+		require.Nil(t, g2.SplitPlan)
+	}
+}
+
+func TestMergeResumeEndpoint(t *testing.T) {
+	ts, st, fe := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	parent := &store.Delivery{ProjectID: p.ID, Title: "父", Status: "active",
+		CurrentStage: "code_gen", SplitMode: true, MergeState: "conflict"}
+	require.NoError(t, st.CreateDelivery(ctx, parent))
+	child := &store.Delivery{ProjectID: p.ID, Title: "子", Status: "completed",
+		CurrentStage: "code_review", ParentID: parent.ID, Wave: 1}
+	require.NoError(t, st.CreateDelivery(ctx, child))
+
+	// happy：ResumeMerge 被调用，响应 200 + 当前 delivery。
+	r, _ := c.Post(ts.URL+"/api/deliveries/"+parent.ID+"/merge/resume", "", nil)
+	require.Equal(t, 200, r.StatusCode)
+	var got store.Delivery
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+	require.Equal(t, parent.ID, got.ID)
+	require.Equal(t, []string{parent.ID}, fe.resumeMergeIDs())
+
+	// 引擎报错（非 conflict）→ 400
+	fe.failResumeMerge = true
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+parent.ID+"/merge/resume", "", nil)
+	require.Equal(t, 400, r.StatusCode)
+
+	// 畸形 id → 404
+	r, _ = c.Post(ts.URL+"/api/deliveries/not-a-uuid/merge/resume", "", nil)
+	require.Equal(t, 404, r.StatusCode)
+}
+
+func TestSplitParentDetailIncludesChildren(t *testing.T) {
+	ts, st := newServer(t) // 无引擎：详情只读
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	parent := &store.Delivery{ProjectID: p.ID, Title: "父", Status: "active",
+		CurrentStage: "code_gen", SplitMode: true}
+	require.NoError(t, st.CreateDelivery(ctx, parent))
+	require.NoError(t, st.CreateDelivery(ctx, &store.Delivery{
+		ProjectID: p.ID, Title: "子", Status: "queued", CurrentStage: "intake",
+		ParentID: parent.ID, Wave: 2,
+	}))
+
+	var detail struct {
+		Delivery store.Delivery    `json:"delivery"`
+		Children *[]store.Delivery `json:"children"`
+	}
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + parent.ID)
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&detail))
+	require.True(t, detail.Delivery.SplitMode)
+	require.NotNil(t, detail.Children)
+	require.Len(t, *detail.Children, 1)
+	require.Equal(t, parent.ID, (*detail.Children)[0].ParentID)
+
+	// 非拆分交付不含 children 字段
+	plain := &store.Delivery{ProjectID: p.ID, Title: "普通", Status: "active", CurrentStage: "intake"}
+	require.NoError(t, st.CreateDelivery(ctx, plain))
+	var plainDetail struct {
+		Children *[]store.Delivery `json:"children"`
+	}
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + plain.ID)
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&plainDetail))
+	require.Nil(t, plainDetail.Children)
 }
 
 func TestRepoRequired(t *testing.T) {
