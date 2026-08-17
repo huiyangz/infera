@@ -109,7 +109,7 @@ export function ProjectDetail({
             effectiveId && 'max-lg:hidden',
           )}
         >
-          <div className='flex h-12 items-center justify-between px-4'>
+          <div className='flex h-9 items-center justify-between border-b px-4'>
             <span className='text-xs font-medium uppercase tracking-wider text-muted-foreground'>
               需求
               {deliveries?.length ? (
@@ -186,7 +186,7 @@ function DeliveryRow({
       type='button'
       onClick={onSelect}
       className={cn(
-        'relative block w-full border-b px-4 py-3 text-start transition-colors last:border-b-0',
+        'relative block w-full border-b px-4 py-2.5 text-start transition-colors last:border-b-0',
         active ? 'bg-accent' : 'hover:bg-accent/50',
       )}
     >
