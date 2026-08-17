@@ -406,9 +406,17 @@ function OrchestrationDialog({
     : {}
   const value = sel ?? effectiveMap
 
+  // 只提交与默认不同的节点（未改动的留空 → 继续跟随全局默认）
+  const diffOverrides = (bindings: BindingMap): BindingMap =>
+    Object.fromEntries(
+      Object.entries(bindings).filter(
+        ([node, agentId]) => pipe?.defaults[node] !== agentId,
+      ),
+    )
+
   const save = useMutation({
     mutationFn: (bindings: BindingMap) =>
-      putProjectPipeline(projectId, bindings),
+      putProjectPipeline(projectId, diffOverrides(bindings)),
     onSuccess: (_d, bindings) => {
       toast.success(
         Object.keys(bindings).length ? '项目编排已保存' : '已恢复默认编排',
