@@ -45,12 +45,17 @@ func main() {
 		tr = &testrunner.Docker{Image: cfg.AgentImage, Cmd: []string{"sh", "-c", cfg.TestCmd}}
 	}
 
+	// SetGit 必须在建第一个 delivery 前就位：createProject 的 LsRemote 可达性校验依赖它。
 	srv := api.NewServer(st, cfg.Password, nil)
 	srv.SetGit(g)
 
 	eng := engine.New(st, ar, ws, tr)
 	eng.Notify = srv.Publish
 	srv.SetEngine(eng)
+
+	// 重启恢复：重启前仍 active 的交付重新点火后台驱动
+	// （gate-parked 零引擎调用、中断的从 CurrentStage 继续）。
+	srv.ResumeActive(context.Background())
 
 	log.Printf("infera listening on %s (workdir root %s)", cfg.Addr, cfg.RepoWorkRoot)
 	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Mux()))

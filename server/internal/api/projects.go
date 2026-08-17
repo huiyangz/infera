@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -78,19 +77,22 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	p, err := s.st.GetProject(r.Context(), id)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "项目不存在")
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, "读取项目失败")
-	default:
-		writeJSON(w, http.StatusOK, p)
+	if !validID(w, id) {
+		return
 	}
+	p, err := s.st.GetProject(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err, "项目不存在", "读取项目失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
 }
 
 func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
 	var body struct {
 		Pinned bool `json:"pinned"`
 	}
@@ -99,16 +101,12 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.st.PatchProjectPinned(r.Context(), id, body.Pinned); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "项目不存在")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "更新项目失败")
+		writeStoreErr(w, err, "项目不存在", "更新项目失败")
 		return
 	}
 	p, err := s.st.GetProject(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取项目失败")
+		writeStoreErr(w, err, "项目不存在", "读取项目失败")
 		return
 	}
 	writeJSON(w, http.StatusOK, p)

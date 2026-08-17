@@ -7,18 +7,23 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// maxStarts 单次驱动调用里 Start 的上限：unit_test 失败回环每轮消耗一次，
+// maxStarts 单次驱动调用里引擎调用的上限：unit_test 失败回环每轮消耗一次，
 // 正常路径 1-2 次即稳定；上限防止 active-无门禁 的病态循环空转。
 const maxStarts = 6
 
 func (s *Server) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
+	if !validID(w, projectID) {
+		return
+	}
 	ds, err := s.st.ListProjectDeliveries(r.Context(), projectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取交付列表失败")
@@ -32,12 +37,11 @@ func (s *Server) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCreateDelivery(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
+	if !validID(w, projectID) {
+		return
+	}
 	if _, err := s.st.GetProject(r.Context(), projectID); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "项目不存在")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "读取项目失败")
+		writeStoreErr(w, err, "项目不存在", "读取项目失败")
 		return
 	}
 	var body struct {
@@ -76,6 +80,9 @@ func (s *Server) handleCreateDelivery(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
 	d, err := s.st.GetDelivery(r.Context(), id)
 	if err != nil {
 		writeStoreErr(w, err, "交付不存在", "读取交付失败")
@@ -114,6 +121,9 @@ func gateArtifactKind(gate string) string {
 
 func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
 	d, err := s.st.GetDelivery(r.Context(), id)
 	if err != nil {
 		writeStoreErr(w, err, "交付不存在", "读取交付失败")
@@ -149,42 +159,13 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if s.engine == nil {
-		writeError(w, http.StatusServiceUnavailable, "engine 未装配")
-		return
-	}
-	if _, err := s.st.GetDelivery(r.Context(), id); err != nil {
-		writeStoreErr(w, err, "交付不存在", "读取交付失败")
-		return
-	}
-	mu := s.lockFor(id)
-	mu.Lock()
-	err := s.engine.Approve(r.Context(), id)
-	mu.Unlock()
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	// Approve 只做门禁簿记即返回（不同步跑 agent）；后续推进在后台驱动，
-	// goroutine 自取 per-delivery 锁（driveLocked 约定调用方持锁、内部用 background ctx）。batch 2 会重构为显式 Continue。
-	go func() {
-		mu := s.lockFor(id)
-		mu.Lock()
-		defer mu.Unlock()
-		s.driveLocked(id)
-	}()
-	s.writeDeliveryNow(w, r, id)
+	s.withGateAction(w, r, func(ctx context.Context) error {
+		return s.engine.Approve(ctx, chi.URLParam(r, "id"))
+	})
 }
 
 func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if s.engine == nil {
-		writeError(w, http.StatusServiceUnavailable, "engine 未装配")
-		return
-	}
-	if _, err := s.st.GetDelivery(r.Context(), id); err != nil {
-		writeStoreErr(w, err, "交付不存在", "读取交付失败")
+	if !validID(w, chi.URLParam(r, "id")) {
 		return
 	}
 	var body struct {
@@ -194,18 +175,41 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
+	s.withGateAction(w, r, func(ctx context.Context) error {
+		return s.engine.Reject(ctx, chi.URLParam(r, "id"), body.Reason)
+	})
+}
+
+// withGateAction 是 approve/reject 的共享流程：
+// 校验 id → 持 per-delivery 锁 → 用与请求脱钩的有界 ctx 执行簿记
+// （Approve/Reject 只改状态落盘，客户端断连不能杀掉持久化）。
+// 簿记成功后把锁所有权移交给后台驱动 goroutine（推进到下一个停车点才放锁），
+// 响应立即写回最新状态——GetDelivery 只读，不需要锁。
+func (s *Server) withGateAction(w http.ResponseWriter, r *http.Request, action func(ctx context.Context) error) {
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	if s.engine == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine 未装配")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	mu := s.lockFor(id)
 	mu.Lock()
-	err := s.engine.Reject(r.Context(), id, body.Reason)
-	mu.Unlock()
+	err := action(ctx)
 	if err != nil {
+		mu.Unlock()
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "交付不存在")
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	// Reject 停车不重跑：回退阶段的重跑（带驳回意见反馈）在后台驱动。
+	// 锁移交：驱动 goroutine 跑完 driveLocked 才解锁，handler 不等它。
 	go func() {
-		mu := s.lockFor(id)
-		mu.Lock()
 		defer mu.Unlock()
 		s.driveLocked(id)
 	}()
@@ -221,7 +225,7 @@ func (s *Server) lockFor(deliveryID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-// runDelivery 异步驱动（创建时调用）：拿 per-delivery 锁后推进到稳定。
+// runDelivery 异步驱动（创建/重启恢复时调用）：拿 per-delivery 锁后推进到稳定。
 func (s *Server) runDelivery(deliveryID string) {
 	mu := s.lockFor(deliveryID)
 	mu.Lock()
@@ -229,8 +233,27 @@ func (s *Server) runDelivery(deliveryID string) {
 	s.driveLocked(deliveryID)
 }
 
+// ResumeActive 服务重启后的恢复：对所有 active 交付重新点火后台驱动。
+// gate-parked 的被驱动循环的状态检查直接跳过（零引擎调用）；停在 code_gen 回环 /
+// 中断在半路的从 CurrentStage 继续（workspace 未就绪则由 Start 重新 Acquire）。
+func (s *Server) ResumeActive(ctx context.Context) {
+	if s.engine == nil {
+		return
+	}
+	ds, err := s.st.ListActiveDeliveries(ctx)
+	if err != nil {
+		log.Printf("resume: list active deliveries: %v", err)
+		return
+	}
+	for _, d := range ds {
+		go s.runDelivery(d.ID)
+	}
+	log.Printf("resume: resumed %d active deliveries", len(ds))
+}
+
 // driveLocked 驱动引擎直到稳定（门禁 / 终态 / 出错），处理 unit_test 失败后的停车重试。
 // 调用方必须已持有该 delivery 的锁。先查状态再驱动：已稳定（门禁/终态）时零调用。
+// 驱动用 background ctx：post-approve 的推进在响应返回后继续，不受请求生命周期影响。
 func (s *Server) driveLocked(deliveryID string) {
 	for i := 0; i < maxStarts; i++ {
 		if s.engine == nil {
@@ -240,11 +263,17 @@ func (s *Server) driveLocked(deliveryID string) {
 		if err != nil || d.Status != "active" || d.PendingGate != "" {
 			return // 门禁/终态：停
 		}
-		if err := s.engine.Start(context.Background(), deliveryID); err != nil {
-			log.Printf("engine start %s: %v", deliveryID, err)
+		// workspace 未就绪（创建 / 重启恢复路径）用 Start 负责 Acquire；
+		// 其余（Approve/Reject 后的重点火、unit_test 回环重试）用 Continue，不重复 ensure。
+		drive := s.engine.Continue
+		if !d.WorkspaceReady {
+			drive = s.engine.Start
+		}
+		if err := drive(context.Background(), deliveryID); err != nil {
+			log.Printf("engine drive %s: %v", deliveryID, err)
 			return // 引擎报错：blocked/completed/agent 失败都由状态承载
 		}
-		// Start 后若仍 active 且无门禁 = unit_test 失败停车在 code_gen → 再 Start 重试
+		// 驱动后仍 active 且无门禁 = unit_test 失败停车在 code_gen → 下一轮重试
 	}
 }
 
@@ -265,4 +294,14 @@ func writeStoreErr(w http.ResponseWriter, err error, notFoundMsg, serverMsg stri
 		return
 	}
 	writeError(w, http.StatusInternalServerError, serverMsg)
+}
+
+// validID 校验路径 id 是合法 UUID：畸形 id 直接 404（资源不存在），
+// 避免把它传进 store 后以数据库驱动错误泄漏成 500。
+func validID(w http.ResponseWriter, id string) bool {
+	if _, err := uuid.Parse(id); err != nil {
+		writeError(w, http.StatusNotFound, "资源不存在")
+		return false
+	}
+	return true
 }

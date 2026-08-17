@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -112,27 +112,29 @@ func (pg *Pg) PatchProjectPinned(ctx context.Context, id string, pinned bool) er
 	return nil
 }
 
+// ProjectStats 单条 SQL 聚合：活跃数、门禁数、最近活动时间与项目存在性一次带回。
+// Last = max(project.updated_at, max(delivery.updated_at))（greatest 忽略 NULL，
+// 无 delivery 时退化为 project.updated_at，与 memory 实现语义一致）。
 func (pg *Pg) ProjectStats(ctx context.Context, id string) (ProjectStats, error) {
-	proj, err := pg.GetProject(ctx, id)
-	if err != nil {
-		return ProjectStats{}, err
-	}
-	// Last = max(project.updated_at, max(delivery.updated_at))，无 delivery 时取 project.updated_at。
-	s := ProjectStats{Last: proj.UpdatedAt}
-	var lastDelivery *time.Time
-	err = pg.pool.QueryRow(ctx,
+	var (
+		active, pending int
+		last            sql.NullTime // 项目不存在时两参数皆 NULL
+		exists          bool
+	)
+	err := pg.pool.QueryRow(ctx,
 		`SELECT count(*) FILTER (WHERE status='active'),
 		        count(*) FILTER (WHERE pending_gate<>''),
-		        max(updated_at)
+		        greatest(max(updated_at), (SELECT updated_at FROM projects WHERE id=$1)),
+		        EXISTS(SELECT 1 FROM projects WHERE id=$1)
 		 FROM deliveries WHERE project_id=$1`, id).
-		Scan(&s.Active, &s.Pending, &lastDelivery)
+		Scan(&active, &pending, &last, &exists)
 	if err != nil {
 		return ProjectStats{}, err
 	}
-	if lastDelivery != nil && lastDelivery.After(s.Last) {
-		s.Last = *lastDelivery
+	if !exists {
+		return ProjectStats{}, ErrNotFound
 	}
-	return s, nil
+	return ProjectStats{Active: active, Pending: pending, Last: last.Time}, nil
 }
 
 // deliveries
@@ -162,6 +164,24 @@ func (pg *Pg) GetDelivery(ctx context.Context, id string) (*Delivery, error) {
 
 func (pg *Pg) ListProjectDeliveries(ctx context.Context, projectID string) ([]Delivery, error) {
 	rows, err := pg.pool.Query(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE project_id=$1 ORDER BY created_at`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Delivery, 0)
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	return out, rows.Err()
+}
+
+// ListActiveDeliveries 跨项目取所有 active 交付（重启恢复用），按创建时间升序。
+func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
+	rows, err := pg.pool.Query(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE status='active' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}

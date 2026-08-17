@@ -69,6 +69,14 @@ func TestMemoryDeliveryAndArtifacts(t *testing.T) {
 	got, _ := m.GetDelivery(ctx, d.ID)
 	require.Equal(t, "completed", got.Status)
 
+	// ListActiveDeliveries：只返回 active（跨项目），按创建时间升序。
+	d2 := &Delivery{ProjectID: p.ID, Title: "y", Status: "active"}
+	require.NoError(t, m.CreateDelivery(ctx, d2))
+	active, err := m.ListActiveDeliveries(ctx)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, d2.ID, active[0].ID)
+
 	_, err = m.GetDelivery(ctx, "nope")
 	require.ErrorIs(t, err, ErrNotFound)
 }

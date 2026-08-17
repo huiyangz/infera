@@ -76,6 +76,7 @@ type Store interface {
 	CreateDelivery(ctx context.Context, d *Delivery) error
 	GetDelivery(ctx context.Context, id string) (*Delivery, error)
 	ListProjectDeliveries(ctx context.Context, projectID string) ([]Delivery, error)
+	ListActiveDeliveries(ctx context.Context) ([]Delivery, error)
 	UpdateDelivery(ctx context.Context, d *Delivery) error
 	// events / artifacts / stage_runs
 	AppendEvent(ctx context.Context, e *Event) error

@@ -144,6 +144,20 @@ func (m *Memory) ListProjectDeliveries(ctx context.Context, projectID string) ([
 	return out, nil
 }
 
+// ListActiveDeliveries 跨项目取所有 active 交付（重启恢复用），按创建时间升序。
+func (m *Memory) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Delivery, 0)
+	for _, d := range m.deliveries {
+		if d.Status == "active" {
+			out = append(out, *d)
+		}
+	}
+	slices.SortFunc(out, func(a, b Delivery) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out, nil
+}
+
 func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

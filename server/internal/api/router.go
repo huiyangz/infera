@@ -18,6 +18,7 @@ import (
 // NewServer 允许 nil（测试/分期装配），SetEngine 在 main 里后置注入。
 type EngineAPI interface {
 	Start(ctx context.Context, deliveryID string) error
+	Continue(ctx context.Context, deliveryID string) error
 	Approve(ctx context.Context, deliveryID string) error
 	Reject(ctx context.Context, deliveryID string, reason string) error
 }

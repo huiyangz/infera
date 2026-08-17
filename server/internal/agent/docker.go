@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"sync/atomic"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
@@ -10,14 +11,35 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
+// dockerCli 进程级共享 Docker 客户端：FromEnv + 版本协商只做一次，
+// RunInContainer 各调用复用，不再 per-call 建连/关闭。
+var dockerCli atomic.Value // *client.Client
+
+// dockerClient 取共享客户端；未初始化时创建（首次失败重试一次）后缓存。
+// 并发首次调用可能各建一次、Store 后写者胜——被覆盖的客户端只是多余对象，无副作用。
+func dockerClient() (*client.Client, error) {
+	if cli, ok := dockerCli.Load().(*client.Client); ok {
+		return cli, nil
+	}
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		cli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		if err != nil {
+			return nil, err
+		}
+	}
+	dockerCli.Store(cli)
+	return cli, nil
+}
+
 // RunInContainer 在一次性容器里执行命令，workdir 绑定挂载到 /work，返回合并输出。
 // agent runner 与 testrunner 共用。
 func RunInContainer(ctx context.Context, image string, cmd []string, workdir string) (string, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := dockerClient()
 	if err != nil {
 		return "", err
 	}
-	defer cli.Close()
+	// cli 进程生命周期内共享，这里不 Close。
 
 	cfg := &container.Config{Image: image, Cmd: cmd, WorkingDir: "/work"}
 	hc := &container.HostConfig{

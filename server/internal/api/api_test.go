@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -103,6 +104,7 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 type fakeEngine struct {
 	mu        sync.Mutex
 	started   []string
+	continued []string
 	approved  []string
 	rejected  []string
 	failStart bool
@@ -115,6 +117,13 @@ func (f *fakeEngine) Start(_ context.Context, id string) error {
 		return errors.New("engine boom")
 	}
 	f.started = append(f.started, id)
+	return nil
+}
+
+func (f *fakeEngine) Continue(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.continued = append(f.continued, id)
 	return nil
 }
 
@@ -136,6 +145,18 @@ func (f *fakeEngine) startCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.started)
+}
+
+func (f *fakeEngine) startedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.started...)
+}
+
+func (f *fakeEngine) continuedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.continued...)
 }
 
 func (f *fakeEngine) approvedIDs() []string {
@@ -279,4 +300,67 @@ func TestDeliveryEngineStartErrorSwallowed(t *testing.T) {
 	r, _ = c.Post(ts.URL+"/api/projects/00000000-0000-0000-0000-000000000000/deliveries", "application/json",
 		bytes.NewBufferString(`{"title":"x"}`))
 	require.Equal(t, 404, r.StatusCode)
+}
+
+// 畸形 id（非 UUID）一律 404：不能把无效 UUID 传进 store 后以 500 泄漏驱动内部错误。
+func TestMalformedIDReturns404(t *testing.T) {
+	ts, _, _ := newServerWithEngine(t)
+	c := login(t, ts.URL)
+
+	for _, path := range []string{
+		"/api/projects/not-a-uuid",
+		"/api/projects/not-a-uuid/deliveries",
+		"/api/deliveries/not-a-uuid",
+		"/api/deliveries/not-a-uuid/gate",
+	} {
+		r, _ := c.Get(ts.URL + path)
+		require.Equal(t, 404, r.StatusCode, "GET %s", path)
+	}
+
+	req, _ := http.NewRequest("PATCH", ts.URL+"/api/projects/not-a-uuid", bytes.NewBufferString(`{"pinned":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	r, _ := c.Do(req)
+	require.Equal(t, 404, r.StatusCode)
+
+	r, _ = c.Post(ts.URL+"/api/projects/not-a-uuid/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"x"}`))
+	require.Equal(t, 404, r.StatusCode)
+
+	r, _ = c.Post(ts.URL+"/api/deliveries/not-a-uuid/approve", "", nil)
+	require.Equal(t, 404, r.StatusCode)
+	r, _ = c.Post(ts.URL+"/api/deliveries/not-a-uuid/reject", "application/json",
+		bytes.NewBufferString(`{"reason":"x"}`))
+	require.Equal(t, 404, r.StatusCode)
+}
+
+// 重启恢复：ResumeActive 只对 active 交付点火后台驱动——
+// gate-parked 的被驱动循环状态检查直接停车（零引擎调用），中断在半路的被重新驱动，终态不动。
+func TestResumeActive(t *testing.T) {
+	st := store.NewMemory()
+	fe := &fakeEngine{}
+	srv := NewServer(st, "secret-pass", fe)
+	ctx := context.Background()
+
+	p := &store.Project{Name: "p"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	mk := func(title, status, gate string) *store.Delivery {
+		d := &store.Delivery{ProjectID: p.ID, Title: title, Status: status, CurrentStage: "code_gen", PendingGate: gate}
+		require.NoError(t, st.CreateDelivery(ctx, d))
+		return d
+	}
+	gated := mk("gated", "active", "spec_approval") // 停在门禁
+	mid := mk("mid", "active", "")                  // 中断在半路（workspace 未就绪 → Start 路径）
+	done := mk("done", "completed", "")             // 终态
+
+	srv.ResumeActive(ctx)
+
+	// 中断在半路的：驱动点火（WorkspaceReady=false → Start 负责 Acquire）
+	require.Eventually(t, func() bool {
+		return slices.Contains(fe.startedIDs(), mid.ID)
+	}, 2*time.Second, 10*time.Millisecond)
+	// gated（门禁停车零引擎调用）与 done（不在 active 列表）：Start/Continue 均不被调用
+	require.Never(t, func() bool {
+		return slices.Contains(fe.startedIDs(), gated.ID) || slices.Contains(fe.continuedIDs(), gated.ID) ||
+			slices.Contains(fe.startedIDs(), done.ID) || slices.Contains(fe.continuedIDs(), done.ID)
+	}, 200*time.Millisecond, 20*time.Millisecond)
 }

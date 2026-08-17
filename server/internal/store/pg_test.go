@@ -125,6 +125,18 @@ func TestPgListPaths(t *testing.T) {
 	require.Equal(t, d2.ID, deliveries[1].ID)
 	require.False(t, deliveries[0].CreatedAt.After(deliveries[1].CreatedAt))
 
+	// ListActiveDeliveries：跨项目只取 active，按 CreatedAt 升序。
+	d2.Status = "completed"
+	require.NoError(t, p.UpdateDelivery(ctx, d2))
+	time.Sleep(2 * time.Millisecond)
+	d3 := &Delivery{ProjectID: proj2.ID, Title: "需求C", Status: "active", CurrentStage: "spec"}
+	require.NoError(t, p.CreateDelivery(ctx, d3))
+	active, err := p.ListActiveDeliveries(ctx)
+	require.NoError(t, err)
+	require.Len(t, active, 2)
+	require.Equal(t, d1.ID, active[0].ID)
+	require.Equal(t, d3.ID, active[1].ID)
+
 	// 同一 stage 第二次 run 后，LatestStageRun 返回最新一次。
 	run1 := &StageRun{DeliveryID: d1.ID, Stage: "spec", Attempt: 1}
 	require.NoError(t, p.StartStageRun(ctx, run1))
