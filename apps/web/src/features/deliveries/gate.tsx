@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Check, ChevronLeft, Undo2 } from 'lucide-react'
+import { Check, ChevronLeft, Plus, Undo2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { approveGate, getGate, rejectGate } from '@/lib/infera-api'
+import type { ChildSpec } from '@/lib/infera-types'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -43,15 +44,21 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
     queryFn: () => getGate(deliveryId),
   })
   const [reason, setReason] = useState('')
+  // 拆分方案行（spec_approval 专属）：AI 建议预填，可增删改
+  const [rows, setRows] = useState<ChildSpec[] | null>(null)
 
   const back = () =>
     navigate({ to: '/deliveries/$id', params: { id: deliveryId } })
 
   const approve = useMutation({
-    mutationFn: () => approveGate(deliveryId),
-    onSuccess: () => {
+    mutationFn: (split?: ChildSpec[]) => approveGate(deliveryId, split),
+    onSuccess: (_d, split) => {
       qc.invalidateQueries()
-      toast.success('已批准，流水线继续')
+      toast.success(
+        split?.length
+          ? `已拆分为 ${split.length} 个子需求，流水线调度中`
+          : '已批准，流水线继续',
+      )
       back()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -84,6 +91,13 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
     artifactLabel: '产出内容',
     showPR: false,
   }
+
+  const isSpec = data.gate === 'spec_approval'
+  // 懒播种：首次渲染用 AI 建议（或空）填充，之后完全由用户编辑
+  const splitRows = rows ?? (data.split_plan ?? [])
+  const setSplitRows = (next: ChildSpec[]) => setRows(next)
+  const splitValid =
+    splitRows.length > 0 && splitRows.every((r) => r.title.trim().length > 0)
 
   return (
     <>
@@ -130,14 +144,117 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
               </p>
             )}
 
+            {isSpec && (
+              <div className='space-y-2'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>拆分执行（可选）</h3>
+                  {data.split_plan?.length ? (
+                    <span className='text-xs text-muted-foreground'>
+                      AI 建议已预填，可清空
+                    </span>
+                  ) : null}
+                </div>
+                {splitRows.map((r, i) => (
+                  <div key={i} className='flex items-center gap-2'>
+                    <Input
+                      className='w-40 shrink-0'
+                      placeholder='子需求标题'
+                      value={r.title}
+                      onChange={(e) =>
+                        setSplitRows(
+                          splitRows.map((row, j) =>
+                            j === i ? { ...row, title: e.target.value } : row,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      className='flex-1'
+                      placeholder='补充描述…'
+                      value={r.description}
+                      onChange={(e) =>
+                        setSplitRows(
+                          splitRows.map((row, j) =>
+                            j === i
+                              ? { ...row, description: e.target.value }
+                              : row,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      type='number'
+                      min={1}
+                      className='w-16 shrink-0 tabular-nums'
+                      value={r.wave}
+                      onChange={(e) =>
+                        setSplitRows(
+                          splitRows.map((row, j) =>
+                            j === i
+                              ? {
+                                  ...row,
+                                  wave: Math.max(1, Number(e.target.value) || 1),
+                                }
+                              : row,
+                          ),
+                        )
+                      }
+                    />
+                    <Button
+                      variant='ghost'
+                      size='icon'
+                      className='shrink-0'
+                      aria-label='删除该子需求'
+                      onClick={() =>
+                        setSplitRows(splitRows.filter((_, j) => j !== i))
+                      }
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                ))}
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  onClick={() =>
+                    setSplitRows([
+                      ...splitRows,
+                      { title: '', description: '', wave: 1 },
+                    ])
+                  }
+                >
+                  <Plus /> 添加子需求
+                </Button>
+              </div>
+            )}
+
             <div className='flex items-center gap-2'>
-              <Button
-                size='lg'
-                disabled={approve.isPending}
-                onClick={() => approve.mutate()}
-              >
-                <Check /> 批准
-              </Button>
+              {isSpec ? (
+                <>
+                  <Button
+                    size='lg'
+                    disabled={approve.isPending}
+                    onClick={() => approve.mutate(undefined)}
+                  >
+                    <Check /> 批准（不拆分）
+                  </Button>
+                  <Button
+                    size='lg'
+                    disabled={!splitValid || approve.isPending}
+                    onClick={() => approve.mutate(splitRows)}
+                  >
+                    <Check /> 批准并拆分
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size='lg'
+                  disabled={approve.isPending}
+                  onClick={() => approve.mutate(undefined)}
+                >
+                  <Check /> 批准
+                </Button>
+              )}
               <Input
                 className='flex-1'
                 placeholder='打回理由…'

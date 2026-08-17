@@ -1,7 +1,16 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Check, ChevronLeft, Circle, DoorOpen, Loader2, X } from 'lucide-react'
-import { getDelivery } from '@/lib/infera-api'
+import { toast } from 'sonner'
+import {
+  Check,
+  ChevronLeft,
+  Circle,
+  Copy,
+  DoorOpen,
+  Loader2,
+  X,
+} from 'lucide-react'
+import { getDelivery, mergeResume } from '@/lib/infera-api'
 import {
   GATES,
   STAGES,
@@ -14,7 +23,7 @@ import {
 import { dateTime, timeAgo } from '@/lib/time'
 import { useDeliveryEvents } from '@/hooks/use-delivery-events'
 import { Badge } from '@/components/ui/badge'
-import { buttonVariants } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -49,6 +58,13 @@ const EVENT_LABEL: Record<string, string> = {
   persist_done: '产出已推送',
   pr_failed: 'PR 开具失败',
   persist_failed: '产出持久化失败',
+  split: '需求拆分',
+  merge_done: '子需求已合并',
+  merge_conflict: '合并冲突',
+  merge_queued: '合并排队中',
+  merge_skipped: '跳过合并',
+  merge_resumed: '合并已恢复',
+  merge_failed: '合并失败',
 }
 
 /**
@@ -74,11 +90,15 @@ function stageState(
   return 'pending'
 }
 
-function StageIcon({ state }: { state: StageState }) {
+function StageIcon({ state, idle }: { state: StageState; idle?: boolean }) {
   if (state === 'done') return <Check className='size-3.5' strokeWidth={2.5} />
   if (state === 'failed') return <X className='size-3.5' strokeWidth={2.5} />
   if (state === 'current' || state === 'gate-waiting')
-    return <Loader2 className='size-3.5 animate-spin' />
+    return idle ? (
+      <Circle className='size-3.5' />
+    ) : (
+      <Loader2 className='size-3.5 animate-spin' />
+    )
   return <Circle className='size-3.5' />
 }
 
@@ -98,9 +118,18 @@ export function DeliveryDetail({
   embedded?: boolean
 }) {
   useDeliveryEvents(deliveryId)
+  const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
     queryFn: () => getDelivery(deliveryId),
+  })
+  const resume = useMutation({
+    mutationFn: () => mergeResume(deliveryId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['delivery', deliveryId] })
+      toast.success('合并已恢复，流水线继续')
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   if (isLoading || !data)
@@ -118,6 +147,20 @@ export function DeliveryDetail({
     )
 
   const { delivery, timeline, artifacts } = data
+  const children = data.children ?? []
+  // 拆分父停在 code_gen：语义是「等子需求跑完再合并」，不是真的在写代码
+  const splitWaiting =
+    delivery.split_mode &&
+    delivery.current_stage === 'code_gen' &&
+    !delivery.pending_gate
+  const kidsDone = children.filter((c) => c.status === 'completed').length
+  // 最新一次合并冲突事件里给人工的 git 指令
+  const conflictInstructions = [...timeline]
+    .reverse()
+    .find((e) => e.event_type === 'merge_conflict')
+    ?.payload as
+    | { instructions?: string; branches?: string[] }
+    | undefined
   const currentIdx = STAGES.indexOf(delivery.current_stage as StageName)
   const stateOf = (s: StageName, i: number) =>
     stageState(s, currentIdx, i, delivery.pending_gate, delivery.status)
@@ -186,6 +229,48 @@ export function DeliveryDetail({
             : 'mx-auto max-w-4xl space-y-6 p-6'
         }
       >
+        {/* 合并冲突横幅（拆分父专属） */}
+        {delivery.merge_state === 'conflict' && (
+          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+            <CardHeader className='pb-0'>
+              <CardTitle className='text-sm font-medium'>合并冲突</CardTitle>
+              <CardDescription>
+                子需求分支与父分支冲突，需人工解决后推送，再点「继续」恢复流水线
+              </CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-3'>
+              {conflictInstructions?.instructions && (
+                <div className='relative'>
+                  <pre className='max-h-64 overflow-auto rounded-lg border bg-muted/50 p-3 pe-12 font-mono text-[11px] leading-relaxed whitespace-pre-wrap'>
+                    {conflictInstructions.instructions}
+                  </pre>
+                  <Button
+                    variant='ghost'
+                    size='icon'
+                    className='absolute end-1.5 top-1.5'
+                    aria-label='复制指令'
+                    onClick={() => {
+                      navigator.clipboard
+                        .writeText(conflictInstructions.instructions ?? '')
+                        .then(() => toast.success('已复制'))
+                        .catch(() => toast.error('复制失败'))
+                    }}
+                  >
+                    <Copy />
+                  </Button>
+                </div>
+              )}
+              <Button
+                size='lg'
+                disabled={resume.isPending}
+                onClick={() => resume.mutate()}
+              >
+                {resume.isPending ? '恢复中…' : '合并已推送，继续'}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
         {/* 阶段推进 */}
         <Card className={embedded ? 'gap-3 py-4' : undefined}>
           <CardHeader className='pb-0'>
@@ -204,6 +289,8 @@ export function DeliveryDetail({
                 const active = state === 'current' || state === 'gate-waiting'
                 const filled = state === 'done' || state === 'failed'
                 const isLast = i === STAGES.length - 1
+                const idle =
+                  splitWaiting && s === 'code_gen' && state === 'current'
                 return (
                   <li key={s} className='flex min-w-0 flex-1 flex-col'>
                     <div className='flex items-center'>
@@ -220,7 +307,7 @@ export function DeliveryDetail({
                         {GATES.has(s) && !filled ? (
                           <DoorOpen className='size-3.5' />
                         ) : (
-                          <StageIcon state={state} />
+                          <StageIcon state={state} idle={idle} />
                         )}
                       </div>
                       {!isLast && (
@@ -249,7 +336,11 @@ export function DeliveryDetail({
                         )}
                       </div>
                       <div className='mt-0.5 text-[11px] text-muted-foreground'>
-                        {STAGE_STATUS_TEXT[state]}
+                        {idle
+                          ? delivery.merge_state === 'conflict'
+                            ? '合并冲突'
+                            : `等待子需求 ${kidsDone}/${children.length}`
+                          : STAGE_STATUS_TEXT[state]}
                       </div>
                     </div>
                   </li>
@@ -281,6 +372,46 @@ export function DeliveryDetail({
             )}
           </CardContent>
         </Card>
+
+        {/* 子需求清单（拆分父专属） */}
+        {delivery.split_mode && children.length > 0 && (
+          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+            <CardHeader className='pb-0'>
+              <div className='flex items-center justify-between'>
+                <CardTitle className='text-sm font-medium'>子需求清单</CardTitle>
+                <span className='text-xs text-muted-foreground'>
+                  {kidsDone} / {children.length} 完成
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {children.map((c, i) => (
+                <div key={c.id}>
+                  {i > 0 && <Separator className='my-3' />}
+                  <Link
+                    to='/projects/$id'
+                    params={{ id: delivery.project_id }}
+                    search={{ d: c.id }}
+                    className='flex items-center justify-between gap-3 rounded-md px-1 py-1 transition-colors hover:bg-accent/50'
+                  >
+                    <span className='flex min-w-0 items-center gap-2'>
+                      <Badge variant='outline' className='shrink-0 px-1.5 text-[10px]'>
+                        批次 {c.wave || 1}
+                      </Badge>
+                      <span className='truncate text-sm'>{c.title}</span>
+                    </span>
+                    <span className='flex shrink-0 items-center gap-2'>
+                      <span className='text-xs text-muted-foreground'>
+                        {stageLabel(c.current_stage)}
+                      </span>
+                      <StatusBadge status={c.status} />
+                    </span>
+                  </Link>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
 
         {/* 阶段档案 */}
         <Card className={embedded ? 'gap-3 py-4' : undefined}>

@@ -1,7 +1,13 @@
 /**
  * infera 后端 API 客户端（后端 :8080，dev 由 vite proxy 转发 /api）。
  */
-import type { Delivery, DeliveryDetail, GateInfo, Project } from './infera-types'
+import type {
+  ChildSpec,
+  Delivery,
+  DeliveryDetail,
+  GateInfo,
+  Project,
+} from './infera-types'
 
 async function json<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -83,8 +89,24 @@ export async function getDelivery(id: string): Promise<DeliveryDetail> {
 export async function getGate(id: string): Promise<GateInfo> {
   return json(await fetch(`/api/deliveries/${id}/gate`))
 }
-export async function approveGate(id: string): Promise<Delivery> {
-  return json(await fetch(`/api/deliveries/${id}/approve`, { method: 'POST' }))
+export async function approveGate(
+  id: string,
+  split?: ChildSpec[],
+): Promise<Delivery> {
+  return json(
+    await fetch(`/api/deliveries/${id}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // 仅在显式拆分时携带 body；空数组视为普通批准
+      body: split?.length ? JSON.stringify({ split }) : undefined,
+    }),
+  )
+}
+/** 合并冲突恢复：人工推送 infera/<父前8> 分支后继续父流水线 */
+export async function mergeResume(id: string): Promise<Delivery> {
+  return json(
+    await fetch(`/api/deliveries/${id}/merge/resume`, { method: 'POST' }),
+  )
 }
 export async function rejectGate(id: string, reason: string): Promise<Delivery> {
   return json(

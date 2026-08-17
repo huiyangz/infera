@@ -18,6 +18,12 @@ export function StatusBadge({
         进行中
       </Badge>
     )
+  if (status === 'queued')
+    return (
+      <Badge variant='outline' className={className ?? ''}>
+        未启动
+      </Badge>
+    )
   if (status === 'blocked')
     return (
       <Badge

@@ -1,4 +1,4 @@
-export type DeliveryStatus = 'active' | 'completed' | 'blocked'
+export type DeliveryStatus = 'active' | 'completed' | 'blocked' | 'queued'
 
 export interface Delivery {
   id: string
@@ -11,6 +11,21 @@ export interface Delivery {
   fail_count: number
   created_at: string
   updated_at: string
+  /** 拆分子需求指向父 delivery；父/普通需求为空串 */
+  parent_id: string
+  /** 拆分批次号 1..N（父/普通需求为 0） */
+  wave: number
+  /** 父在规格审批选择了拆分 */
+  split_mode: boolean
+  /** 父合并状态：'' | 'conflict' */
+  merge_state: '' | 'conflict'
+}
+
+/** 规格审批时的拆分子需求条目 */
+export interface ChildSpec {
+  title: string
+  description: string
+  wave: number
 }
 
 export interface ProjectStats {
@@ -52,6 +67,8 @@ export interface DeliveryDetail {
   delivery: Delivery
   timeline: TimelineEvent[]
   artifacts: Artifact[]
+  /** 拆分父的子需求列表（仅 split 父返回） */
+  children?: Delivery[]
 }
 
 export const STAGES = [
@@ -104,4 +121,6 @@ export interface GateInfo {
   gate: string
   agent_output: { agent?: string; output?: string } | null
   pr_url: string
+  /** spec_approval：AI 从 spec 推荐的拆分方案（无建议为 null） */
+  split_plan: ChildSpec[] | null
 }

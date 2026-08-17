@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { GitBranch, Inbox, Plus } from 'lucide-react'
+import { ChevronDown, ChevronRight, GitBranch, Inbox, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   createDelivery,
@@ -40,6 +40,8 @@ export function ProjectDetail({
     queryFn: () => listProjectDeliveries(projectId),
   })
   const [title, setTitle] = useState('')
+  // 拆分父子树的折叠态（per-parent，默认展开）
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   const create = useMutation({
     mutationFn: () => createDelivery(projectId, { title }),
@@ -142,22 +144,58 @@ export function ProjectDetail({
                 </p>
               </div>
             ) : (
-              deliveries.map((d) => (
-                <DeliveryRow
-                  key={d.id}
-                  d={d}
-                  active={d.id === effectiveId}
-                  onSelect={() =>
-                    navigate({
-                      to: '/projects/$id',
-                      params: { id: projectId },
-                      search: {
-                        d: d.id === effectiveId ? undefined : d.id,
-                      },
-                    })
-                  }
-                />
-              ))
+              (() => {
+                const parents = deliveries.filter((d) => !d.parent_id)
+                const childrenOf = (pid: string) =>
+                  deliveries.filter((d) => d.parent_id === pid)
+                const select = (id: string) =>
+                  navigate({
+                    to: '/projects/$id',
+                    params: { id: projectId },
+                    search: { d: id === effectiveId ? undefined : id },
+                  })
+                return parents.map((p) => {
+                  const kids = childrenOf(p.id)
+                  const isCollapsed = collapsed.has(p.id)
+                  return (
+                    <div key={p.id}>
+                      <DeliveryRow
+                        d={p}
+                        active={p.id === effectiveId}
+                        onSelect={select}
+                        childrenDone={
+                          kids.length
+                            ? `${kids.filter((c) => c.status === 'completed').length}/${kids.length}`
+                            : undefined
+                        }
+                        conflict={p.split_mode && p.merge_state === 'conflict'}
+                        expandable={kids.length > 0}
+                        expanded={!isCollapsed}
+                        onToggleExpand={
+                          kids.length
+                            ? () =>
+                                setCollapsed((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(p.id)) next.delete(p.id)
+                                  else next.add(p.id)
+                                  return next
+                                })
+                            : undefined
+                        }
+                      />
+                      {kids.length > 0 && !isCollapsed &&
+                        kids.map((c) => (
+                          <ChildDeliveryRow
+                            key={c.id}
+                            d={c}
+                            active={c.id === effectiveId}
+                            onSelect={select}
+                          />
+                        ))}
+                    </div>
+                  )
+                })
+              })()
             )}
           </div>
         </aside>
@@ -182,17 +220,100 @@ function DeliveryRow({
   d,
   active,
   onSelect,
+  childrenDone,
+  conflict,
+  expandable,
+  expanded,
+  onToggleExpand,
 }: {
   d: Delivery
   active: boolean
-  onSelect: () => void
+  onSelect: (id: string) => void
+  /** 拆分父：「已完成子需求/全部子需求」 */
+  childrenDone?: string
+  conflict?: boolean
+  expandable?: boolean
+  expanded?: boolean
+  onToggleExpand?: () => void
+}) {
+  return (
+    <div
+      className={cn(
+        'relative block w-full border-b transition-colors',
+        active ? 'bg-accent' : 'hover:bg-accent/50',
+      )}
+    >
+      {active && (
+        <span className='absolute inset-y-0 start-0 w-0.5 bg-foreground' />
+      )}
+      <div className='flex items-start'>
+        {expandable ? (
+          <button
+            type='button'
+            aria-label={expanded ? '收起子需求' : '展开子需求'}
+            className='flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground'
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleExpand?.()
+            }}
+          >
+            {expanded ? (
+              <ChevronDown className='size-3.5' />
+            ) : (
+              <ChevronRight className='size-3.5' />
+            )}
+          </button>
+        ) : (
+          <span className='w-7 shrink-0' />
+        )}
+        <button
+          type='button'
+          onClick={() => onSelect(d.id)}
+          className='min-w-0 flex-1 py-2.5 pe-4 text-start'
+        >
+          <span className='flex items-center justify-between gap-2'>
+            <span className='truncate text-sm font-medium'>{d.title}</span>
+            <StatusBadge status={d.status} />
+          </span>
+          <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
+            <span>{stageLabel(d.current_stage)}</span>
+            {childrenDone && <span>· 子需求 {childrenDone} 完成</span>}
+            <span className='ms-auto tabular-nums'>{timeAgo(d.updated_at)}</span>
+          </span>
+          <span className='mt-1.5 flex items-center gap-1.5'>
+            {d.pending_gate && (
+              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
+                待审批
+              </span>
+            )}
+            {conflict && (
+              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
+                合并冲突
+              </span>
+            )}
+          </span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** 子需求行：缩进 + 「子」chip，样式更轻。 */
+function ChildDeliveryRow({
+  d,
+  active,
+  onSelect,
+}: {
+  d: Delivery
+  active: boolean
+  onSelect: (id: string) => void
 }) {
   return (
     <button
       type='button'
-      onClick={onSelect}
+      onClick={() => onSelect(d.id)}
       className={cn(
-        'relative block w-full border-b px-4 py-2.5 text-start transition-colors last:border-b-0',
+        'relative block w-full border-b px-4 py-2 pl-10 text-start transition-colors',
         active ? 'bg-accent' : 'hover:bg-accent/50',
       )}
     >
@@ -200,18 +321,20 @@ function DeliveryRow({
         <span className='absolute inset-y-0 start-0 w-0.5 bg-foreground' />
       )}
       <span className='flex items-center justify-between gap-2'>
-        <span className='truncate text-sm font-medium'>{d.title}</span>
+        <span className='flex min-w-0 items-center gap-1.5'>
+          <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
+            子
+          </span>
+          <span className='truncate text-xs font-medium'>{d.title}</span>
+        </span>
         <StatusBadge status={d.status} />
       </span>
-      <span className='mt-1 flex items-center justify-between text-xs text-muted-foreground'>
-        <span>{stageLabel(d.current_stage)}</span>
+      <span className='mt-1 flex items-center justify-between text-[11px] text-muted-foreground'>
+        <span>
+          批次 {d.wave || 1} · {stageLabel(d.current_stage)}
+        </span>
         <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
       </span>
-      {d.pending_gate && (
-        <span className='mt-1.5 inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
-          待审批
-        </span>
-      )}
     </button>
   )
 }
