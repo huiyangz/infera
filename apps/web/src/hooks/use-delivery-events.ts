@@ -37,6 +37,9 @@ export function useDeliveryEvents(deliveryId: string) {
       ws.onmessage = () => {
         qc.invalidateQueries({ queryKey: ['delivery', deliveryId] })
         qc.invalidateQueries({ queryKey: ['gate', deliveryId] })
+        // 主从布局：左侧列表与项目卡片统计也要跟着刷新
+        qc.invalidateQueries({ queryKey: ['project-deliveries'] })
+        qc.invalidateQueries({ queryKey: ['projects'] })
       }
       // onerror 与随后的 onclose 都可能触发：先清旧定时器，保证同时只有一个重连在排队。
       const scheduleReconnect = () => {

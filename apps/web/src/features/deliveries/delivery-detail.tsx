@@ -90,7 +90,13 @@ const STAGE_STATUS_TEXT: Record<StageState, string> = {
   failed: '已阻塞',
 }
 
-export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
+export function DeliveryDetail({
+  deliveryId,
+  embedded = false,
+}: {
+  deliveryId: string
+  embedded?: boolean
+}) {
   useDeliveryEvents(deliveryId)
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
@@ -99,16 +105,10 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
 
   if (isLoading || !data)
     return (
-      <>
-        <Header fixed>
-          <Skeleton className='h-4 w-16' />
-          <Skeleton className='mt-2 h-8 w-64' />
-        </Header>
-        <div className='mx-auto max-w-4xl space-y-6 p-6'>
-          <Skeleton className='h-36 w-full rounded-xl' />
-          <Skeleton className='h-72 w-full rounded-xl' />
-        </div>
-      </>
+      <div className='mx-auto max-w-4xl space-y-6 p-6'>
+        <Skeleton className='h-36 w-full rounded-xl' />
+        <Skeleton className='h-72 w-full rounded-xl' />
+      </div>
     )
 
   const { delivery, timeline, artifacts } = data
@@ -122,34 +122,56 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
     .reverse()
     .find((a) => a.stage === 'code_review' && a.kind === 'diff')
 
+  const titleBlock = (
+    <div className='flex w-full items-start justify-between gap-4'>
+      <div className='min-w-0'>
+        <h1 className='truncate text-lg font-semibold tracking-[-0.2px]'>
+          {delivery.title}
+        </h1>
+        <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
+          {delivery.description || '（无补充描述）'}
+        </p>
+      </div>
+      <StatusBadge
+        status={delivery.status}
+        className='mt-1 shrink-0 px-3 py-1 text-sm'
+      />
+    </div>
+  )
+
   return (
     <>
-      <Header fixed>
-        <div className='flex w-full items-start justify-between gap-4'>
-          <div className='min-w-0'>
-            <div className='flex items-center gap-1 text-sm text-muted-foreground'>
-              <ChevronLeft className='size-4' />
-              <Link
-                to='/projects/$id'
-                params={{ id: delivery.project_id }}
-                className='hover:text-foreground'
-              >
-                返回项目
-              </Link>
+      {embedded ? (
+        <div className='border-b px-6 pb-4 pt-5'>{titleBlock}</div>
+      ) : (
+        <Header fixed>
+          <div className='flex w-full items-start justify-between gap-4'>
+            <div className='min-w-0'>
+              <div className='flex items-center gap-1 text-sm text-muted-foreground'>
+                <ChevronLeft className='size-4' />
+                <Link
+                  to='/projects/$id'
+                  params={{ id: delivery.project_id }}
+                  search={{ d: deliveryId }}
+                  className='hover:text-foreground'
+                >
+                  返回项目
+                </Link>
+              </div>
+              <h1 className='mt-1 truncate text-lg font-semibold tracking-[-0.2px]'>
+                {delivery.title}
+              </h1>
+              <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
+                {delivery.description || '（无补充描述）'}
+              </p>
             </div>
-            <h1 className='mt-1 truncate text-lg font-semibold tracking-[-0.2px]'>
-              {delivery.title}
-            </h1>
-            <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
-              {delivery.description || '（无补充描述）'}
-            </p>
+            <StatusBadge
+              status={delivery.status}
+              className='mt-1 shrink-0 px-3 py-1 text-sm'
+            />
           </div>
-          <StatusBadge
-            status={delivery.status}
-            className='mt-1 shrink-0 px-3 py-1 text-sm'
-          />
-        </div>
-      </Header>
+        </Header>
+      )}
 
       <div className='mx-auto max-w-4xl space-y-6 p-6'>
         {/* 阶段推进 */}

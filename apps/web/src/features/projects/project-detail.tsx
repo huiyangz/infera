@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { GitBranch, Inbox, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -8,25 +8,28 @@ import {
   getProject,
   listProjectDeliveries,
 } from '@/lib/infera-api'
-import { stageLabel } from '@/lib/infera-types'
+import { type Delivery, stageLabel } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
+import { DeliveryDetail } from '@/features/deliveries/delivery-detail'
+import { StatusBadge } from '@/components/status-badge'
+import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { Header } from '@/components/layout/header'
-import { StatusBadge } from '@/components/status-badge'
 
-export function ProjectDetail({ projectId }: { projectId: string }) {
+/**
+ * 项目详情 = 主从布局：左侧本项目需求列表（可选中），右侧选中需求详情。
+ * 选中态走 URL search param（?d=），可分享、可后退；移动端只显示一栏。
+ */
+export function ProjectDetail({
+  projectId,
+  selectedDeliveryId,
+}: {
+  projectId: string
+  selectedDeliveryId?: string
+}) {
+  const navigate = useNavigate()
   const qc = useQueryClient()
   const { data: proj } = useQuery({
     queryKey: ['project', projectId],
@@ -40,14 +43,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 
   const create = useMutation({
     mutationFn: () => createDelivery(projectId, { title }),
-    onSuccess: () => {
+    onSuccess: (d) => {
       setTitle('')
       toast.success('需求已提交，流水线即将启动')
       qc.invalidateQueries({ queryKey: ['project-deliveries', projectId] })
+      navigate({ to: '/projects/$id', params: { id: projectId }, search: { d: d.id } })
     },
     onError: (e: Error) => toast.error(e.message),
   })
 
+  // URL 未指定时默认选中第一条（仅影响渲染，不写 URL）
+  const effectiveId = selectedDeliveryId ?? deliveries?.[0]?.id
   const waiting = deliveries?.filter((d) => d.pending_gate).length ?? 0
 
   return (
@@ -95,88 +101,111 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
       </Header>
 
-      <div className='p-6'>
-        <Card>
-          <CardContent className='p-0'>
+      <div className='flex h-[calc(100svh-4rem)] p-4 pt-16'>
+        {/* 左：需求列表 */}
+        <div
+          className={cn(
+            'flex w-80 shrink-0 flex-col overflow-hidden rounded-xl border bg-card',
+            effectiveId && 'max-lg:hidden',
+          )}
+        >
+          <div className='flex items-center justify-between border-b px-4 py-3'>
+            <span className='text-sm font-medium'>
+              需求
+              {deliveries?.length ? (
+                <span className='ml-1.5 text-muted-foreground'>
+                  {deliveries.length}
+                </span>
+              ) : null}
+            </span>
+            {waiting > 0 && (
+              <span className='text-xs text-foreground'>{waiting} 个待审批</span>
+            )}
+          </div>
+          <div className='flex-1 overflow-y-auto'>
             {isLoading ? (
-              <div className='space-y-2 p-6'>
-                <Skeleton className='h-10 w-full' />
-                <Skeleton className='h-10 w-full' />
+              <div className='space-y-2 p-3'>
+                <Skeleton className='h-14 w-full' />
+                <Skeleton className='h-14 w-full' />
               </div>
             ) : !deliveries?.length ? (
-              <div className='flex flex-col items-center gap-3 p-16 text-center'>
-                <div className='flex size-12 items-center justify-center rounded-full bg-muted'>
-                  <Inbox className='size-6 text-muted-foreground' />
-                </div>
-                <div>
-                  <p className='font-medium'>还没有需求</p>
-                  <p className='mt-1 text-sm text-muted-foreground'>
-                    在右上角输入一句话需求，流水线会自动接管
-                  </p>
-                </div>
+              <div className='flex flex-col items-center gap-2 p-8 text-center'>
+                <Inbox className='size-5 text-muted-foreground' />
+                <p className='text-sm text-muted-foreground'>
+                  还没有需求，右上角输入一句话提交
+                </p>
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>需求</TableHead>
-                    <TableHead>当前阶段</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead className='text-right'>
-                      {waiting > 0 ? (
-                        <span className='text-foreground'>
-                          {waiting} 个待审批
-                        </span>
-                      ) : (
-                        '更新时间'
-                      )}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {deliveries.map((d) => (
-                    <TableRow key={d.id} className='relative cursor-pointer'>
-                      <TableCell className='font-medium'>
-                        <Link
-                          to='/deliveries/$id'
-                          params={{ id: d.id }}
-                          className='after:absolute after:inset-0'
-                        >
-                          {d.title}
-                        </Link>
-                        {d.pending_gate ? (
-                          <Badge className='relative z-10 ml-2'>
-                            <Link
-                              to='/deliveries/$id/gate'
-                              params={{ id: d.id }}
-                              className='after:absolute after:inset-0'
-                            >
-                              待审批
-                            </Link>
-                          </Badge>
-                        ) : d.fail_count > 0 ? (
-                          <span className='ml-2 align-middle text-xs text-muted-foreground'>
-                            回环 {d.fail_count} 次
-                          </span>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className='text-sm text-muted-foreground'>
-                        {stageLabel(d.current_stage)}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={d.status} />
-                      </TableCell>
-                      <TableCell className='text-right text-xs text-muted-foreground tabular-nums'>
-                        {timeAgo(d.updated_at)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              deliveries.map((d) => (
+                <DeliveryRow
+                  key={d.id}
+                  d={d}
+                  active={d.id === effectiveId}
+                  onSelect={() =>
+                    navigate({
+                      to: '/projects/$id',
+                      params: { id: projectId },
+                      search: {
+                        d: d.id === effectiveId ? undefined : d.id,
+                      },
+                    })
+                  }
+                />
+              ))
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+
+        {/* 右：详情面板 */}
+        <div
+          className={cn(
+            'ml-4 min-w-0 flex-1 overflow-y-auto rounded-xl border bg-card',
+            !effectiveId && 'max-lg:hidden',
+          )}
+        >
+          {effectiveId ? (
+            <DeliveryDetail deliveryId={effectiveId} embedded />
+          ) : null}
+        </div>
       </div>
     </>
+  )
+}
+
+function DeliveryRow({
+  d,
+  active,
+  onSelect,
+}: {
+  d: Delivery
+  active: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type='button'
+      onClick={onSelect}
+      className={cn(
+        'relative block w-full border-b px-4 py-3 text-start transition-colors last:border-b-0',
+        active ? 'bg-accent' : 'hover:bg-accent/50',
+      )}
+    >
+      {active && (
+        <span className='absolute inset-y-0 start-0 w-0.5 bg-foreground' />
+      )}
+      <span className='flex items-center justify-between gap-2'>
+        <span className='truncate text-sm font-medium'>{d.title}</span>
+        <StatusBadge status={d.status} />
+      </span>
+      <span className='mt-1 flex items-center justify-between text-xs text-muted-foreground'>
+        <span>{stageLabel(d.current_stage)}</span>
+        <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
+      </span>
+      {d.pending_gate && (
+        <span className='mt-1.5 inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
+          待审批
+        </span>
+      )}
+    </button>
   )
 }
