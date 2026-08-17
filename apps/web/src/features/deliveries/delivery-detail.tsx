@@ -332,7 +332,11 @@ export function DeliveryDetail({
                         <div
                           className={
                             'h-px flex-1 ' +
-                            (state === 'done' ? 'bg-primary' : 'bg-border')
+                            (state === 'done'
+                              ? 'bg-primary'
+                              : state === 'skipped'
+                                ? 'bg-input'
+                                : 'bg-border')
                           }
                         />
                       )}
