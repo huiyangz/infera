@@ -101,7 +101,7 @@ export function ProjectDetail({
         </div>
       </Header>
 
-      <div className='flex h-svh pt-16'>
+      <div className='flex h-[calc(100svh-4rem)]'>
         {/* 左：需求列表（通栏，hairline 分隔，不做卡片盒） */}
         <aside
           className={cn(
