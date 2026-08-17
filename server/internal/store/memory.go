@@ -17,6 +17,8 @@ type Memory struct {
 	events     map[string][]*Event
 	artifacts  map[string][]*Artifact
 	stageRuns  map[string][]*StageRun
+	agents     map[string]*Agent
+	bindings   map[string]*PipelineBinding // key: projectID + "\x00" + node
 }
 
 func NewMemory() *Memory {
@@ -26,6 +28,8 @@ func NewMemory() *Memory {
 		events:     map[string][]*Event{},
 		artifacts:  map[string][]*Artifact{},
 		stageRuns:  map[string][]*StageRun{},
+		agents:     map[string]*Agent{},
+		bindings:   map[string]*PipelineBinding{},
 	}
 }
 
@@ -300,3 +304,140 @@ func (m *Memory) LatestStageRun(ctx context.Context, deliveryID, stage string) (
 
 // compile-time check
 var _ Store = (*Memory)(nil)
+
+// agents / pipeline bindings
+
+func (m *Memory) CreateAgent(_ context.Context, a *Agent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ex := range m.agents {
+		if ex.Name == a.Name {
+			return ErrConflict
+		}
+	}
+	if a.ID == "" {
+		a.ID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	a.CreatedAt = now
+	a.UpdatedAt = now
+	if a.Config == nil {
+		a.Config = map[string]any{}
+	}
+	cp := *a
+	m.agents[cp.ID] = &cp
+	return nil
+}
+
+func (m *Memory) ListAgents(_ context.Context) ([]Agent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Agent, 0, len(m.agents))
+	for _, a := range m.agents {
+		out = append(out, *a)
+	}
+	slices.SortFunc(out, func(a, b Agent) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out, nil
+}
+
+func (m *Memory) GetAgent(_ context.Context, id string) (*Agent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.agents[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *a
+	return &cp, nil
+}
+
+func (m *Memory) UpdateAgent(_ context.Context, a *Agent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ex, ok := m.agents[a.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	for id, other := range m.agents {
+		if id != a.ID && other.Name == a.Name {
+			return ErrConflict
+		}
+	}
+	if a.Config == nil {
+		a.Config = map[string]any{}
+	}
+	ex.Name = a.Name
+	ex.Runner = a.Runner
+	ex.Config = a.Config
+	ex.UpdatedAt = time.Now().UTC()
+	a.CreatedAt = ex.CreatedAt
+	a.UpdatedAt = ex.UpdatedAt
+	return nil
+}
+
+func (m *Memory) DeleteAgent(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.agents[id]; !ok {
+		return ErrNotFound
+	}
+	for _, b := range m.bindings {
+		if b.AgentID == id {
+			return ErrConflict
+		}
+	}
+	delete(m.agents, id)
+	return nil
+}
+
+func bindingKey(projectID, node string) string { return projectID + "\x00" + node }
+
+func (m *Memory) UpsertBinding(_ context.Context, b *PipelineBinding) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.agents[b.AgentID]; !ok {
+		return ErrNotFound
+	}
+	if b.ProjectID != "" {
+		if _, ok := m.projects[b.ProjectID]; !ok {
+			return ErrNotFound
+		}
+	}
+	key := bindingKey(b.ProjectID, b.Node)
+	if ex, ok := m.bindings[key]; ok {
+		ex.AgentID = b.AgentID
+		b.ID = ex.ID
+		b.CreatedAt = ex.CreatedAt
+		return nil
+	}
+	if b.ID == "" {
+		b.ID = uuid.NewString()
+	}
+	b.CreatedAt = time.Now().UTC()
+	cp := *b
+	m.bindings[key] = &cp
+	return nil
+}
+
+func (m *Memory) DeleteBinding(_ context.Context, projectID, node string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.bindings[bindingKey(projectID, node)]; !ok {
+		return ErrNotFound
+	}
+	delete(m.bindings, bindingKey(projectID, node))
+	return nil
+}
+
+func (m *Memory) ListBindings(_ context.Context, projectID string) ([]PipelineBinding, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PipelineBinding, 0)
+	for _, b := range m.bindings {
+		if b.ProjectID == projectID {
+			out = append(out, *b)
+		}
+	}
+	slices.SortFunc(out, func(a, b PipelineBinding) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out, nil
+}

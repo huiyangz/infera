@@ -43,7 +43,7 @@ func TestGreenfieldHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
 
 	st := store.NewPg(pool)
@@ -152,7 +152,7 @@ func TestUnitTestLoopRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
 	st := store.NewPg(pool)
 
@@ -227,7 +227,7 @@ func TestRepoBackedPushesBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
 	st := store.NewPg(pool)
 
@@ -464,7 +464,7 @@ func TestSplitFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 
@@ -612,7 +612,7 @@ func TestSplitConflictResumeE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 

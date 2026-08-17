@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,6 +26,17 @@ func mapErr(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// isUnique / isFKViolation 识别 PG 约束冲突（23505 唯一 / 23503 外键）。
+func isUnique(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func isFKViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
 const (
@@ -349,4 +361,162 @@ func (pg *Pg) LatestStageRun(ctx context.Context, deliveryID, stage string) (*St
 	return scanStageRun(pg.pool.QueryRow(ctx,
 		`SELECT `+stageRunCols+` FROM stage_runs WHERE delivery_id=$1 AND stage=$2 ORDER BY started_at DESC LIMIT 1`,
 		deliveryID, stage))
+}
+
+// agents / pipeline bindings
+
+const agentCols = "id,name,runner,config,created_at,updated_at"
+
+func scanAgent(row pgx.Row) (*Agent, error) {
+	a := &Agent{}
+	if err := row.Scan(&a.ID, &a.Name, &a.Runner, &a.Config, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		return nil, mapErr(err)
+	}
+	if a.Config == nil {
+		a.Config = map[string]any{}
+	}
+	return a, nil
+}
+
+func (pg *Pg) CreateAgent(ctx context.Context, a *Agent) error {
+	if a.ID == "" {
+		a.ID = uuid.NewString()
+	}
+	cfg := a.Config
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	_, err := pg.pool.Exec(ctx,
+		`INSERT INTO agents (id,name,runner,config) VALUES ($1,$2,$3,$4)`,
+		a.ID, a.Name, a.Runner, cfg)
+	if isUnique(err) {
+		return ErrConflict
+	}
+	if err != nil {
+		return err
+	}
+	got, err := pg.GetAgent(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	*a = *got
+	return nil
+}
+
+func (pg *Pg) ListAgents(ctx context.Context) ([]Agent, error) {
+	rows, err := pg.pool.Query(ctx, `SELECT `+agentCols+` FROM agents ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Agent, 0)
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
+}
+
+func (pg *Pg) GetAgent(ctx context.Context, id string) (*Agent, error) {
+	return scanAgent(pg.pool.QueryRow(ctx, `SELECT `+agentCols+` FROM agents WHERE id=$1`, id))
+}
+
+func (pg *Pg) UpdateAgent(ctx context.Context, a *Agent) error {
+	cfg := a.Config
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	err := pg.pool.QueryRow(ctx,
+		`UPDATE agents SET name=$2,runner=$3,config=$4,updated_at=now() WHERE id=$1 RETURNING updated_at`,
+		a.ID, a.Name, a.Runner, cfg).Scan(&a.UpdatedAt)
+	if isUnique(err) {
+		return ErrConflict
+	}
+	return mapErr(err)
+}
+
+func (pg *Pg) DeleteAgent(ctx context.Context, id string) error {
+	tag, err := pg.pool.Exec(ctx, `DELETE FROM agents WHERE id=$1`, id)
+	if err != nil {
+		if isFKViolation(err) { // 仍被 pipeline_bindings 引用（理论上行级锁竞态下出现）
+			return ErrConflict
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpsertBinding 按 (project,node) 幂等覆盖。project_id 空串 = 全局默认。
+// 部分唯一索引的 NULL 语义使两条 ON CONFLICT 分支必须分开写。
+func (pg *Pg) UpsertBinding(ctx context.Context, b *PipelineBinding) error {
+	if b.ID == "" {
+		b.ID = uuid.NewString()
+	}
+	var err error
+	if b.ProjectID == "" {
+		_, err = pg.pool.Exec(ctx,
+			`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,NULL,$2,$3)
+			 ON CONFLICT (node) WHERE project_id IS NULL DO UPDATE SET agent_id=EXCLUDED.agent_id`,
+			b.ID, b.Node, b.AgentID)
+	} else {
+		_, err = pg.pool.Exec(ctx,
+			`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,$2,$3,$4)
+			 ON CONFLICT (project_id,node) WHERE project_id IS NOT NULL DO UPDATE SET agent_id=EXCLUDED.agent_id`,
+			b.ID, b.ProjectID, b.Node, b.AgentID)
+	}
+	if isFKViolation(err) { // agent_id / project_id 不存在
+		return ErrNotFound
+	}
+	return err
+}
+
+func (pg *Pg) DeleteBinding(ctx context.Context, projectID, node string) error {
+	var tag pgconn.CommandTag
+	var err error
+	if projectID == "" {
+		tag, err = pg.pool.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id IS NULL AND node=$1`, node)
+	} else {
+		tag, err = pg.pool.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1 AND node=$2`, projectID, node)
+	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListBindings：projectID 空串 = 全局默认，否则该项目的覆盖绑定。
+func (pg *Pg) ListBindings(ctx context.Context, projectID string) ([]PipelineBinding, error) {
+	var q string
+	var args []any
+	if projectID == "" {
+		q = `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings WHERE project_id IS NULL ORDER BY created_at`
+	} else {
+		q = `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings WHERE project_id=$1 ORDER BY created_at`
+		args = append(args, projectID)
+	}
+	rows, err := pg.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PipelineBinding, 0)
+	for rows.Next() {
+		var b PipelineBinding
+		var pid sql.NullString
+		if err := rows.Scan(&b.ID, &pid, &b.Node, &b.AgentID, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		b.ProjectID = pid.String
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

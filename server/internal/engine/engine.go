@@ -10,6 +10,7 @@ import (
 
 	"github.com/tokfinity/infera/internal/agent"
 	"github.com/tokfinity/infera/internal/git"
+	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 )
@@ -61,6 +62,12 @@ type Engine struct {
 
 	// Notify 可选：事件发生时回调（WS 推送，main 组装注入）。
 	Notify func(deliveryID, stage, eventType string)
+
+	// ResolveRunner 可选：按项目+节点解析执行器（agent 编排绑定）。
+	// 未设置 / 返回 (nil,nil) → 回退构造时的 ar（向后兼容）；
+	// 返回 ErrLocalRunner → 本机交互占位：停车在该节点（local_stage_pending 事件）；
+	// 其余错误（绑定缺失等）→ stage_failed + blocked。
+	ResolveRunner func(ctx context.Context, projectID, node string) (agent.Runner, error)
 }
 
 func New(st store.Store, ar agent.Runner, ws Workspace, tr TestRunner) *Engine {
@@ -242,8 +249,35 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 	}
 }
 
+// runnerFor 按项目+节点解析执行器：ResolveRunner 未设置/返回 (nil,nil) 时回退构造时的 ar。
+func (e *Engine) runnerFor(ctx context.Context, d *store.Delivery, node string) (agent.Runner, error) {
+	if e.ResolveRunner == nil {
+		return e.ar, nil
+	}
+	r, err := e.ResolveRunner(ctx, d.ProjectID, node)
+	if err != nil || r != nil {
+		return r, err
+	}
+	return e.ar, nil
+}
+
 // stepAgent 跑一个 agent 节点：带 spec + 上一轮反馈组 prompt、存产物、走 Next。
+// 节点绑定为 local runner（本机交互占位）时不跑 agent：停车发 local_stage_pending。
 func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun) error {
+	ar, err := e.runnerFor(ctx, d, node.Stage)
+	if err != nil {
+		// 绑定缺失 / agent 未知 → blocked（数据面错误，重试无意义）
+		if !errors.Is(err, orchestration.ErrLocalRunner) {
+			e.finishStageRun(ctx, run.ID, "failed")
+			e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
+			return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+		}
+		// local 占位：交付停在当前节点等本机交互（批 B 实装通道）。
+		// 每次重驱动都会再发一次事件（无去重守卫）——可接受，前端幂等展示。
+		e.finishStageRun(ctx, run.ID, "done")
+		e.emit(ctx, d, node.Stage, "local_stage_pending", map[string]string{"node": node.Stage})
+		return errStop
+	}
 	spec, err := e.latestSpec(ctx, d.ID)
 	if err != nil {
 		return err
@@ -252,7 +286,7 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 	if err != nil {
 		return err
 	}
-	res, err := e.ar.Run(ctx, agent.Request{
+	res, err := ar.Run(ctx, agent.Request{
 		Role:    node.Stage,
 		Prompt:  agent.BuildPrompt(node.Stage, d.Description, spec, feedback),
 		Workdir: e.ws.Path(d.ID),
@@ -324,12 +358,24 @@ func (e *Engine) persistAtGate(ctx context.Context, d *store.Delivery, node Node
 
 // stepGateReview 跑门禁的前置 agent（预审），产出 agent_output artifact 供门禁展示。
 // 只预审不推进——推进由人工 Approve 决定。
+// 审查节点绑定为 local runner（本机交互占位）时跳过预审：门禁照常挂起等人工。
 func (e *Engine) stepGateReview(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun) error {
+	ar, err := e.runnerFor(ctx, d, node.ReviewRole)
+	if err != nil {
+		if !errors.Is(err, orchestration.ErrLocalRunner) {
+			e.finishStageRun(ctx, run.ID, "failed")
+			e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
+			return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+		}
+		e.finishStageRun(ctx, run.ID, "done")
+		e.emit(ctx, d, node.Stage, "local_stage_pending", map[string]string{"node": node.ReviewRole})
+		return nil
+	}
 	spec, err := e.latestSpec(ctx, d.ID)
 	if err != nil {
 		return err
 	}
-	res, err := e.ar.Run(ctx, agent.Request{
+	res, err := ar.Run(ctx, agent.Request{
 		Role:    node.ReviewRole,
 		Prompt:  agent.BuildPrompt(node.ReviewRole, d.Description, spec, ""),
 		Workdir: e.ws.Path(d.ID),

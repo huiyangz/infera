@@ -24,7 +24,7 @@ func testPool(t *testing.T) *Pg {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
 	return NewPg(pool)
 }
 

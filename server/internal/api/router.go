@@ -76,6 +76,14 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)
 		r.Post("/api/deliveries/{id}/reject", s.handleReject)
 		r.Post("/api/deliveries/{id}/merge/resume", s.handleMergeResume)
+		r.Get("/api/agents", s.listAgents)
+		r.Post("/api/agents", s.createAgent)
+		r.Patch("/api/agents/{id}", s.patchAgent)
+		r.Delete("/api/agents/{id}", s.deleteAgent)
+		r.Get("/api/pipeline", s.getPipeline)
+		r.Put("/api/pipeline", s.putPipeline)
+		r.Get("/api/projects/{id}/pipeline", s.getProjectPipeline)
+		r.Put("/api/projects/{id}/pipeline", s.putProjectPipeline)
 	})
 	return r
 }

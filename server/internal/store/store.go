@@ -66,6 +66,25 @@ type ChildSpec struct {
 	Wave        int    `json:"wave"`
 }
 
+// Agent 注册的执行者：runner 决定 config 语义（cli=command / http=url / docker=image+command / local=空）。
+type Agent struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Runner    string         `json:"runner"` // cli|http|docker|local
+	Config    map[string]any `json:"config"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+}
+
+// PipelineBinding 节点→Agent 绑定。ProjectID 空 = 全局默认，非空 = 项目覆盖。
+type PipelineBinding struct {
+	ID        string    `json:"id"`
+	ProjectID string    `json:"project_id"`
+	Node      string    `json:"node"`
+	AgentID   string    `json:"agent_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type StageRun struct {
 	ID         string     `json:"id"`
 	DeliveryID string     `json:"delivery_id"`
@@ -99,4 +118,14 @@ type Store interface {
 	StartStageRun(ctx context.Context, r *StageRun) error
 	FinishStageRun(ctx context.Context, id string, status string) error
 	LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error)
+	// agents（注册表）：name 唯一冲突 → ErrConflict；删除仍被绑定引用的 agent → ErrConflict。
+	CreateAgent(ctx context.Context, a *Agent) error
+	ListAgents(ctx context.Context) ([]Agent, error)
+	GetAgent(ctx context.Context, id string) (*Agent, error)
+	UpdateAgent(ctx context.Context, a *Agent) error
+	DeleteAgent(ctx context.Context, id string) error
+	// pipeline bindings：projectID 空 = 全局默认；UpsertBinding 按 (project,node) 幂等覆盖。
+	UpsertBinding(ctx context.Context, b *PipelineBinding) error
+	DeleteBinding(ctx context.Context, projectID, node string) error
+	ListBindings(ctx context.Context, projectID string) ([]PipelineBinding, error)
 }
