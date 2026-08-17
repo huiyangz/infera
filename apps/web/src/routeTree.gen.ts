@@ -20,6 +20,7 @@ import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as AuthenticatedProjectsIdRouteImport } from './routes/_authenticated/projects/$id'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedDeliveriesIdRouteImport } from './routes/_authenticated/deliveries/$id'
+import { Route as AuthenticatedDeliveriesIdIndexRouteImport } from './routes/_authenticated/deliveries/$id/index'
 import { Route as AuthenticatedDeliveriesIdGateRouteImport } from './routes/_authenticated/deliveries/$id/gate'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -78,6 +79,12 @@ const AuthenticatedDeliveriesIdRoute =
     path: '/deliveries/$id',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedDeliveriesIdIndexRoute =
+  AuthenticatedDeliveriesIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedDeliveriesIdRoute,
+  } as any)
 const AuthenticatedDeliveriesIdGateRoute =
   AuthenticatedDeliveriesIdGateRouteImport.update({
     id: '/gate',
@@ -97,6 +104,7 @@ export interface FileRoutesByFullPath {
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/projects/$id': typeof AuthenticatedProjectsIdRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/sign-in': typeof authSignInRoute
@@ -106,10 +114,10 @@ export interface FileRoutesByTo {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/': typeof AuthenticatedIndexRoute
-  '/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/projects/$id': typeof AuthenticatedProjectsIdRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/deliveries/$id': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -125,6 +133,7 @@ export interface FileRoutesById {
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/projects/$id': typeof AuthenticatedProjectsIdRoute
   '/_authenticated/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/_authenticated/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/errors/$error'
     | '/projects/$id'
     | '/deliveries/$id/gate'
+    | '/deliveries/$id/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/sign-in'
@@ -149,10 +159,10 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/'
-    | '/deliveries/$id'
     | '/errors/$error'
     | '/projects/$id'
     | '/deliveries/$id/gate'
+    | '/deliveries/$id'
   id:
     | '__root__'
     | '/_authenticated'
@@ -167,6 +177,7 @@ export interface FileRouteTypes {
     | '/_authenticated/errors/$error'
     | '/_authenticated/projects/$id'
     | '/_authenticated/deliveries/$id/gate'
+    | '/_authenticated/deliveries/$id/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -258,6 +269,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDeliveriesIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/deliveries/$id/': {
+      id: '/_authenticated/deliveries/$id/'
+      path: '/'
+      fullPath: '/deliveries/$id/'
+      preLoaderRoute: typeof AuthenticatedDeliveriesIdIndexRouteImport
+      parentRoute: typeof AuthenticatedDeliveriesIdRoute
+    }
     '/_authenticated/deliveries/$id/gate': {
       id: '/_authenticated/deliveries/$id/gate'
       path: '/gate'
@@ -270,11 +288,13 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedDeliveriesIdRouteChildren {
   AuthenticatedDeliveriesIdGateRoute: typeof AuthenticatedDeliveriesIdGateRoute
+  AuthenticatedDeliveriesIdIndexRoute: typeof AuthenticatedDeliveriesIdIndexRoute
 }
 
 const AuthenticatedDeliveriesIdRouteChildren: AuthenticatedDeliveriesIdRouteChildren =
   {
     AuthenticatedDeliveriesIdGateRoute: AuthenticatedDeliveriesIdGateRoute,
+    AuthenticatedDeliveriesIdIndexRoute: AuthenticatedDeliveriesIdIndexRoute,
   }
 
 const AuthenticatedDeliveriesIdRouteWithChildren =

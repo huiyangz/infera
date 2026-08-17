@@ -2,11 +2,15 @@
  * infera 后端 API 客户端（后端 :8080，dev 由 vite proxy 转发 /api）。
  */
 import type {
+  Agent,
+  BindingMap,
   ChildSpec,
   Delivery,
   DeliveryDetail,
   GateInfo,
+  PipelineInfo,
   Project,
+  ProjectPipeline,
 } from './infera-types'
 
 async function json<T>(r: Response): Promise<T> {
@@ -68,6 +72,40 @@ export async function patchProjectPinned(id: string, pinned: boolean): Promise<P
 }
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
   return json(await fetch(`/api/projects/${id}/deliveries`))
+}
+
+// —— agent 编排 ——
+export async function listAgents(): Promise<Agent[]> {
+  return json(await fetch('/api/agents'))
+}
+export async function getPipeline(): Promise<PipelineInfo> {
+  return json(await fetch('/api/pipeline'))
+}
+/** 全量替换默认绑定（必须覆盖全部可绑定节点，否则后端 400 列缺失） */
+export async function putPipeline(bindings: BindingMap): Promise<PipelineInfo> {
+  return json(
+    await fetch('/api/pipeline', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bindings }),
+    }),
+  )
+}
+export async function getProjectPipeline(id: string): Promise<ProjectPipeline> {
+  return json(await fetch(`/api/projects/${id}/pipeline`))
+}
+/** 全量替换项目覆盖；传 {} 清空全部覆盖、回退默认 */
+export async function putProjectPipeline(
+  id: string,
+  bindings: BindingMap,
+): Promise<ProjectPipeline> {
+  return json(
+    await fetch(`/api/projects/${id}/pipeline`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bindings }),
+    }),
+  )
 }
 export async function createDelivery(
   projectId: string,

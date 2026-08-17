@@ -109,11 +109,51 @@ export const STAGE_META: Record<string, { label: string; hint: string }> = {
     label: '审查与交付',
     hint: 'Reviewer Agent 预审，人工确认后开出 PR',
   },
+  // 未来 SDD 节点（本批先补 label，接入后即正确显示）
+  design: { label: '设计生成', hint: 'Design Agent 产出实现设计' },
+  design_approval: { label: '设计审批', hint: '人工门禁：确认设计后继续' },
+  tasks: { label: '任务生成', hint: 'Task Agent 拆解任务清单' },
+  tasks_approval: { label: '任务审批', hint: '人工门禁：确认任务后继续' },
 }
 
 /** 阶段名 → 中文 label；未知阶段回退原文，永不崩。 */
 export function stageLabel(s: string): string {
   return STAGE_META[s]?.label ?? s
+}
+
+// —— agent 编排 ——
+
+export type AgentRunner = 'cli' | 'http' | 'docker' | 'local'
+
+/** 注册的执行者（本批前端只读展示，CRUD 走后端/seed） */
+export interface Agent {
+  id: string
+  name: string
+  runner: AgentRunner
+  config: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+/** 节点 → agent_id 绑定表 */
+export type BindingMap = Record<string, string>
+
+/** GET /api/pipeline */
+export interface PipelineInfo {
+  nodes: string[]
+  agents: Agent[]
+  bindings: BindingMap
+}
+
+/** GET /api/projects/:id/pipeline —— effective 是 node 键的对象（后端 map 序列化） */
+export interface ProjectPipeline {
+  nodes: string[]
+  defaults: BindingMap
+  overrides: BindingMap
+  effective: Record<
+    string,
+    { node: string; agent_id: string; from: 'default' | 'project' }
+  >
 }
 
 export interface GateInfo {

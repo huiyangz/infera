@@ -1,12 +1,19 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { FolderGit2, Pin, PinOff, Plus } from 'lucide-react'
+import { FolderGit2, Pin, PinOff, Plus, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
-import { createProject, listProjects, patchProjectPinned } from '@/lib/infera-api'
-import type { Project } from '@/lib/infera-types'
+import {
+  createProject,
+  getPipeline,
+  listProjects,
+  patchProjectPinned,
+  putPipeline,
+} from '@/lib/infera-api'
+import { type BindingMap, type Project } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
+import { BindingEditor } from '@/features/pipeline/binding-editor'
 import { Header } from '@/components/layout/header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -164,6 +171,7 @@ export function ProjectsList() {
               每个项目对应一个代码仓库，需求在项目内流转交付
             </p>
           </div>
+          <DefaultOrchestrationDialog />
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size='lg'>
@@ -255,5 +263,88 @@ export function ProjectsList() {
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * 全局默认编排对话框：编辑各节点的默认执行 Agent（PUT 全量替换，
+ * 后端校验必须覆盖全部可绑定节点）。对话框底部只读展示已注册 Agent。
+ */
+function DefaultOrchestrationDialog() {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  // sel=null 表示未编辑，展示后端当前绑定；用户改动后暂存本地，保存成功即复位
+  const [sel, setSel] = useState<BindingMap | null>(null)
+
+  const { data: pipe } = useQuery({
+    queryKey: ['pipeline'],
+    queryFn: () => getPipeline(),
+    enabled: open,
+  })
+
+  const value = sel ?? pipe?.bindings ?? {}
+
+  const save = useMutation({
+    mutationFn: (bindings: BindingMap) => putPipeline(bindings),
+    onSuccess: () => {
+      toast.success('默认编排已保存')
+      setSel(null)
+      qc.invalidateQueries({ queryKey: ['pipeline'] })
+      // 各项目的生效视图可能变化
+      qc.invalidateQueries({ queryKey: ['project-pipeline'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const nodes = pipe?.nodes ?? []
+  const agents = pipe?.agents ?? []
+  const allChosen = nodes.length > 0 && nodes.every((n) => value[n])
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant='ghost' size='lg' aria-label='默认编排'>
+          <SlidersHorizontal /> 默认编排
+        </Button>
+      </DialogTrigger>
+      <DialogContent className='max-w-2xl'>
+        <DialogHeader>
+          <DialogTitle>默认编排</DialogTitle>
+          <DialogDescription>
+            各流水线节点的默认执行 Agent；项目可在自己的编排中覆盖
+          </DialogDescription>
+        </DialogHeader>
+        <BindingEditor
+          nodes={nodes}
+          agents={agents}
+          value={value}
+          onChange={setSel}
+        />
+        <DialogFooter className='sm:justify-between'>
+          <p className='text-xs text-muted-foreground'>
+            已注册 Agent
+            <span className='ml-1.5'>{agents.length}</span>
+            {agents.map((a) => (
+              <Badge
+                key={a.id}
+                variant='outline'
+                className='ms-1.5 gap-1 font-normal'
+              >
+                {a.name}
+                <span className='font-mono text-[10px] text-muted-foreground'>
+                  {a.runner}
+                </span>
+              </Badge>
+            ))}
+          </p>
+          <Button
+            disabled={save.isPending || !allChosen}
+            onClick={() => save.mutate(value)}
+          >
+            {save.isPending ? '保存中…' : '保存默认编排'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

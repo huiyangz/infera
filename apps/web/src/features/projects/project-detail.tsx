@@ -1,20 +1,44 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronDown, ChevronRight, GitBranch, Inbox, Plus } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  Inbox,
+  Plus,
+  SlidersHorizontal,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   createDelivery,
   getProject,
+  getProjectPipeline,
+  listAgents,
   listProjectDeliveries,
+  putProjectPipeline,
 } from '@/lib/infera-api'
-import { type Delivery, stageLabel } from '@/lib/infera-types'
+import {
+  type BindingMap,
+  type Delivery,
+  stageLabel,
+} from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { DeliveryDetail } from '@/features/deliveries/delivery-detail'
+import { BindingEditor } from '@/features/pipeline/binding-editor'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -79,33 +103,41 @@ export function ProjectDetail({
               {proj?.default_branch}
             </p>
           </div>
-          {proj?.repo_url ? (
-            <form
-              className='flex items-center gap-2'
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (title.trim()) create.mutate()
-              }}
-            >
-              <Input
-                className='w-64'
-                placeholder='一句话需求，回车提交…'
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-              <Button
-                type='submit'
-                size='lg'
-                disabled={!title.trim() || create.isPending}
+          <div className='flex items-center gap-2'>
+            {proj?.repo_url ? (
+              <form
+                className='flex items-center gap-2'
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (title.trim()) create.mutate()
+                }}
               >
-                <Plus /> 新建交付
-              </Button>
-            </form>
-          ) : (
-            <p className='text-sm text-muted-foreground'>
-              项目未绑定仓库，暂时不支持提交需求
-            </p>
-          )}
+                <Input
+                  className='w-64'
+                  placeholder='一句话需求，回车提交…'
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                />
+                <Button
+                  type='submit'
+                  size='lg'
+                  disabled={!title.trim() || create.isPending}
+                >
+                  <Plus /> 新建交付
+                </Button>
+              </form>
+            ) : (
+              <p className='text-sm text-muted-foreground'>
+                项目未绑定仓库，暂时不支持提交需求
+              </p>
+            )}
+            {proj && (
+              <OrchestrationDialog
+                projectId={projectId}
+                projectName={proj.name}
+              />
+            )}
+          </div>
         </div>
       </Header>
 
@@ -336,5 +368,102 @@ function ChildDeliveryRow({
         <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
       </span>
     </button>
+  )
+}
+
+/**
+ * 项目编排对话框：展示当前生效绑定（默认 + 项目覆盖），可整体另存为项目覆盖，
+ * 或「恢复默认」清空全部覆盖（PUT {}）回退全局默认。
+ */
+function OrchestrationDialog({
+  projectId,
+  projectName,
+}: {
+  projectId: string
+  projectName: string
+}) {
+  const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
+  // sel=null 表示未编辑，展示后端当前生效值；用户改动后暂存本地，保存成功即复位
+  const [sel, setSel] = useState<BindingMap | null>(null)
+
+  const { data: pipe } = useQuery({
+    queryKey: ['project-pipeline', projectId],
+    queryFn: () => getProjectPipeline(projectId),
+    enabled: open,
+  })
+  const { data: agents } = useQuery({
+    queryKey: ['agents'],
+    queryFn: () => listAgents(),
+    enabled: open,
+  })
+
+  // 当前生效值（项目覆盖 ?? 默认）
+  const effectiveMap = pipe
+    ? Object.fromEntries(
+        Object.values(pipe.effective).map((e) => [e.node, e.agent_id]),
+      )
+    : {}
+  const value = sel ?? effectiveMap
+
+  const save = useMutation({
+    mutationFn: (bindings: BindingMap) =>
+      putProjectPipeline(projectId, bindings),
+    onSuccess: (_d, bindings) => {
+      toast.success(
+        Object.keys(bindings).length ? '项目编排已保存' : '已恢复默认编排',
+      )
+      setSel(null)
+      qc.invalidateQueries({ queryKey: ['project-pipeline', projectId] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const nodes = pipe?.nodes ?? []
+  const fromMap = pipe
+    ? Object.fromEntries(
+        Object.values(pipe.effective).map((e) => [e.node, e.from]),
+      )
+    : undefined
+  const allChosen = nodes.every((n) => value[n])
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant='ghost' size='icon' aria-label='编排'>
+          <SlidersHorizontal />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className='max-w-2xl'>
+        <DialogHeader>
+          <DialogTitle>流水线编排 · {projectName}</DialogTitle>
+          <DialogDescription>
+            为本项目各节点指定执行 Agent；未保存的节点沿用全局默认
+          </DialogDescription>
+        </DialogHeader>
+        <BindingEditor
+          nodes={nodes}
+          agents={agents ?? []}
+          value={value}
+          onChange={setSel}
+          showFrom={fromMap}
+        />
+        <DialogFooter className='sm:justify-between'>
+          <Button
+            variant='ghost'
+            disabled={save.isPending}
+            onClick={() => save.mutate({})}
+          >
+            恢复默认
+          </Button>
+          <Button
+            disabled={save.isPending || !nodes.length || !allChosen}
+            onClick={() => save.mutate(value)}
+          >
+            {save.isPending ? '保存中…' : '保存项目编排'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
