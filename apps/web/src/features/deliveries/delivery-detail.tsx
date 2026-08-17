@@ -108,7 +108,7 @@ export function DeliveryDetail({
       <div
         className={
           embedded
-            ? 'mx-auto max-w-3xl space-y-6 px-8 py-6'
+            ? 'w-full space-y-6 px-8 pb-8 pt-4'
             : 'mx-auto max-w-4xl space-y-6 p-6'
         }
       >
@@ -148,9 +148,7 @@ export function DeliveryDetail({
   return (
     <>
       {embedded ? (
-        <div className='border-b px-8 pb-4 pt-6'>
-          {titleBlock}
-        </div>
+        <div className='border-b px-8 pb-3 pt-4'>{titleBlock}</div>
       ) : (
         <Header fixed>
           <div className='flex w-full items-start justify-between gap-4'>
@@ -184,7 +182,7 @@ export function DeliveryDetail({
       <div
         className={
           embedded
-            ? 'mx-auto max-w-3xl space-y-6 px-8 py-6'
+            ? 'w-full space-y-6 px-8 pb-8 pt-4'
             : 'mx-auto max-w-4xl space-y-6 p-6'
         }
       >
