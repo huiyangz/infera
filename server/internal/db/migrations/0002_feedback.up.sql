@@ -1,0 +1,2 @@
+ALTER TABLE deliveries ADD COLUMN reject_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE deliveries ADD COLUMN workspace_ready BOOLEAN NOT NULL DEFAULT FALSE;

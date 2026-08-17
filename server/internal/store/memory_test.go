@@ -39,6 +39,15 @@ func TestMemoryDeliveryAndArtifacts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, arts, 1)
 
+	// LatestArtifact：同 kind 多条取最新；缺失 kind 报 ErrNotFound。
+	require.NoError(t, m.SaveArtifact(ctx, &Artifact{DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: "S2"}))
+	require.NoError(t, m.SaveArtifact(ctx, &Artifact{DeliveryID: d.ID, Stage: "unit_test", Kind: "test_output", Content: "FAIL"}))
+	latestArt, err := m.LatestArtifact(ctx, d.ID, "spec")
+	require.NoError(t, err)
+	require.Equal(t, "S2", latestArt.Content)
+	_, err = m.LatestArtifact(ctx, d.ID, "diff")
+	require.ErrorIs(t, err, ErrNotFound)
+
 	require.NoError(t, m.AppendEvent(ctx, &Event{DeliveryID: d.ID, Stage: "spec", EventType: "stage_started", Payload: []byte(`{}`)}))
 	events, err := m.ListEvents(ctx, d.ID)
 	require.NoError(t, err)

@@ -54,10 +54,14 @@ type FakeWS struct {
 	released      bool
 }
 
-func (f *FakeWS) Acquire(_ context.Context, deliveryID, _, _ string) (string, string, error) {
+func (f *FakeWS) Acquire(_ context.Context, deliveryID, repoURL, _ string) (string, string, error) {
 	f.acquireCalled = true
 	f.acquireCount++
-	return "/tmp/infera-ws/" + deliveryID, strings.Repeat("a", 40), nil
+	base := strings.Repeat("a", 40)
+	if repoURL == "" {
+		base = "" // 绿地项目：无仓库，base 为空（与真实 workspace.Manager 一致）
+	}
+	return "/tmp/infera-ws/" + deliveryID, base, nil
 }
 
 func (f *FakeWS) Path(deliveryID string) string { return "/tmp/infera-ws/" + deliveryID }
@@ -171,25 +175,37 @@ func TestPipelineHappyPath(t *testing.T) {
 	require.Equal(t, "spec_approval", got.PendingGate)
 	require.Equal(t, StatusActive, got.Status)
 	require.Len(t, got.BaseCommit, 40)
+	require.True(t, got.WorkspaceReady)
 	require.Equal(t, []string{"spec"}, ar.roles())
 	require.Equal(t, "# 规格正文", artifactByKind(t, st, d.ID, "spec").Content)
 
-	// Approve 规格 → test_gen → code_gen → unit_test（过）→ 停在 code_review 门禁。
+	// Approve 只做门禁簿记：清 gate、推进到下一阶段，不跑 agent。
 	require.NoError(t, e.Approve(ctx, d.ID))
+	got = get(t, st, d.ID)
+	require.Equal(t, "test_gen", got.CurrentStage)
+	require.Empty(t, got.PendingGate)
+	require.Equal(t, []string{"spec"}, ar.roles()) // 无 agent 被同步驱动
+
+	// Continue：test_gen → code_gen → unit_test（过）→ code_review 前置预审 → 停门禁。
+	require.NoError(t, e.Continue(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_review", got.CurrentStage)
 	require.Equal(t, "code_review", got.PendingGate)
-	require.Equal(t, []string{"spec", "test_gen", "code_gen"}, ar.roles())
+	require.Equal(t, []string{"spec", "test_gen", "code_gen", "code_review"}, ar.roles())
 	require.Equal(t, "tests: a_test.go", artifactByKind(t, st, d.ID, "tests").Content)
 	require.Equal(t, "改了 2 个文件", artifactByKind(t, st, d.ID, "diff").Content)
 	require.NotNil(t, artifactByKind(t, st, d.ID, "test_output"))
+	// 门禁前置预审产出 agent_output artifact（门禁页有内容可审）。
+	require.Equal(t, "review ok", artifactByKind(t, st, d.ID, "agent_output").Content)
 
-	// 下游 agent 的 prompt 携带 spec，workdir 指向 workspace。
+	// 下游 agent 的 prompt 携带 spec，workdir 指向 workspace；预审 prompt 也带 spec。
 	require.Contains(t, ar.calls[1].Prompt, "# 规格正文")
 	require.Contains(t, ar.calls[2].Prompt, "# 规格正文")
+	require.Contains(t, ar.calls[3].Prompt, "# 规格正文")
 	require.Equal(t, ws.Path(d.ID), ar.calls[1].Workdir)
+	require.Equal(t, ws.Path(d.ID), ar.calls[3].Workdir)
 
-	// Approve 终审 → completed + 释放 workspace。
+	// Approve 终审（Next=DONE）→ completed + 释放 workspace。
 	require.NoError(t, e.Approve(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, StatusCompleted, got.Status)
@@ -207,12 +223,13 @@ func TestPipelineHappyPath(t *testing.T) {
 }
 
 func TestUnitTestLoopAndBlocked(t *testing.T) {
-	e, st, ws, _ := newEnv(t, failTR{})
+	e, st, ws, ar := newEnv(t, failTR{})
 	d := seed(t, st)
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID)) // test_gen → code_gen → unit_test 失败
+	require.NoError(t, e.Approve(ctx, d.ID))  // 门禁簿记 → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID)) // test_gen → code_gen → unit_test 失败
 
 	// 第 1 次失败：回环 code_gen，FailCount=1，仍 active、无门禁。
 	got := get(t, st, d.ID)
@@ -223,7 +240,10 @@ func TestUnitTestLoopAndBlocked(t *testing.T) {
 	require.Contains(t, eventTypes(t, st, d.ID), "test_failed")
 
 	// 第 2 轮：code_gen 重跑（attempt 递增）→ unit_test 再败。
+	// 重跑 prompt 带上一轮 unit_test 失败输出（反馈闭环）。
 	require.NoError(t, e.Start(ctx, d.ID))
+	require.Contains(t, ar.calls[3].Prompt, "上一轮 unit_test 未过：")
+	require.Contains(t, ar.calls[3].Prompt, "--- FAIL: TestAdd")
 	got = get(t, st, d.ID)
 	require.Equal(t, 2, got.FailCount)
 	require.Equal(t, "code_gen", got.CurrentStage)
@@ -247,33 +267,44 @@ func TestUnitTestLoopAndBlocked(t *testing.T) {
 }
 
 func TestRejectLoopsBack(t *testing.T) {
-	e, st, _, _ := newEnv(t, passTR{})
+	e, st, _, ar := newEnv(t, passTR{})
 	d := seed(t, st)
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID)) // 停在 spec_approval
 
-	// 驳回规格 → 回到 spec 重写，门禁清空。
+	// 驳回规格 → 回到 spec 重写，门禁清空，驳回意见落盘。
 	require.NoError(t, e.Reject(ctx, d.ID, "验收标准缺失"))
 	got := get(t, st, d.ID)
 	require.Equal(t, "spec", got.CurrentStage)
 	require.Empty(t, got.PendingGate)
 	require.Equal(t, StatusActive, got.Status)
+	require.Equal(t, "验收标准缺失", got.RejectReason)
 	require.Contains(t, eventTypes(t, st, d.ID), "gate_rejected")
 
-	// 重跑后再次停在规格门禁。
+	// 重跑：spec 的 prompt 带人打回意见；消费一次后 RejectReason 清空。
 	require.NoError(t, e.Start(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, "spec_approval", got.PendingGate)
+	require.Empty(t, got.RejectReason)
+	require.Contains(t, ar.calls[1].Prompt, "人打回：验收标准缺失")
 
-	// 一路放行到 code_review，驳回 → 回到 code_gen。
+	// 一路放行到 code_review，驳回 → 回到 code_gen，意见同样落盘并注入重跑 prompt。
 	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, e.Continue(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_review", got.PendingGate)
 	require.NoError(t, e.Reject(ctx, d.ID, "实现遗漏边界"))
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_gen", got.CurrentStage)
 	require.Empty(t, got.PendingGate)
+	require.Equal(t, "实现遗漏边界", got.RejectReason)
+	require.NoError(t, e.Continue(ctx, d.ID)) // code_gen 重跑（带反馈）→ unit_test 过 → code_review 门
+	got = get(t, st, d.ID)
+	require.Equal(t, "code_review", got.PendingGate)
+	require.Empty(t, got.RejectReason)
+	// calls: spec, spec(重写), test_gen, code_gen, code_review, code_gen(重跑)
+	require.Contains(t, ar.calls[5].Prompt, "人打回：实现遗漏边界")
 }
 
 func TestStartAcquiresWorkspace(t *testing.T) {
@@ -285,8 +316,9 @@ func TestStartAcquiresWorkspace(t *testing.T) {
 	require.NoError(t, e.Start(ctx, d.ID))
 	require.True(t, ws.acquireCalled)
 
-	require.NoError(t, e.Approve(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID))  // → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID)) // → code_review 门禁
+	require.NoError(t, e.Approve(ctx, d.ID))  // → DONE
 	require.True(t, ws.released)
 	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
 }
@@ -370,11 +402,15 @@ func TestStartOnCompletedDeliveryErrors(t *testing.T) {
 	// 一路放行到 completed。
 	require.NoError(t, e.Start(ctx, d.ID))
 	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, e.Continue(ctx, d.ID))
 	require.NoError(t, e.Approve(ctx, d.ID))
 	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
 
-	// 已完成的 delivery 不可再驱动："not active" 守卫报错。
+	// 已完成的 delivery 不可再驱动："not active" 守卫报错（Start 与 Continue 一致）。
 	err := e.Start(ctx, d.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not active")
+	err = e.Continue(ctx, d.ID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not active")
 }
@@ -404,7 +440,8 @@ func TestFailCountResetsOnPass(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID)) // → unit_test 失败 #1，回环 code_gen
+	require.NoError(t, e.Approve(ctx, d.ID))  // 门禁簿记 → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID)) // → unit_test 失败 #1，回环 code_gen
 	got := get(t, st, d.ID)
 	require.Equal(t, 1, got.FailCount)
 	require.Equal(t, "code_gen", got.CurrentStage)
@@ -421,4 +458,31 @@ func TestFailCountResetsOnPass(t *testing.T) {
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Equal(t, 0, got.FailCount)
 	require.Equal(t, StatusActive, got.Status)
+}
+
+// 绿地项目（无仓库）base_commit 恒为空：WorkspaceReady 标志保证
+// 反复驱动只 Acquire 一次、workspace_ready 事件只发一次。
+func TestGreenfieldWorkspaceReadyOnce(t *testing.T) {
+	e, st, ws, _ := newEnv(t, passTR{})
+	ctx := context.Background()
+	p := &store.Project{Name: "greenfield", RepoURL: "", DefaultBranch: "main"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	d := &store.Delivery{ProjectID: p.ID, Title: "绿地", Status: StatusActive, CurrentStage: "intake"}
+	require.NoError(t, st.CreateDelivery(ctx, d))
+
+	require.NoError(t, e.Start(ctx, d.ID))
+	require.Equal(t, "spec_approval", get(t, st, d.ID).PendingGate)
+	require.NoError(t, e.Reject(ctx, d.ID, "重写"))
+	require.NoError(t, e.Start(ctx, d.ID)) // 第二次完整驱动
+	require.Equal(t, "spec_approval", get(t, st, d.ID).PendingGate)
+
+	require.Equal(t, 1, ws.acquireCount)
+	require.Empty(t, get(t, st, d.ID).BaseCommit)
+	count := 0
+	for _, et := range eventTypes(t, st, d.ID) {
+		if et == "workspace_ready" {
+			count++
+		}
+	}
+	require.Equal(t, 1, count, "workspace_ready 应只发一次")
 }

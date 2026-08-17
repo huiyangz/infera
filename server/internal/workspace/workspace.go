@@ -21,9 +21,11 @@ type Manager struct {
 	bases     map[string]string // deliveryID -> base commit
 }
 
-func New(root string, retention time.Duration) *Manager {
+// New 建管理器；g 必须由调用方注入（带 GITHUB_TOKEN 的实例——token 不在本包读取，
+// main 建一次与 LsRemote/push 共享；测试传 git.New()）。
+func New(root string, g *git.Git, retention time.Duration) *Manager {
 	return &Manager{
-		root: root, g: git.New(), retention: retention,
+		root: root, g: g, retention: retention,
 		dirs: map[string]string{}, bases: map[string]string{},
 	}
 }

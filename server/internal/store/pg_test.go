@@ -58,6 +58,23 @@ func TestPgProjectAndDelivery(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, arts, 1)
 
+	// reject_reason / workspace_ready roundtrip
+	d.RejectReason, d.WorkspaceReady = "验收标准缺失", true
+	require.NoError(t, p.UpdateDelivery(ctx, d))
+	gotD, err = p.GetDelivery(ctx, d.ID)
+	require.NoError(t, err)
+	require.Equal(t, "验收标准缺失", gotD.RejectReason)
+	require.True(t, gotD.WorkspaceReady)
+
+	// LatestArtifact：同 kind 多条取最新；缺失 kind 报 ErrNotFound。
+	time.Sleep(2 * time.Millisecond) // created_at 来自 DB now()，保证严格递增
+	require.NoError(t, p.SaveArtifact(ctx, &Artifact{DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: "# spec v2"}))
+	latest, err := p.LatestArtifact(ctx, d.ID, "spec")
+	require.NoError(t, err)
+	require.Equal(t, "# spec v2", latest.Content)
+	_, err = p.LatestArtifact(ctx, d.ID, "diff")
+	require.ErrorIs(t, err, ErrNotFound)
+
 	s, err := p.ProjectStats(ctx, proj.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, s.Active)

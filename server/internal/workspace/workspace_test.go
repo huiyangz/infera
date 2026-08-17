@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/tokfinity/infera/internal/git"
 )
 
 // newBare 建一个带 1 个 commit 的本地 bare 仓库（模拟远端）。
@@ -37,7 +39,7 @@ func newBare(t *testing.T) string {
 
 func TestAcquireClonesAndRecordsBase(t *testing.T) {
 	origin := newBare(t)
-	ws := New(t.TempDir(), 30*time.Minute) // git.Git 内部创建
+	ws := New(t.TempDir(), git.New(), 30*time.Minute) // 测试注入无 token 的 git 实例
 
 	dir, base, err := ws.Acquire(context.Background(), "d1", origin, "main")
 	require.NoError(t, err)
@@ -52,7 +54,7 @@ func TestAcquireClonesAndRecordsBase(t *testing.T) {
 }
 
 func TestAcquireGreenfield(t *testing.T) {
-	ws := New(t.TempDir(), time.Hour)
+	ws := New(t.TempDir(), git.New(), time.Hour)
 	dir, base, err := ws.Acquire(context.Background(), "d2", "", "main")
 	require.NoError(t, err)
 	require.Empty(t, base) // 绿地：无仓库，base 为空
@@ -61,7 +63,7 @@ func TestAcquireGreenfield(t *testing.T) {
 }
 
 func TestAcquireCloneFailureCleansUp(t *testing.T) {
-	ws := New(t.TempDir(), time.Hour)
+	ws := New(t.TempDir(), git.New(), time.Hour)
 	_, _, err := ws.Acquire(context.Background(), "bad", filepath.Join(t.TempDir(), "nonexistent.git"), "main")
 	require.Error(t, err)
 	// 失败后不残留半成品目录，且可重试
@@ -71,7 +73,7 @@ func TestAcquireCloneFailureCleansUp(t *testing.T) {
 }
 
 func TestReleaseCleansAfterRetention(t *testing.T) {
-	ws := New(t.TempDir(), 10*time.Millisecond)
+	ws := New(t.TempDir(), git.New(), 10*time.Millisecond)
 	dir, _, err := ws.Acquire(context.Background(), "d3", newBare(t), "main")
 	require.NoError(t, err)
 	ws.Release("d3")
@@ -80,7 +82,7 @@ func TestReleaseCleansAfterRetention(t *testing.T) {
 }
 
 func TestReleaseImmediateWhenNoRetention(t *testing.T) {
-	ws := New(t.TempDir(), 0)
+	ws := New(t.TempDir(), git.New(), 0)
 	dir, _, err := ws.Acquire(context.Background(), "d4", newBare(t), "main")
 	require.NoError(t, err)
 	ws.Release("d4")

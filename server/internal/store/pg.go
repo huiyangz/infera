@@ -29,7 +29,7 @@ func mapErr(err error) error {
 
 const (
 	projectCols  = "id,name,repo_url,default_branch,pinned,created_at,updated_at"
-	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,created_at,updated_at"
+	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,created_at,updated_at"
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
@@ -45,7 +45,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 
 func scanDelivery(row pgx.Row) (*Delivery, error) {
 	d := &Delivery{}
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	return d, nil
@@ -142,9 +142,9 @@ func (pg *Pg) CreateDelivery(ctx context.Context, d *Delivery) error {
 		d.ID = uuid.NewString()
 	}
 	_, err := pg.pool.Exec(ctx,
-		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit)
+		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady)
 	if err != nil {
 		return err
 	}
@@ -179,9 +179,9 @@ func (pg *Pg) ListProjectDeliveries(ctx context.Context, projectID string) ([]De
 
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
-		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,updated_at=now()
+		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,updated_at=now()
 		 WHERE id=$1 RETURNING updated_at`,
-		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit).
+		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady).
 		Scan(&d.UpdatedAt)
 	return mapErr(err)
 }
@@ -234,6 +234,19 @@ func (pg *Pg) SaveArtifact(ctx context.Context, a *Artifact) error {
 		return err
 	}
 	return pg.pool.QueryRow(ctx, `SELECT created_at FROM artifacts WHERE id=$1`, a.ID).Scan(&a.CreatedAt)
+}
+
+// LatestArtifact 取指定 kind 的最新一条产物（无则 ErrNotFound）。
+func (pg *Pg) LatestArtifact(ctx context.Context, deliveryID, kind string) (*Artifact, error) {
+	var a Artifact
+	err := pg.pool.QueryRow(ctx,
+		`SELECT id,delivery_id,stage,kind,content,created_at FROM artifacts WHERE delivery_id=$1 AND kind=$2 ORDER BY created_at DESC LIMIT 1`,
+		deliveryID, kind).
+		Scan(&a.ID, &a.DeliveryID, &a.Stage, &a.Kind, &a.Content, &a.CreatedAt)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &a, nil
 }
 
 func (pg *Pg) ListArtifacts(ctx context.Context, deliveryID string) ([]Artifact, error) {

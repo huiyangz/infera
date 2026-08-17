@@ -161,18 +161,19 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	mu := s.lockFor(id)
 	mu.Lock()
 	err := s.engine.Approve(r.Context(), id)
-	if err == nil {
-		// Approve 内部已推进到门禁/终态；若停在 active 且无门禁
-		// （unit_test 失败回环停车在 code_gen），继续驱动重试。
-		if d, gerr := s.st.GetDelivery(r.Context(), id); gerr == nil && d.Status == "active" && d.PendingGate == "" {
-			s.driveLocked(id)
-		}
-	}
 	mu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Approve 只做门禁簿记即返回（不同步跑 agent）；后续推进在后台驱动，
+	// goroutine 自取 per-delivery 锁（driveLocked 约定调用方持锁、内部用 background ctx）。batch 2 会重构为显式 Continue。
+	go func() {
+		mu := s.lockFor(id)
+		mu.Lock()
+		defer mu.Unlock()
+		s.driveLocked(id)
+	}()
 	s.writeDeliveryNow(w, r, id)
 }
 
@@ -196,15 +197,18 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 	mu := s.lockFor(id)
 	mu.Lock()
 	err := s.engine.Reject(r.Context(), id, body.Reason)
-	if err == nil {
-		// Reject 只回退并停车、不重跑：这里负责重新点火驱动到下一个稳定点。
-		s.driveLocked(id)
-	}
 	mu.Unlock()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Reject 停车不重跑：回退阶段的重跑（带驳回意见反馈）在后台驱动。
+	go func() {
+		mu := s.lockFor(id)
+		mu.Lock()
+		defer mu.Unlock()
+		s.driveLocked(id)
+	}()
 	s.writeDeliveryNow(w, r, id)
 }
 
@@ -226,22 +230,21 @@ func (s *Server) runDelivery(deliveryID string) {
 }
 
 // driveLocked 驱动引擎直到稳定（门禁 / 终态 / 出错），处理 unit_test 失败后的停车重试。
-// 调用方必须已持有该 delivery 的锁。
+// 调用方必须已持有该 delivery 的锁。先查状态再驱动：已稳定（门禁/终态）时零调用。
 func (s *Server) driveLocked(deliveryID string) {
 	for i := 0; i < maxStarts; i++ {
 		if s.engine == nil {
 			return
 		}
-		err := s.engine.Start(context.Background(), deliveryID)
-		if err != nil {
-			log.Printf("engine start %s: %v", deliveryID, err)
-			return // 引擎报错：blocked/completed/agent 失败都由状态承载
-		}
 		d, err := s.st.GetDelivery(context.Background(), deliveryID)
 		if err != nil || d.Status != "active" || d.PendingGate != "" {
 			return // 门禁/终态：停
 		}
-		// active 且无门禁 = unit_test 失败停车在 code_gen → 再 Start 重试
+		if err := s.engine.Start(context.Background(), deliveryID); err != nil {
+			log.Printf("engine start %s: %v", deliveryID, err)
+			return // 引擎报错：blocked/completed/agent 失败都由状态承载
+		}
+		// Start 后若仍 active 且无门禁 = unit_test 失败停车在 code_gen → 再 Start 重试
 	}
 }
 

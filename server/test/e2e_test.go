@@ -18,6 +18,7 @@ import (
 	"github.com/tokfinity/infera/internal/api"
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/engine"
+	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/store"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
@@ -54,7 +55,7 @@ case "$INFERA_ROLE" in
 esac
 `), 0o755))
 
-	ws := workspace.New(t.TempDir(), time.Hour)
+	ws := workspace.New(t.TempDir(), git.New(), time.Hour)
 	ar := agent.NewLocal([]string{"sh", fakeScript})
 	tr := &testrunner.Local{Script: "test -f hello.txt"}
 	srv := api.NewServer(st, "e2e-pass", nil)
@@ -156,7 +157,7 @@ else
 fi
 `), 0o755))
 
-	ws := workspace.New(t.TempDir(), time.Hour)
+	ws := workspace.New(t.TempDir(), git.New(), time.Hour)
 	ar := agent.NewLocal([]string{"sh", fakeScript})
 	tr := &testrunner.Local{Script: "test -f hello.txt"}
 	srv := api.NewServer(st, "e2e-pass", nil)

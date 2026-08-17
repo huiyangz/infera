@@ -193,6 +193,20 @@ func (m *Memory) SaveArtifact(ctx context.Context, a *Artifact) error {
 	return nil
 }
 
+// LatestArtifact 从最新往旧找指定 kind 的第一条（无则 ErrNotFound）。
+func (m *Memory) LatestArtifact(ctx context.Context, deliveryID, kind string) (*Artifact, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	arts := m.artifacts[deliveryID]
+	for i := len(arts) - 1; i >= 0; i-- {
+		if arts[i].Kind == kind {
+			cp := *arts[i]
+			return &cp, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (m *Memory) ListArtifacts(ctx context.Context, deliveryID string) ([]Artifact, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -22,17 +22,19 @@ type ProjectStats struct {
 }
 
 type Delivery struct {
-	ID           string    `json:"id"`
-	ProjectID    string    `json:"project_id"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	Status       string    `json:"status"` // active|completed|blocked
-	CurrentStage string    `json:"current_stage"`
-	PendingGate  string    `json:"pending_gate"`
-	FailCount    int       `json:"fail_count"`
-	BaseCommit   string    `json:"base_commit"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	ProjectID      string    `json:"project_id"`
+	Title          string    `json:"title"`
+	Description    string    `json:"description"`
+	Status         string    `json:"status"` // active|completed|blocked
+	CurrentStage   string    `json:"current_stage"`
+	PendingGate    string    `json:"pending_gate"`
+	FailCount      int       `json:"fail_count"`
+	BaseCommit     string    `json:"base_commit"`
+	RejectReason   string    `json:"reject_reason"`   // 门禁驳回意见，重跑对应阶段时注入 prompt 后清空
+	WorkspaceReady bool      `json:"workspace_ready"` // workspace 已就绪（幂等防重 clone/重建）
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type Event struct {
@@ -80,6 +82,7 @@ type Store interface {
 	ListEvents(ctx context.Context, deliveryID string) ([]Event, error)
 	SaveArtifact(ctx context.Context, a *Artifact) error
 	ListArtifacts(ctx context.Context, deliveryID string) ([]Artifact, error)
+	LatestArtifact(ctx context.Context, deliveryID, kind string) (*Artifact, error)
 	StartStageRun(ctx context.Context, r *StageRun) error
 	FinishStageRun(ctx context.Context, id string, status string) error
 	LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error)

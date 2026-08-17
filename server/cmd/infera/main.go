@@ -32,10 +32,11 @@ func main() {
 	}
 	st := store.NewPg(pool)
 
+	// git 实例只建一次（带 GITHUB_TOKEN）：LsRemote 校验、clone、push 共用同一 token 注入。
 	g := git.New()
 	g.Token = cfg.GitHubToken
 
-	ws := workspace.New(cfg.RepoWorkRoot, 30*time.Minute) // 终态后保留 30min 供排查
+	ws := workspace.New(cfg.RepoWorkRoot, g, 30*time.Minute) // 终态后保留 30min 供排查
 
 	var ar agent.Runner = agent.NewLocal([]string{"sh", "-c", cfg.AgentCmd + ` "$INFERA_PROMPT"`})
 	var tr engine.TestRunner = &testrunner.Local{Script: cfg.TestCmd}

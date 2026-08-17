@@ -29,20 +29,6 @@ const (
 	StatusBlocked   = "blocked"
 )
 
-// RejectLoopBack 人工驳回后的回退目标：gate → 需重跑的阶段。
-var RejectLoopBack = map[string]string{
-	"spec_approval": "spec",
-	"code_review":   "code_gen",
-}
-
-// artifactKind 每个阶段产物的 kind。
-var artifactKind = map[string]string{
-	"spec":        "spec",
-	"test_gen":    "tests",
-	"code_gen":    "diff",
-	"code_review": "agent_output",
-}
-
 // errStop 是内部信号：本轮推进到此为止（门禁暂停 / 失败回环 / 终态），不是错误。
 var errStop = errors.New("engine: stop this run")
 
@@ -77,7 +63,8 @@ func (e *Engine) Start(ctx context.Context, deliveryID string) error {
 	return e.run(ctx, d)
 }
 
-// Approve 通过当前人工门禁并继续推进。
+// Approve 通过当前人工门禁：只做门禁簿记（清 gate、推进到下一阶段、落盘）后立即返回，
+// 不驱动 agent——后续推进由调用方异步 Continue（API 层后台 goroutine），避免同步阻塞。
 func (e *Engine) Approve(ctx context.Context, deliveryID string) error {
 	d, err := e.st.GetDelivery(ctx, deliveryID)
 	if err != nil {
@@ -97,14 +84,25 @@ func (e *Engine) Approve(ctx context.Context, deliveryID string) error {
 	}
 	e.finishLatestRun(ctx, d.ID, gate, "done")
 	e.emit(ctx, d, gate, "gate_approved", nil)
-	if err := e.advance(ctx, d, node.Next); err != nil {
+	return e.advance(ctx, d, node.Next) // Next=DONE 时进入终态 completed
+}
+
+// Continue 从当前状态推进到下一个停车点（门禁 / 失败回环 / 终态 / 错误）。
+// 与 Start 的区别：不重复 ensureWorkspace（Approve/Reject 后的重新点火场景）。
+// 已停在门禁或非 active 时是安全 no-op（非 active 报错，与 Start 一致）。
+func (e *Engine) Continue(ctx context.Context, deliveryID string) error {
+	d, err := e.st.GetDelivery(ctx, deliveryID)
+	if err != nil {
 		return err
+	}
+	if d.Status != StatusActive {
+		return fmt.Errorf("engine: delivery %s is %s, not active", d.ID, d.Status)
 	}
 	return e.run(ctx, d)
 }
 
-// Reject 驳回当前人工门禁：按 RejectLoopBack 回退后暂停，
-// 重跑由下一次 Start 驱动（便于把驳回意见带入下一轮，而非立刻原样重跑）。
+// Reject 驳回当前人工门禁：按节点 RejectTo 回退并记录驳回意见，停车不重跑。
+// 重跑由下一次 Start/Continue 驱动——stageFeedback 会把驳回意见注入回退阶段首轮 prompt（消费一次后清空）。
 func (e *Engine) Reject(ctx context.Context, deliveryID, reason string) error {
 	d, err := e.st.GetDelivery(ctx, deliveryID)
 	if err != nil {
@@ -113,13 +111,17 @@ func (e *Engine) Reject(ctx context.Context, deliveryID, reason string) error {
 	if d.PendingGate == "" {
 		return fmt.Errorf("engine: delivery %s has no pending gate", d.ID)
 	}
-	gate := d.PendingGate
-	back, ok := RejectLoopBack[gate]
+	node, ok := Graph[d.PendingGate]
 	if !ok {
-		return fmt.Errorf("engine: no reject loop-back for gate %q", gate)
+		return fmt.Errorf("engine: unknown gate stage %q", d.PendingGate)
 	}
+	if node.RejectTo == "" {
+		return fmt.Errorf("engine: no reject target for gate %q", d.PendingGate)
+	}
+	gate := d.PendingGate
 	d.PendingGate = ""
-	d.CurrentStage = back
+	d.CurrentStage = node.RejectTo
+	d.RejectReason = reason
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
 		return err
 	}
@@ -130,9 +132,10 @@ func (e *Engine) Reject(ctx context.Context, deliveryID, reason string) error {
 
 // --- 内部推进 ---
 
-// ensureWorkspace 首次进入时 Acquire 仓库并持久化 base_commit。
+// ensureWorkspace 首次进入时 Acquire 仓库并持久化（WorkspaceReady 幂等标志）。
+// 绿地项目 base_commit 为空，不能用 BaseCommit 判重——否则每次 Start 都重复 Acquire。
 func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
-	if d.BaseCommit != "" {
+	if d.WorkspaceReady {
 		return nil
 	}
 	proj, err := e.st.GetProject(ctx, d.ProjectID)
@@ -147,6 +150,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 		return e.block(ctx, d, fmt.Errorf("workspace acquire: %w", err))
 	}
 	d.BaseCommit = base
+	d.WorkspaceReady = true
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
 		return err
 	}
@@ -181,6 +185,13 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 	case KindAgent:
 		return e.stepAgent(ctx, d, node, run)
 	case KindGate:
+		if node.ReviewRole != "" {
+			// 门禁前置 agent（code_review）：先预审产出 agent_output artifact，
+			// 门禁页才有内容可审；失败同 agent 失败约定 blocked。
+			if err := e.stepGateReview(ctx, d, node, run); err != nil {
+				return err
+			}
+		}
 		d.PendingGate = node.Stage
 		if err := e.st.UpdateDelivery(ctx, d); err != nil {
 			return err
@@ -203,17 +214,20 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 	}
 }
 
-// stepAgent 跑一个 agent 节点：带 spec 组 prompt、存产物、走 Next。
+// stepAgent 跑一个 agent 节点：带 spec + 上一轮反馈组 prompt、存产物、走 Next。
 func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun) error {
 	spec, err := e.latestSpec(ctx, d.ID)
 	if err != nil {
 		return err
 	}
+	feedback, err := e.stageFeedback(ctx, d, node.Stage)
+	if err != nil {
+		return err
+	}
 	res, err := e.ar.Run(ctx, agent.Request{
 		Role:    node.Stage,
-		Prompt:  agent.BuildPrompt(node.Stage, d.Description, spec),
+		Prompt:  agent.BuildPrompt(node.Stage, d.Description, spec, feedback),
 		Workdir: e.ws.Path(d.ID),
-		Inputs:  map[string]string{"spec": spec},
 	})
 	if err != nil {
 		e.finishStageRun(ctx, run.ID, "failed")
@@ -223,13 +237,86 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 	if err := e.st.SaveArtifact(ctx, &store.Artifact{
 		DeliveryID: d.ID,
 		Stage:      node.Stage,
-		Kind:       artifactKind[node.Stage],
+		Kind:       node.ArtifactKind,
 		Content:    res.Output,
 	}); err != nil {
 		return err
 	}
 	e.finishStageRun(ctx, run.ID, "done")
 	return e.advance(ctx, d, node.Next)
+}
+
+// stepGateReview 跑门禁的前置 agent（预审），产出 agent_output artifact 供门禁展示。
+// 只预审不推进——推进由人工 Approve 决定。
+func (e *Engine) stepGateReview(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun) error {
+	spec, err := e.latestSpec(ctx, d.ID)
+	if err != nil {
+		return err
+	}
+	res, err := e.ar.Run(ctx, agent.Request{
+		Role:    node.ReviewRole,
+		Prompt:  agent.BuildPrompt(node.ReviewRole, d.Description, spec, ""),
+		Workdir: e.ws.Path(d.ID),
+	})
+	if err != nil {
+		e.finishStageRun(ctx, run.ID, "failed")
+		e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
+		return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+	}
+	if err := e.st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID,
+		Stage:      node.Stage,
+		Kind:       "agent_output",
+		Content:    res.Output,
+	}); err != nil {
+		return err
+	}
+	e.finishStageRun(ctx, run.ID, "done")
+	return nil
+}
+
+// stageFeedback 组装带入本轮 prompt 的上一轮反馈（空串 = 无反馈）：
+//   - spec：spec_approval 门禁的人打回意见（消费一次后清空持久化的 RejectReason）
+//   - code_gen：code_review 门禁的人打回意见 + 上一轮 unit_test 失败输出（FailCount>0 时）
+//
+// 反馈只注入回退后该阶段的第一次重跑，避免每轮都背着旧意见。
+func (e *Engine) stageFeedback(ctx context.Context, d *store.Delivery, stage string) (string, error) {
+	switch stage {
+	case "spec":
+		return e.consumeRejectReason(ctx, d)
+	case "code_gen":
+		fb, err := e.consumeRejectReason(ctx, d)
+		if err != nil {
+			return "", err
+		}
+		if d.FailCount > 0 {
+			out, err := e.latestTestOutput(ctx, d.ID)
+			if err != nil {
+				return "", err
+			}
+			if out != "" {
+				if fb != "" {
+					fb += "\n"
+				}
+				fb += "上一轮 unit_test 未过：" + out
+			}
+		}
+		return fb, nil
+	}
+	return "", nil
+}
+
+// consumeRejectReason 取出并清空人打回意见（返回空串表示无）。
+func (e *Engine) consumeRejectReason(ctx context.Context, d *store.Delivery) (string, error) {
+	if d.RejectReason == "" {
+		return "", nil
+	}
+	fb := "人打回：" + d.RejectReason
+	d.RejectReason = ""
+	if err := e.st.UpdateDelivery(ctx, d); err != nil {
+		return "", err
+	}
+	return fb, nil
 }
 
 // stepUnitTest 跑测试：失败回环 code_gen（连续 MaxFail 次 blocked），通过清零计数走 Next。
@@ -322,16 +409,38 @@ func (e *Engine) finishLatestRun(ctx context.Context, deliveryID, stage, status 
 
 // latestSpec 取最近一条 kind=spec 的产物内容（无则空串）。
 func (e *Engine) latestSpec(ctx context.Context, deliveryID string) (string, error) {
-	arts, err := e.st.ListArtifacts(ctx, deliveryID)
+	a, err := e.st.LatestArtifact(ctx, deliveryID, "spec")
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}
-	for i := len(arts) - 1; i >= 0; i-- {
-		if arts[i].Kind == "spec" {
-			return arts[i].Content, nil
-		}
+	return a.Content, nil
+}
+
+// latestTestOutput 取最近一条 unit_test 输出（截断 maxTestOutputRunes；无则空串）。
+func (e *Engine) latestTestOutput(ctx context.Context, deliveryID string) (string, error) {
+	a, err := e.st.LatestArtifact(ctx, deliveryID, "test_output")
+	if errors.Is(err, store.ErrNotFound) {
+		return "", nil
 	}
-	return "", nil
+	if err != nil {
+		return "", err
+	}
+	return truncateRunes(a.Content, maxTestOutputRunes), nil
+}
+
+// maxTestOutputRunes 反馈里测试输出的截断上限（rune 计），控制 prompt 体积。
+const maxTestOutputRunes = 2000
+
+// truncateRunes 按 rune 截断（避免切坏多字节字符），超长时尾缀截断标记。
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "\n…（截断）"
 }
 
 // emit 追加事件并触发 Notify（事件失败不阻断流水线）。
