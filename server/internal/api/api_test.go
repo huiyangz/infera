@@ -65,7 +65,7 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 	ctx := context.Background()
 
 	r, _ := c.Post(ts.URL+"/api/projects", "application/json",
-		bytes.NewBufferString(`{"name":"demo","repo_url":"","default_branch":"main"}`))
+		bytes.NewBufferString(`{"name":"demo","repo_url":"https://github.com/x/y","default_branch":"main"}`))
 	require.Equal(t, 200, r.StatusCode)
 	var p store.Project
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
@@ -185,7 +185,7 @@ func TestDeliveryLifecycleAPI(t *testing.T) {
 	c := login(t, ts.URL)
 	ctx := context.Background()
 
-	p := &store.Project{Name: "p"}
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
 	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
@@ -282,7 +282,7 @@ func TestDeliveryEngineStartErrorSwallowed(t *testing.T) {
 	c := login(t, ts.URL)
 	ctx := context.Background()
 
-	p := &store.Project{Name: "p"}
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
 	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
@@ -341,7 +341,7 @@ func TestResumeActive(t *testing.T) {
 	srv := NewServer(st, "secret-pass", fe)
 	ctx := context.Background()
 
-	p := &store.Project{Name: "p"}
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 	mk := func(title, status, gate string) *store.Delivery {
 		d := &store.Delivery{ProjectID: p.ID, Title: title, Status: status, CurrentStage: "code_gen", PendingGate: gate}
@@ -363,4 +363,26 @@ func TestResumeActive(t *testing.T) {
 		return slices.Contains(fe.startedIDs(), gated.ID) || slices.Contains(fe.continuedIDs(), gated.ID) ||
 			slices.Contains(fe.startedIDs(), done.ID) || slices.Contains(fe.continuedIDs(), done.ID)
 	}, 200*time.Millisecond, 20*time.Millisecond)
+}
+
+
+func TestRepoRequired(t *testing.T) {
+	ts, st := newServer(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+
+	// 建项目必须绑仓库
+	r, _ := c.Post(ts.URL+"/api/projects", "application/json",
+		bytes.NewBufferString(`{"name":"green"}`))
+	require.Equal(t, 400, r.StatusCode)
+
+	// 未绑仓库的存量项目：提需求被拒
+	p := &store.Project{Name: "no-repo"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	r, _ = c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
+		bytes.NewBufferString(`{"title":"x"}`))
+	require.Equal(t, 400, r.StatusCode)
+	var e map[string]string
+	_ = json.NewDecoder(r.Body).Decode(&e)
+	require.Contains(t, e["error"], "未绑定仓库")
 }

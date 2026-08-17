@@ -194,9 +194,7 @@ export function ProjectsList() {
                   />
                 </div>
                 <div className='grid gap-2'>
-                  <Label htmlFor='proj-repo'>
-                    Git 仓库（留空 = 绿地新项目）
-                  </Label>
+                  <Label htmlFor='proj-repo'>Git 仓库（必填）</Label>
                   <Input
                     id='proj-repo'
                     className='font-mono text-xs'
@@ -215,7 +213,7 @@ export function ProjectsList() {
                   />
                 </div>
                 <DialogFooter>
-                  <Button type='submit' disabled={!name.trim() || create.isPending}>
+                  <Button type='submit' disabled={!name.trim() || !repo.trim() || create.isPending}>
                     创建并绑定
                   </Button>
                 </DialogFooter>

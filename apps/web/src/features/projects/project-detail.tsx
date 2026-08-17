@@ -77,27 +77,33 @@ export function ProjectDetail({
               {proj?.default_branch}
             </p>
           </div>
-          <form
-            className='flex items-center gap-2'
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (title.trim()) create.mutate()
-            }}
-          >
-            <Input
-              className='w-64'
-              placeholder='一句话需求，回车提交…'
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-            <Button
-              type='submit'
-              size='lg'
-              disabled={!title.trim() || create.isPending}
+          {proj?.repo_url ? (
+            <form
+              className='flex items-center gap-2'
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (title.trim()) create.mutate()
+              }}
             >
-              <Plus /> 新建交付
-            </Button>
-          </form>
+              <Input
+                className='w-64'
+                placeholder='一句话需求，回车提交…'
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+              <Button
+                type='submit'
+                size='lg'
+                disabled={!title.trim() || create.isPending}
+              >
+                <Plus /> 新建交付
+              </Button>
+            </form>
+          ) : (
+            <p className='text-sm text-muted-foreground'>
+              项目未绑定仓库，暂时不支持提交需求
+            </p>
+          )}
         </div>
       </Header>
 

@@ -40,8 +40,14 @@ func (s *Server) handleCreateDelivery(w http.ResponseWriter, r *http.Request) {
 	if !validID(w, projectID) {
 		return
 	}
-	if _, err := s.st.GetProject(r.Context(), projectID); err != nil {
+	proj, err := s.st.GetProject(r.Context(), projectID)
+	if err != nil {
 		writeStoreErr(w, err, "项目不存在", "读取项目失败")
+		return
+	}
+	// 未绑仓库的项目暂不支持其它功能：禁止提交需求。
+	if proj.RepoURL == "" {
+		writeError(w, http.StatusBadRequest, "项目未绑定仓库，暂时不支持提交需求")
 		return
 	}
 	var body struct {

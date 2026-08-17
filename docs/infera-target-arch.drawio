@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="31.1.5">
+  <diagram name="infera-target-arch">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1640" pageHeight="840" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="10" value="① 项目与环境（项目制 · 1 项目 = 1 个 git 仓库 · 声明式执行环境，infera 不猜项目）" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;html=1;fontStyle=1;swimlaneFillColor=#ffffff;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="1560" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="11" value="Project&#xa;= 1 个 git 仓库&#xa;绑仓库 · 项目制" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="10">
+          <mxGeometry x="20" y="50" width="210" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="12" value="项目声明执行环境&#xa;基础镜像 / Dockerfile&#xa;依赖命令 · 测试命令&#xa;workdir 子路径 (monorepo)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="10">
+          <mxGeometry x="260" y="50" width="430" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="13" value="长驻环境复用&#xa;装一次依赖 · 反复用&#xa;（不每次从零构建）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="10">
+          <mxGeometry x="730" y="50" width="250" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="14" value="每 delivery 一个 git worktree&#xa;多 task 并行改同仓库不冲突&#xa;各自分支 · 各自 PR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="10">
+          <mxGeometry x="1020" y="50" width="510" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="50" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="10" source="11" target="12">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="51" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="10" source="12" target="13">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="52" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="10" source="13" target="14">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="20" value="② Task / 需求侧（把一句话需求变成一组可执行的 delivery）" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;html=1;fontStyle=1;swimlaneFillColor=#ffffff;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="220" width="1560" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="21" value="人输入一句需求&#xa;task / issue&#xa;(可 = GitHub issue)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="20">
+          <mxGeometry x="20" y="45" width="180" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="22" value="intake agent&#xa;增强：补验收/约束&#xa;拆分：epic → 子 task" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="20">
+          <mxGeometry x="230" y="45" width="240" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="23" value="人审&#xa;拆分方案" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="20">
+          <mxGeometry x="510" y="40" width="140" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="24" value="依赖图&#xa;blocks / parallel&#xa;哪些并行 · 哪些等" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="20">
+          <mxGeometry x="690" y="45" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="25" value="人审&#xa;依赖关系" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="20">
+          <mxGeometry x="950" y="40" width="140" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="26" value="调度器&#xa;就绪 → 生成 delivery&#xa;完成 → 唤醒下游&#xa;(先串行，后并行)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="20">
+          <mxGeometry x="1130" y="40" width="400" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="53" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="20" source="21" target="22">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="54" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="20" source="22" target="23">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="55" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="20" source="23" target="24">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="56" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="20" source="24" target="25">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="57" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="20" source="25" target="26">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="30" value="③ Delivery / 执行侧（Agent 主导执行 · 人 gate 把关 · 每 delivery = 一个 PR）　流向 →" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;html=1;fontStyle=1;swimlaneFillColor=#ffffff;align=right;" vertex="1" parent="1">
+          <mxGeometry x="40" y="410" width="1560" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="36" value="开 PR&#xa;→ delivery 完成" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="30">
+          <mxGeometry x="20" y="50" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="35" value="人 gate&#xa;spec 审&#xa;/ 最终审" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="30">
+          <mxGeometry x="260" y="45" width="140" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="34" value="specialist agents&#xa;spec → test → coder → review&#xa;在 复用环境 + 该 delivery worktree 跑&#xa;每步落 timeline" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="30">
+          <mxGeometry x="440" y="45" width="320" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="33" value="人审&#xa;执行计划" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="30">
+          <mxGeometry x="800" y="45" width="140" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="32" value="leader agent&#xa;出执行计划：&#xa;改哪 / 要不要 spec&#xa;测试命令 / 验证标准" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="30">
+          <mxGeometry x="980" y="45" width="240" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="31" value="就绪 task&#xa;→ 生成 delivery&#xa;(= 一次交付 / PR)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="30">
+          <mxGeometry x="1260" y="45" width="260" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="58" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="30" source="31" target="32">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="59" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="30" source="32" target="33">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="60" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="30" source="33" target="34">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="61" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="30" source="34" target="35">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="62" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="30" source="35" target="36">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="70" value="就绪 → 生成 delivery" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="26" target="31">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+
+        <mxCell id="40" value="图例" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;html=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="620" width="300" height="172" as="geometry"/>
+        </mxCell>
+        <mxCell id="l1" value="" style="rounded=1;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="40">
+          <mxGeometry x="12" y="34" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l1t" value="AI 动作（提议/执行）" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="32" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l2" value="" style="rhombus;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="40">
+          <mxGeometry x="12" y="58" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l2t" value="人 gate（审批点）" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="56" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l3" value="" style="rounded=1;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="40">
+          <mxGeometry x="12" y="84" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l3t" value="复用环境 / 产物" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="82" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l4" value="" style="rounded=1;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="40">
+          <mxGeometry x="12" y="108" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l4t" value="项目声明配置" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="106" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l5" value="" style="rounded=1;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="40">
+          <mxGeometry x="12" y="132" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l5t" value="系统 / 调度（自动）" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="130" width="240" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l6" value="" style="rounded=1;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="40">
+          <mxGeometry x="12" y="156" width="28" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="l6t" value="人输入 / 数据" style="text;html=1;align=left;verticalAlign=middle;" vertex="1" parent="40">
+          <mxGeometry x="48" y="154" width="240" height="20" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="90" value="贯穿全图的一致模式：每一层都是「AI 提议 → 人审批 (gate)」&#xa;拆分审 · 依赖审 · 计划审 · spec 审 · 最终审 —— 人定方向与把关，AI 干脏活和判断&#xa;&#xa;① 环境层为 ③ specialist 提供复用环境 + 每 delivery worktree（见 specialist 节点文字）。&#xa;建设顺序建议：① 环境层声明化 + 复用容器（地基）→ ② task 实体 + intake 拆分/依赖 → ③ leader 动态编排（替代写死 state machine）&#xa;地基（①）不立，②③都是空中楼阁。" style="text;html=1;align=left;verticalAlign=top;fontSize=12;fillColor=#fffbe6;strokeColor=#d6b656;rounded=1;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="380" y="620" width="1220" height="100" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

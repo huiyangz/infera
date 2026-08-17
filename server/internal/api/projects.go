@@ -60,6 +60,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	if body.DefaultBranch == "" {
 		body.DefaultBranch = "main"
 	}
+	// 暂不支持绿地项目：必须绑定仓库。
+	if strings.TrimSpace(body.RepoURL) == "" {
+		writeError(w, http.StatusBadRequest, "必须绑定 Git 仓库（暂不支持绿地项目）")
+		return
+	}
 	// repo_url 非空且注入了 git checker 时，先做毫秒级可达性校验。
 	if body.RepoURL != "" && s.g != nil {
 		if err := s.g.LsRemote(r.Context(), body.RepoURL); err != nil {

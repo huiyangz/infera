@@ -79,8 +79,10 @@ esac
 
 	// 1. 建项目（绿地）
 	var proj store.Project
-	post(t, client, base+"/api/projects", `{"name":"e2e"}`, &proj)
-	require.Empty(t, proj.RepoURL)
+	origin := newBare(t)
+	post(t, client, base+"/api/projects",
+		fmt.Sprintf(`{"name":"e2e","repo_url":%q,"default_branch":"main"}`, origin), &proj)
+	require.Equal(t, origin, proj.RepoURL)
 
 	// 2. 建需求 → 引擎异步推进到 spec 门禁
 	var d store.Delivery
@@ -185,7 +187,8 @@ fi
 	_ = r.Body.Close()
 
 	var proj store.Project
-	post(t, client, ts.URL+"/api/projects", `{"name":"loop"}`, &proj)
+	post(t, client, ts.URL+"/api/projects",
+		fmt.Sprintf(`{"name":"loop","repo_url":%q,"default_branch":"main"}`, newBare(t)), &proj)
 	var d store.Delivery
 	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries", `{"title":"回环","description":"x"}`, &d)
 
