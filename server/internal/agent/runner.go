@@ -30,7 +30,7 @@ var Prompts = map[string]string{
 	"spec":        "你是资深工程师。基于仓库现状，为以下需求撰写实现规格（中文，Markdown）：\n需求：{description}" + feedbackLine + "\n要求：列出改动文件、接口变化、验收标准。只输出规格正文。",
 	"test_gen":    "你是测试工程师。依据以下规格，在仓库中编写测试用例（Go 项目用 _test.go）。\n规格：\n{spec}\n只输出新增/修改的文件清单与说明。",
 	"code_gen":    "你是程序员。在当前仓库中实现以下需求，严格遵循规格。\n需求：{description}\n规格：\n{spec}" + feedbackLine + "\n实现完成后输出改动摘要。",
-	"code_review": "你是代码审查员。审查当前仓库工作区中未提交的改动，对照规格评估正确性与质量，输出审查意见。\n规格：\n{spec}",
+	"code_review": "你是代码审查员。审查当前仓库中相对基线的全部改动（系统已提交到当前分支，可用 git diff/git log 查看），对照规格评估正确性与质量，输出审查意见。\n规格：\n{spec}",
 }
 
 // BuildPrompt 组装角色 prompt；空值占位替换为（无）；feedback 为空时反馈行整行省略。

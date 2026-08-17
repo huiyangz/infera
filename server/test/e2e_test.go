@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
+	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
@@ -59,7 +63,7 @@ esac
 	ar := agent.NewLocal([]string{"sh", fakeScript})
 	tr := &testrunner.Local{Script: "test -f hello.txt"}
 	srv := api.NewServer(st, "e2e-pass", nil)
-	eng := engine.New(st, ar, ws, tr)
+	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(git.New(), ""))
 	srv.SetEngine(eng)
 	ts := httptest.NewServer(srv.Mux())
 	t.Cleanup(ts.Close)
@@ -103,17 +107,23 @@ esac
 		return det.Delivery.Status == "completed"
 	}, "应完成")
 
-	// 6. artifacts 齐全：spec/tests/diff/test_output
+	// 6. artifacts 齐全：spec/tests/summary/test_output + 真 diff（固化产出）
 	var det detailJSON
 	get(t, client, base+"/api/deliveries/"+d.ID, &det)
 	kinds := map[string]int{}
+	var diffContent string
 	for _, a := range det.Artifacts {
 		kinds[a.Kind]++
+		if a.Kind == "diff" {
+			diffContent = a.Content
+		}
 	}
 	require.GreaterOrEqual(t, kinds["spec"], 1)
 	require.GreaterOrEqual(t, kinds["tests"], 1)
+	require.GreaterOrEqual(t, kinds["summary"], 1)
 	require.GreaterOrEqual(t, kinds["diff"], 1)
 	require.GreaterOrEqual(t, kinds["test_output"], 1)
+	require.Contains(t, diffContent, "+++ b/hello.txt", "diff artifact 应是真实 git diff 而非 agent 摘要")
 
 	// 7. 事件链完整
 	eventTypes := []string{}
@@ -122,6 +132,7 @@ esac
 	}
 	require.Contains(t, eventTypes, "workspace_ready")
 	require.Contains(t, eventTypes, "gate_pending")
+	require.Contains(t, eventTypes, "persist_done")
 	require.Contains(t, eventTypes, "delivery_completed")
 }
 
@@ -161,7 +172,7 @@ fi
 	ar := agent.NewLocal([]string{"sh", fakeScript})
 	tr := &testrunner.Local{Script: "test -f hello.txt"}
 	srv := api.NewServer(st, "e2e-pass", nil)
-	eng := engine.New(st, ar, ws, tr)
+	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(git.New(), ""))
 	srv.SetEngine(eng)
 	ts := httptest.NewServer(srv.Mux())
 	t.Cleanup(ts.Close)
@@ -199,6 +210,125 @@ fi
 	require.Contains(t, eventTypes, "test_failed")
 }
 
+// —— 第三个用例：绑库项目（本地 bare 远端）——固化把分支真的推上去 ——
+func TestRepoBackedPushesBranch(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置")
+	}
+	if err := db.Migrate(dbURL); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Connect(context.Background(), dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects`)
+	require.NoError(t, err, "TRUNCATE 清库失败（库被占用？）")
+	st := store.NewPg(pool)
+
+	// 本地 bare 远端（含 README 的 main 分支）当项目仓库。
+	origin := newBare(t)
+
+	fakeScript := filepath.Join(t.TempDir(), "fake-agent.sh")
+	require.NoError(t, os.WriteFile(fakeScript, []byte(`#!/bin/sh
+case "$INFERA_ROLE" in
+  spec) echo "# 规格" ;;
+  test_gen) echo "tests: x_test.go" ;;
+  code_gen) echo feature > "$INFERA_WORKDIR/feature.txt"; echo "实现：feature.txt" ;;
+  code_review) echo "LGTM" ;;
+esac
+`), 0o755))
+
+	ws := workspace.New(t.TempDir(), git.New(), time.Hour)
+	ar := agent.NewLocal([]string{"sh", fakeScript})
+	tr := &testrunner.Local{Script: "test -f feature.txt"}
+	srv := api.NewServer(st, "e2e-pass", nil)
+	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(git.New(), ""))
+	srv.SetEngine(eng)
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	r, err2 := client.Post(ts.URL+"/api/login", "application/json", bytes.NewBufferString(`{"password":"e2e-pass"}`))
+	require.NoError(t, err2)
+	require.Equal(t, 200, r.StatusCode)
+	_ = r.Body.Close()
+
+	// 绑库项目（本地路径远端）。
+	var proj store.Project
+	post(t, client, ts.URL+"/api/projects",
+		fmt.Sprintf(`{"name":"repo-backed","repo_url":%q,"default_branch":"main"}`, origin), &proj)
+	require.Equal(t, origin, proj.RepoURL)
+
+	var d store.Delivery
+	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries", `{"title":"加功能","description":"x"}`, &d)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "spec_approval"
+	}, "停在 spec 门")
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "code_review"
+	}, "停在 code_review 门")
+
+	// 门禁拿到预审；pr_url 为空（本地远端不开 PR，产物固化在推送分支上）。
+	var gate gateJSON
+	get(t, client, ts.URL+"/api/deliveries/"+d.ID+"/gate", &gate)
+	require.Equal(t, "code_review", gate.Gate)
+	require.Empty(t, gate.PRURL)
+
+	// 分支已推到远端：infera/<deliveryID 前 8 位>。
+	branch := "refs/heads/infera/" + d.ID[:8]
+	out, err := exec.Command("git", "ls-remote", origin, branch).Output()
+	require.NoError(t, err)
+	fields := strings.Fields(string(out))
+	require.Len(t, fields, 2, "远端应有分支 %s，实际 ls-remote: %q", branch, string(out))
+	require.Len(t, fields[0], 40, "分支应指向一个 commit")
+
+	// diff artifact 是真 diff：含 agent 产出、不含基线 README。
+	var det detailJSON
+	get(t, client, ts.URL+"/api/deliveries/"+d.ID, &det)
+	var diffContent string
+	for _, a := range det.Artifacts {
+		if a.Kind == "diff" {
+			diffContent = a.Content
+		}
+	}
+	require.Contains(t, diffContent, "+++ b/feature.txt")
+	require.NotContains(t, diffContent, "README.md")
+
+	// 放行 → completed。
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.Status == "completed"
+	}, "应完成")
+}
+
+// newBare 建一个带 1 个 commit（README.md）的本地 bare 仓库当远端。
+func newBare(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin.git")
+	work := filepath.Join(dir, "seed")
+	run := func(cwd string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = cwd
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	run(dir, "init", "--bare", "-b", "main", origin)
+	run(dir, "init", "-b", "main", work)
+	_ = os.WriteFile(filepath.Join(work, "README.md"), []byte("# hi\n"), 0o644)
+	run(work, "add", ".")
+	run(work, "commit", "-m", "init")
+	run(work, "push", origin, "main")
+	return origin
+}
+
 // --- HTTP 测试辅助 ---
 
 // detailJSON 是 GET /api/deliveries/{id} 的响应体。
@@ -215,6 +345,7 @@ type gateJSON struct {
 		Agent  string `json:"agent"`
 		Output string `json:"output"`
 	} `json:"agent_output"`
+	PRURL string `json:"pr_url"`
 }
 
 // post 发 JSON POST，断言 200；out 非 nil 时解码响应体。

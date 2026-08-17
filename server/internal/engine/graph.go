@@ -23,6 +23,8 @@ type Node struct {
 	RejectTo string
 	// ArtifactKind agent 产出的 artifact kind。
 	ArtifactKind string
+	// Persist 挂门禁前先固化产出（commit/push/PR + 真 diff artifact）。
+	Persist bool
 }
 
 var Graph = map[string]Node{
@@ -30,9 +32,10 @@ var Graph = map[string]Node{
 	"spec":          {Stage: "spec", Kind: KindAgent, Next: "spec_approval", ArtifactKind: "spec"},
 	"spec_approval": {Stage: "spec_approval", Kind: KindGate, Next: "test_gen", RejectTo: "spec"},
 	"test_gen":      {Stage: "test_gen", Kind: KindAgent, Next: "code_gen", ArtifactKind: "tests"},
-	"code_gen":      {Stage: "code_gen", Kind: KindAgent, Next: "unit_test", ArtifactKind: "diff"},
-	"unit_test":     {Stage: "unit_test", Kind: KindCommand, Next: "code_review", OnFail: "code_gen"},
-	"code_review":   {Stage: "code_review", Kind: KindGate, Next: "DONE", ReviewRole: "code_review", RejectTo: "code_gen"},
+	// code_gen 的改动摘要 kind=summary；真正的 diff 由 Persist 在 code_review 门禁产出。
+	"code_gen":    {Stage: "code_gen", Kind: KindAgent, Next: "unit_test", ArtifactKind: "summary"},
+	"unit_test":   {Stage: "unit_test", Kind: KindCommand, Next: "code_review", OnFail: "code_gen"},
+	"code_review": {Stage: "code_review", Kind: KindGate, Next: "DONE", ReviewRole: "code_review", RejectTo: "code_gen", Persist: true},
 }
 
 // MaxFail unit_test 连续失败上限，超过 = blocked。

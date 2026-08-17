@@ -67,6 +67,96 @@ func TestCommitAndPush(t *testing.T) {
 	require.False(t, pushed)
 }
 
+// TestInitRepo：带未跟踪文件的目录也能 init——initial commit 为空（不含那些文件），
+// HEAD 立即可用。文件留给后续 Commit 收纳。
+func TestInitRepo(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))
+	g := New()
+	ctx := context.Background()
+
+	require.NoError(t, g.InitRepo(ctx, dir))
+	head, err := g.Head(ctx, dir)
+	require.NoError(t, err)
+	require.Len(t, head, 40)
+
+	// initial commit 不吞未跟踪文件：a.txt 仍未提交，Commit 才提交。
+	committed, err := g.Commit(ctx, dir, "work")
+	require.NoError(t, err)
+	require.True(t, committed)
+}
+
+// TestCommitNoChanges：无变更时 (false, nil)。
+func TestCommitNoChanges(t *testing.T) {
+	dir := t.TempDir()
+	g := New()
+	ctx := context.Background()
+	require.NoError(t, g.InitRepo(ctx, dir))
+	committed, err := g.Commit(ctx, dir, "empty")
+	require.NoError(t, err)
+	require.False(t, committed)
+}
+
+// TestPushForce：同分支第二次非快进推送默认被拒，force 覆盖成功。
+func TestPushForce(t *testing.T) {
+	origin := newBare(t)
+	g := New()
+	ctx := context.Background()
+
+	// 两个独立 workdir 各自基于同一基线提交 → 互为非快进。
+	ref := "refs/heads/infera/force"
+	for i, name := range []string{"one", "two"} {
+		dir := filepath.Join(t.TempDir(), name)
+		require.NoError(t, g.Clone(ctx, origin, "main", dir))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name+".txt"), []byte(name), 0o644))
+		_, err := g.Commit(ctx, dir, name)
+		require.NoError(t, err)
+		err = g.Push(ctx, dir, origin, ref, i > 0)
+		if i == 0 {
+			require.NoError(t, err)
+		} else {
+			require.NoError(t, err, "force 推送应覆盖远端")
+		}
+	}
+
+	// 反证：不带 force 的非快进推送确实会被拒。
+	dir3 := filepath.Join(t.TempDir(), "three")
+	require.NoError(t, g.Clone(ctx, origin, "main", dir3))
+	require.NoError(t, os.WriteFile(filepath.Join(dir3, "three.txt"), []byte("3"), 0o644))
+	_, err := g.Commit(ctx, dir3, "three")
+	require.NoError(t, err)
+	require.Error(t, g.Push(ctx, dir3, origin, ref, false), "非快进且无 force 应被拒")
+}
+
+// TestDiffRangeAndDiffRoot：Range 是 base..HEAD 的增量，Root 是相对空树的全部内容。
+func TestDiffRangeAndDiffRoot(t *testing.T) {
+	dir := t.TempDir()
+	g := New()
+	ctx := context.Background()
+	require.NoError(t, g.InitRepo(ctx, dir))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("first"), 0o644))
+	_, err := g.Commit(ctx, dir, "first")
+	require.NoError(t, err)
+	base, err := g.Head(ctx, dir)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("second"), 0o644))
+	_, err = g.Commit(ctx, dir, "second")
+	require.NoError(t, err)
+
+	rng, err := g.DiffRange(ctx, dir, base)
+	require.NoError(t, err)
+	require.Contains(t, rng, "+++ b/sub/b.txt")
+	require.NotContains(t, rng, "a.txt", "Range 只含 base 之后的增量")
+
+	root, err := g.DiffRoot(ctx, dir)
+	require.NoError(t, err)
+	require.Contains(t, root, "+++ b/a.txt")
+	require.Contains(t, root, "+++ b/sub/b.txt")
+}
+
 func TestInjectToken(t *testing.T) {
 	tests := []struct {
 		name   string

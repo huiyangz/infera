@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tokfinity/infera/internal/agent"
+	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 )
 
@@ -193,7 +194,7 @@ func TestPipelineHappyPath(t *testing.T) {
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Equal(t, []string{"spec", "test_gen", "code_gen", "code_review"}, ar.roles())
 	require.Equal(t, "tests: a_test.go", artifactByKind(t, st, d.ID, "tests").Content)
-	require.Equal(t, "改了 2 个文件", artifactByKind(t, st, d.ID, "diff").Content)
+	require.Equal(t, "改了 2 个文件", artifactByKind(t, st, d.ID, "summary").Content)
 	require.NotNil(t, artifactByKind(t, st, d.ID, "test_output"))
 	// 门禁前置预审产出 agent_output artifact（门禁页有内容可审）。
 	require.Equal(t, "review ok", artifactByKind(t, st, d.ID, "agent_output").Content)
@@ -458,6 +459,114 @@ func TestFailCountResetsOnPass(t *testing.T) {
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Equal(t, 0, got.FailCount)
 	require.Equal(t, StatusActive, got.Status)
+}
+
+// fakePersister 记录每次输入；err 非空时模拟固化失败。
+type fakePersister struct {
+	calls []persist.Input
+	err   error
+}
+
+func (f *fakePersister) Persist(_ context.Context, in persist.Input) (persist.Result, error) {
+	f.calls = append(f.calls, in)
+	if f.err != nil {
+		return persist.Result{}, f.err
+	}
+	return persist.Result{
+		Diff:   "diff --git a/hello.txt b/hello.txt",
+		PRURL:  "https://github.com/example/repo/pull/7",
+		Branch: "infera/abcd1234",
+	}, nil
+}
+
+// driveToCodeReview 一路推进到 code_review 门禁（固化发生点）。
+func driveToCodeReview(t *testing.T, e *Engine, st *store.Memory) *store.Delivery {
+	t.Helper()
+	ctx := context.Background()
+	d := seed(t, st)
+	require.NoError(t, e.Start(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, e.Continue(ctx, d.ID))
+	return d
+}
+
+// TestPersistAtCodeReviewGate：门禁到达时恰好固化一次，真 diff/pr 落为 artifact；
+// DONE 放行不再重复固化。
+func TestPersistAtCodeReviewGate(t *testing.T) {
+	e, st, ws, _ := newEnv(t, passTR{})
+	fp := &fakePersister{}
+	e.WithPersister(fp)
+	ctx := context.Background()
+	d := driveToCodeReview(t, e, st)
+
+	require.Len(t, fp.calls, 1)
+	in := fp.calls[0]
+	require.Equal(t, d.ID, in.DeliveryID)
+	require.Equal(t, "https://github.com/example/repo.git", in.RepoURL)
+	require.Equal(t, "main", in.BaseBranch)
+	require.Len(t, in.BaseCommit, 40)
+	require.Equal(t, ws.Path(d.ID), in.Workdir)
+	require.Equal(t, "加法函数", in.Title)
+
+	require.Equal(t, "diff --git a/hello.txt b/hello.txt", artifactByKind(t, st, d.ID, "diff").Content)
+	require.Equal(t, "https://github.com/example/repo/pull/7", artifactByKind(t, st, d.ID, "pr").Content)
+	require.Contains(t, eventTypes(t, st, d.ID), "persist_done")
+
+	// 门禁照常挂起；放行 → completed，不再重复固化。
+	got := get(t, st, d.ID)
+	require.Equal(t, "code_review", got.PendingGate)
+	require.Equal(t, StatusActive, got.Status)
+	require.NoError(t, e.Approve(ctx, d.ID))
+	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
+	require.Len(t, fp.calls, 1)
+}
+
+// TestPersistFailureBlocksKeepsWorkdir：固化失败（commit/push 错误）→
+// persist_failed 事件 + blocked 且不释放 workdir（数据安全不变量：产出还在里面）。
+func TestPersistFailureBlocksKeepsWorkdir(t *testing.T) {
+	e, st, ws, _ := newEnv(t, passTR{})
+	fp := &fakePersister{err: errors.New("git push: denied")}
+	e.WithPersister(fp)
+	ctx := context.Background()
+	d := seed(t, st)
+	require.NoError(t, e.Start(ctx, d.ID))
+	require.NoError(t, e.Approve(ctx, d.ID))
+
+	err := e.Continue(ctx, d.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "push: denied")
+
+	got := get(t, st, d.ID)
+	require.Equal(t, StatusBlocked, got.Status)
+	require.Empty(t, got.PendingGate)
+	require.False(t, ws.released, "固化失败必须保留 workdir 供人工救援")
+	require.Contains(t, eventTypes(t, st, d.ID), "persist_failed")
+	require.Contains(t, eventTypes(t, st, d.ID), "delivery_blocked")
+
+	// 固化失败不产出 diff/pr artifact。
+	arts, err := st.ListArtifacts(ctx, d.ID)
+	require.NoError(t, err)
+	for _, a := range arts {
+		require.NotEqual(t, "diff", a.Kind)
+		require.NotEqual(t, "pr", a.Kind)
+	}
+}
+
+// TestPersistAgainAfterReject：驳回重做后再到门禁 → 第二次固化
+// （实现层 force 推同一分支，此处只验证引擎会再调）。
+func TestPersistAgainAfterReject(t *testing.T) {
+	e, st, _, _ := newEnv(t, passTR{})
+	fp := &fakePersister{}
+	e.WithPersister(fp)
+	ctx := context.Background()
+	d := driveToCodeReview(t, e, st)
+	require.Len(t, fp.calls, 1)
+
+	require.NoError(t, e.Reject(ctx, d.ID, "边界遗漏"))
+	require.NoError(t, e.Continue(ctx, d.ID)) // code_gen 重跑 → unit_test 过 → 再到门禁
+
+	require.Len(t, fp.calls, 2)
+	require.Equal(t, "code_review", get(t, st, d.ID).PendingGate)
 }
 
 // 绿地项目（无仓库）base_commit 恒为空：WorkspaceReady 标志保证

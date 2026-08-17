@@ -13,6 +13,7 @@ import (
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
+	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
@@ -49,7 +50,9 @@ func main() {
 	srv := api.NewServer(st, cfg.Password, nil)
 	srv.SetGit(g)
 
-	eng := engine.New(st, ar, ws, tr)
+	// 固化：code_review 门禁到达时 commit（绿地）/ push + PR（绑库，github.com），
+	// 复用带 token 的 git 实例；PR 创建用同一 token。
+	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(g, cfg.GitHubToken))
 	eng.Notify = srv.Publish
 	srv.SetEngine(eng)
 

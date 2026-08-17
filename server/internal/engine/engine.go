@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/tokfinity/infera/internal/agent"
+	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 )
 
@@ -39,12 +40,22 @@ type Engine struct {
 	ws Workspace
 	tr TestRunner
 
+	// ps 可选：产出固化器（Persist=true 的门禁到达时 commit/push/PR + diff artifact）。
+	// nil = 不固化（旧测试行为）。
+	ps persist.Persister
+
 	// Notify 可选：事件发生时回调（WS 推送，main 组装注入）。
 	Notify func(deliveryID, stage, eventType string)
 }
 
 func New(st store.Store, ar agent.Runner, ws Workspace, tr TestRunner) *Engine {
 	return &Engine{st: st, ar: ar, ws: ws, tr: tr}
+}
+
+// WithPersister 注入产出固化器。
+func (e *Engine) WithPersister(p persist.Persister) *Engine {
+	e.ps = p
+	return e
 }
 
 // Start 驱动 delivery 从当前阶段前进，直到门禁 / 失败回环 / 终态 / 错误。
@@ -185,6 +196,12 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 	case KindAgent:
 		return e.stepAgent(ctx, d, node, run)
 	case KindGate:
+		// 固化先于预审：审查员看到的是已提交状态，diff/pr artifact 也就位。
+		if node.Persist && e.ps != nil {
+			if err := e.persistAtGate(ctx, d, node, run); err != nil {
+				return err
+			}
+		}
 		if node.ReviewRole != "" {
 			// 门禁前置 agent（code_review）：先预审产出 agent_output artifact，
 			// 门禁页才有内容可审；失败同 agent 失败约定 blocked。
@@ -244,6 +261,54 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 	}
 	e.finishStageRun(ctx, run.ID, "done")
 	return e.advance(ctx, d, node.Next)
+}
+
+// persistAtGate 在 Persist=true 的门禁到达时固化产出（commit/push/PR）：
+// 真 diff / pr 地址落为 artifact，审查页直接可用。
+// commit/push 失败 = 数据安全事件：blocked 且不释放 workdir（人工救援），
+// 产出只存在于 workdir，不能按常规路径延迟清理掉。
+func (e *Engine) persistAtGate(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun) error {
+	proj, err := e.st.GetProject(ctx, d.ProjectID)
+	if err != nil {
+		return err
+	}
+	res, err := e.ps.Persist(ctx, persist.Input{
+		DeliveryID: d.ID,
+		RepoURL:    proj.RepoURL,
+		BaseBranch: proj.DefaultBranch,
+		BaseCommit: d.BaseCommit,
+		Workdir:    e.ws.Path(d.ID),
+		Title:      d.Title,
+	})
+	if err != nil {
+		e.finishStageRun(ctx, run.ID, "failed")
+		e.emit(ctx, d, node.Stage, "persist_failed", map[string]string{"error": err.Error()})
+		return e.blockKeepWorkdir(ctx, d, fmt.Errorf("persist: %w", err))
+	}
+	if serr := e.st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID,
+		Stage:      node.Stage,
+		Kind:       "diff",
+		Content:    res.Diff,
+	}); serr != nil {
+		return serr
+	}
+	if res.PRURL != "" {
+		if serr := e.st.SaveArtifact(ctx, &store.Artifact{
+			DeliveryID: d.ID,
+			Stage:      node.Stage,
+			Kind:       "pr",
+			Content:    res.PRURL,
+		}); serr != nil {
+			return serr
+		}
+	}
+	e.emit(ctx, d, node.Stage, "persist_done", map[string]string{"branch": res.Branch, "pr_url": res.PRURL})
+	if res.PRError != "" {
+		// push 已成功、PR 没开出来（如已存在/权限不足）：不阻断，只留事件供排查。
+		e.emit(ctx, d, node.Stage, "pr_failed", map[string]string{"error": res.PRError})
+	}
+	return nil
 }
 
 // stepGateReview 跑门禁的前置 agent（预审），产出 agent_output artifact 供门禁展示。
@@ -371,11 +436,23 @@ func (e *Engine) advance(ctx context.Context, d *store.Delivery, next string) er
 
 // block 进入终态 blocked：释放 workspace、记 delivery_blocked 事件，返回 cause 供调用方决定是否上抛。
 func (e *Engine) block(ctx context.Context, d *store.Delivery, cause error) error {
+	return e.blockOpt(ctx, d, cause, true)
+}
+
+// blockKeepWorkdir 同 block 但不释放 workspace：persist 失败时产出只存在于
+// workdir（push 没上去），必须原样保留供人工救援——这是数据安全不变量。
+func (e *Engine) blockKeepWorkdir(ctx context.Context, d *store.Delivery, cause error) error {
+	return e.blockOpt(ctx, d, cause, false)
+}
+
+func (e *Engine) blockOpt(ctx context.Context, d *store.Delivery, cause error, release bool) error {
 	d.Status = StatusBlocked
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
 		return err
 	}
-	e.ws.Release(d.ID)
+	if release {
+		e.ws.Release(d.ID)
+	}
 	e.emit(ctx, d, d.CurrentStage, "delivery_blocked", map[string]string{"reason": cause.Error()})
 	return cause
 }

@@ -108,8 +108,19 @@ func (g *Git) Head(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
-// CommitAndPush 提交 workdir 全部变更并推到远端分支；无变更时返回 (false, nil)。
-func (g *Git) CommitAndPush(ctx context.Context, dir, msg, ref, pushURL string) (bool, error) {
+// InitRepo 在 workdir 初始化 git 仓库（-b main，目录不存在则创建）并打一个
+// 空的 initial commit：保证 HEAD 恒存在——后续 diff、无变更路径都有落点。
+// 目录里已有的未跟踪文件不动，留给后续 Commit 收纳。
+func (g *Git) InitRepo(ctx context.Context, dir string) error {
+	if _, err := g.run(ctx, "", "init", "-b", "main", dir); err != nil {
+		return err
+	}
+	_, err := g.run(ctx, dir, "commit", "--allow-empty", "-m", "init")
+	return err
+}
+
+// Commit 提交 workdir 全部变更（add -A + commit）；无变更时返回 (false, nil)。
+func (g *Git) Commit(ctx context.Context, dir, msg string) (bool, error) {
 	if _, err := g.run(ctx, dir, "add", "-A"); err != nil {
 		return false, err
 	}
@@ -123,7 +134,44 @@ func (g *Git) CommitAndPush(ctx context.Context, dir, msg, ref, pushURL string) 
 	if _, err := g.run(ctx, dir, "commit", "-m", msg); err != nil {
 		return false, err
 	}
-	if _, err := g.run(ctx, dir, "push", injectToken(pushURL, g.Token), "HEAD:"+ref); err != nil {
+	return true, nil
+}
+
+// Push 把 HEAD 推到 pushURL 的 ref；force 时覆盖远端（驳回重做后重推同一分支）。
+func (g *Git) Push(ctx context.Context, dir, pushURL, ref string, force bool) error {
+	args := []string{"push"}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, injectToken(pushURL, g.Token), "HEAD:"+ref)
+	_, err := g.run(ctx, dir, args...)
+	return err
+}
+
+// DiffRange 返回 base..HEAD 的完整 diff。
+func (g *Git) DiffRange(ctx context.Context, dir, base string) (string, error) {
+	out, err := g.run(ctx, dir, "diff", base+"..HEAD")
+	return out, err
+}
+
+// emptyTreeHash 是空树对象的哈希：git 内建的魔法值，无需对象真实存在即可引用。
+const emptyTreeHash = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+// DiffRoot 返回 HEAD 相对空树的完整 diff（绿地项目 = 全部产出）。
+// 注意不能用 `git diff --root HEAD`：--root 是 log/diff-tree 的选项，
+// git-diff 会静默忽略它并输出空 diff。
+func (g *Git) DiffRoot(ctx context.Context, dir string) (string, error) {
+	out, err := g.run(ctx, dir, "diff", emptyTreeHash, "HEAD")
+	return out, err
+}
+
+// CommitAndPush 提交 workdir 全部变更并推到远端分支；无变更时返回 (false, nil)。
+func (g *Git) CommitAndPush(ctx context.Context, dir, msg, ref, pushURL string) (bool, error) {
+	pushed, err := g.Commit(ctx, dir, msg)
+	if err != nil || !pushed {
+		return pushed, err
+	}
+	if err := g.Push(ctx, dir, pushURL, ref, false); err != nil {
 		return false, err
 	}
 	return true, nil
