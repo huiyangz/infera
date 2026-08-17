@@ -157,7 +157,7 @@ export function ProjectsList() {
       <Header fixed>
         <div className='flex w-full items-center justify-between'>
           <div className='flex flex-col gap-1'>
-            <h1 className='text-2xl font-semibold tracking-[-0.4px]'>项目</h1>
+            <h1 className='text-lg font-semibold tracking-[-0.2px]'>项目</h1>
             <p className='text-sm text-muted-foreground'>
               每个项目对应一个代码仓库，需求在项目内流转交付
             </p>
