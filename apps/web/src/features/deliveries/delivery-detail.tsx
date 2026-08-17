@@ -187,8 +187,8 @@ export function DeliveryDetail({
         }
       >
         {/* 阶段推进 */}
-        <Card>
-          <CardHeader className='pb-4'>
+        <Card className={embedded ? 'gap-3 py-4' : undefined}>
+          <CardHeader className='pb-0'>
             <div className='flex items-center justify-between'>
               <CardTitle className='text-sm font-medium'>阶段推进</CardTitle>
               <span className='text-xs text-muted-foreground'>
@@ -283,8 +283,8 @@ export function DeliveryDetail({
         </Card>
 
         {/* 阶段档案 */}
-        <Card>
-          <CardHeader>
+        <Card className={embedded ? 'gap-3 py-4' : undefined}>
+          <CardHeader className='pb-0'>
             <CardTitle className='text-sm font-medium'>交付档案</CardTitle>
             <CardDescription>
               按时间线垂直展开，回环与门禁停留一目了然
