@@ -66,6 +66,31 @@ func TestPgProjectAndDelivery(t *testing.T) {
 	require.Equal(t, "验收标准缺失", gotD.RejectReason)
 	require.True(t, gotD.WorkspaceReady)
 
+	// split 字段 roundtrip：split_mode/merge_state（parent_id 空串 ↔ NULL 见子需求）。
+	d.SplitMode, d.MergeState = true, "conflict"
+	require.NoError(t, p.UpdateDelivery(ctx, d))
+	gotD, err = p.GetDelivery(ctx, d.ID)
+	require.NoError(t, err)
+	require.True(t, gotD.SplitMode)
+	require.Equal(t, "conflict", gotD.MergeState)
+	require.Empty(t, gotD.ParentID, "空 parent_id 落 NULL 回读空串")
+
+	// 子需求：parent_id 落库回读 + ListChildDeliveries 按 wave/created_at 排序。
+	child1 := &Delivery{ProjectID: proj.ID, Title: "子1", Status: "queued", CurrentStage: "intake", ParentID: d.ID, Wave: 2}
+	require.NoError(t, p.CreateDelivery(ctx, child1))
+	time.Sleep(2 * time.Millisecond)
+	child2 := &Delivery{ProjectID: proj.ID, Title: "子2", Status: "active", CurrentStage: "intake", ParentID: d.ID, Wave: 1}
+	require.NoError(t, p.CreateDelivery(ctx, child2))
+	gotChild, err := p.GetDelivery(ctx, child1.ID)
+	require.NoError(t, err)
+	require.Equal(t, d.ID, gotChild.ParentID)
+	require.Equal(t, 2, gotChild.Wave)
+	children, err := p.ListChildDeliveries(ctx, d.ID)
+	require.NoError(t, err)
+	require.Len(t, children, 2)
+	require.Equal(t, child2.ID, children[0].ID, "wave 1 在前")
+	require.Equal(t, child1.ID, children[1].ID)
+
 	// LatestArtifact：同 kind 多条取最新；缺失 kind 报 ErrNotFound。
 	time.Sleep(2 * time.Millisecond) // created_at 来自 DB now()，保证严格递增
 	require.NoError(t, p.SaveArtifact(ctx, &Artifact{DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: "# spec v2"}))
@@ -77,7 +102,7 @@ func TestPgProjectAndDelivery(t *testing.T) {
 
 	s, err := p.ProjectStats(ctx, proj.ID)
 	require.NoError(t, err)
-	require.Equal(t, 1, s.Active)
+	require.Equal(t, 2, s.Active, "父 + 子2（queued 不计入 active）")
 	require.Equal(t, 1, s.Pending)
 
 	// stage runs roundtrip

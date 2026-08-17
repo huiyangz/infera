@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/tokfinity/infera/internal/agent"
+	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 )
@@ -33,6 +36,9 @@ const (
 // errStop 是内部信号：本轮推进到此为止（门禁暂停 / 失败回环 / 终态），不是错误。
 var errStop = errors.New("engine: stop this run")
 
+// parentDriveTimeout 子需求完成后的异步父推进（合并循环）时间上限。
+const parentDriveTimeout = 30 * time.Minute
+
 // Engine 阶段图执行器。只认识 Graph 的节点类型与下一跳，不认识具体业务。
 type Engine struct {
 	st store.Store
@@ -44,12 +50,27 @@ type Engine struct {
 	// nil = 不固化（旧测试行为）。
 	ps persist.Persister
 
+	// g 合并用 git 实例（拆分父增量 merge / 冲突恢复）。
+	g *git.Git
+
+	// OnStartDelivery 可选：子需求批次启动时点火回调（api 层 spawn driver）。
+	OnStartDelivery func(deliveryID string)
+
+	// parentLocks per-parent 互斥（split 父的合并与批次调度串行化）。
+	parentLocks sync.Map
+
 	// Notify 可选：事件发生时回调（WS 推送，main 组装注入）。
 	Notify func(deliveryID, stage, eventType string)
 }
 
 func New(st store.Store, ar agent.Runner, ws Workspace, tr TestRunner) *Engine {
-	return &Engine{st: st, ar: ar, ws: ws, tr: tr}
+	return &Engine{st: st, ar: ar, ws: ws, tr: tr, g: git.New()}
+}
+
+// WithGit 注入合并用 git 实例（带 token；默认无 token 的裸实例）。
+func (e *Engine) WithGit(g *git.Git) *Engine {
+	e.g = g
+	return e
 }
 
 // WithPersister 注入产出固化器。
@@ -76,26 +97,10 @@ func (e *Engine) Start(ctx context.Context, deliveryID string) error {
 
 // Approve 通过当前人工门禁：只做门禁簿记（清 gate、推进到下一阶段、落盘）后立即返回，
 // 不驱动 agent——后续推进由调用方异步 Continue（API 层后台 goroutine），避免同步阻塞。
+// 拆分批准走 ApproveWithSplit（本方法 = 无拆分的普通批准）。
 func (e *Engine) Approve(ctx context.Context, deliveryID string) error {
-	d, err := e.st.GetDelivery(ctx, deliveryID)
-	if err != nil {
-		return err
-	}
-	if d.PendingGate == "" {
-		return fmt.Errorf("engine: delivery %s has no pending gate", d.ID)
-	}
-	node, ok := Graph[d.PendingGate]
-	if !ok {
-		return fmt.Errorf("engine: unknown gate stage %q", d.PendingGate)
-	}
-	gate := d.PendingGate
-	d.PendingGate = ""
-	if err := e.st.UpdateDelivery(ctx, d); err != nil {
-		return err
-	}
-	e.finishLatestRun(ctx, d.ID, gate, "done")
-	e.emit(ctx, d, gate, "gate_approved", nil)
-	return e.advance(ctx, d, node.Next) // Next=DONE 时进入终态 completed
+	_, err := e.ApproveWithSplit(ctx, deliveryID, nil)
+	return err
 }
 
 // Continue 从当前状态推进到下一个停车点（门禁 / 失败回环 / 终态 / 错误）。
@@ -420,6 +425,7 @@ func (e *Engine) stepUnitTest(ctx context.Context, d *store.Delivery, node Node,
 }
 
 // advance 推进到 next；DONE 表示终态：completed + 释放 workspace。
+// 拆分子需求完成时异步驱动父（合并/批次调度），不阻塞子需求自己的收尾。
 func (e *Engine) advance(ctx context.Context, d *store.Delivery, next string) error {
 	if next == "DONE" {
 		d.Status = StatusCompleted
@@ -428,6 +434,15 @@ func (e *Engine) advance(ctx context.Context, d *store.Delivery, next string) er
 		}
 		e.ws.Release(d.ID)
 		e.emit(ctx, d, d.CurrentStage, "delivery_completed", nil)
+		if d.ParentID != "" {
+			parentID := d.ParentID
+			go func() {
+				// 独立 ctx：子需求驱动 ctx 可能随请求结束被取消，父推进不受影响。
+				pctx, cancel := context.WithTimeout(context.Background(), parentDriveTimeout)
+				defer cancel()
+				e.MaybeDriveParent(pctx, parentID)
+			}()
+		}
 		return nil
 	}
 	d.CurrentStage = next

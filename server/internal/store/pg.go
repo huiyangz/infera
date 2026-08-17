@@ -29,7 +29,7 @@ func mapErr(err error) error {
 
 const (
 	projectCols  = "id,name,repo_url,default_branch,pinned,created_at,updated_at"
-	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,created_at,updated_at"
+	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,created_at,updated_at"
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
@@ -45,10 +45,20 @@ func scanProject(row pgx.Row) (*Project, error) {
 
 func scanDelivery(row pgx.Row) (*Delivery, error) {
 	d := &Delivery{}
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	var parentID sql.NullString
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
+	d.ParentID = parentID.String
 	return d, nil
+}
+
+// nullableParent 把空串映射为 SQL NULL（parent_id 列可空）。
+func nullableParent(id string) any {
+	if id == "" {
+		return nil
+	}
+	return id
 }
 
 func scanStageRun(row pgx.Row) (*StageRun, error) {
@@ -144,9 +154,9 @@ func (pg *Pg) CreateDelivery(ctx context.Context, d *Delivery) error {
 		d.ID = uuid.NewString()
 	}
 	_, err := pg.pool.Exec(ctx,
-		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady)
+		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState)
 	if err != nil {
 		return err
 	}
@@ -199,11 +209,29 @@ func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
-		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,updated_at=now()
+		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,updated_at=now()
 		 WHERE id=$1 RETURNING updated_at`,
-		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady).
+		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState).
 		Scan(&d.UpdatedAt)
 	return mapErr(err)
+}
+
+// ListChildDeliveries 取某父 delivery 的全部子需求，按批次号、创建时间升序。
+func (pg *Pg) ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error) {
+	rows, err := pg.pool.Query(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE parent_id=$1 ORDER BY wave, created_at`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Delivery, 0)
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	return out, rows.Err()
 }
 
 // events / artifacts / stage_runs

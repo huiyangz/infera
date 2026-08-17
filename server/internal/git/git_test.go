@@ -157,6 +157,53 @@ func TestDiffRangeAndDiffRoot(t *testing.T) {
 	require.Contains(t, root, "+++ b/sub/b.txt")
 }
 
+// pushBranch 从一个临时克隆提交一个新文件并推到 origin 的 infera/<name> 分支。
+func pushBranch(t *testing.T, g *Git, origin, name, file, content string) {
+	t.Helper()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), name)
+	require.NoError(t, g.Clone(ctx, origin, "main", dir))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644))
+	_, err := g.Commit(ctx, dir, "feat: "+name)
+	require.NoError(t, err)
+	require.NoError(t, g.Push(ctx, dir, origin, "refs/heads/infera/"+name, false))
+}
+
+func TestFetchMergeResetHard(t *testing.T) {
+	origin := newBare(t)
+	g := New()
+	ctx := context.Background()
+
+	// 父 workdir：克隆 main 作为合并目标。
+	parent := filepath.Join(t.TempDir(), "parent")
+	require.NoError(t, g.Clone(ctx, origin, "main", parent))
+
+	// 干净合并：分支 A 改独立文件，fetch + merge 成功。
+	pushBranch(t, g, origin, "aaaa1111", "a.txt", "aaa")
+	require.NoError(t, g.Fetch(ctx, parent, origin, "infera/aaaa1111"))
+	require.NoError(t, g.Merge(ctx, parent, "merge: 子需求 A"))
+	out, err := exec.Command("git", "-C", parent, "show", "HEAD:a.txt").Output()
+	require.NoError(t, err)
+	require.Equal(t, "aaa", strings.TrimSpace(string(out)))
+
+	// 冲突：分支 B 与分支 C 改同一文件的同一行。
+	pushBranch(t, g, origin, "bbbb2222", "same.txt", "from B")
+	require.NoError(t, g.Fetch(ctx, parent, origin, "infera/bbbb2222"))
+	require.NoError(t, g.Merge(ctx, parent, "merge: 子需求 B"))
+	pushBranch(t, g, origin, "cccc3333", "same.txt", "from C")
+	require.NoError(t, g.Fetch(ctx, parent, origin, "infera/cccc3333"))
+	err = g.Merge(ctx, parent, "merge: 子需求 C")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrMergeConflict)
+
+	// 冲突后 reset --hard FETCH_HEAD 对齐远端状态。
+	require.NoError(t, g.Fetch(ctx, parent, origin, "infera/bbbb2222"))
+	require.NoError(t, g.ResetHard(ctx, parent, "FETCH_HEAD"))
+	head, err := g.Head(ctx, parent)
+	require.NoError(t, err)
+	require.Len(t, head, 40)
+}
+
 func TestInjectToken(t *testing.T) {
 	tests := []struct {
 		name   string

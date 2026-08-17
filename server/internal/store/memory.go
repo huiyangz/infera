@@ -158,6 +158,25 @@ func (m *Memory) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 	return out, nil
 }
 
+// ListChildDeliveries 取某父 delivery 的全部子需求，按批次号、创建时间升序。
+func (m *Memory) ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Delivery, 0)
+	for _, d := range m.deliveries {
+		if d.ParentID == parentID {
+			out = append(out, *d)
+		}
+	}
+	slices.SortFunc(out, func(a, b Delivery) int {
+		if a.Wave != b.Wave {
+			return a.Wave - b.Wave
+		}
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return out, nil
+}
+
 func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

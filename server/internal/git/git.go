@@ -10,12 +10,17 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 )
+
+// ErrMergeConflict 合并产生冲突（输出含 CONFLICT，git 以非零退出）。
+// 调用方用 errors.Is 识别后走人工解冲突流程。
+var ErrMergeConflict = errors.New("git merge: conflict")
 
 type Git struct{ Token string }
 
@@ -145,6 +150,29 @@ func (g *Git) Push(ctx context.Context, dir, pushURL, ref string, force bool) er
 	}
 	args = append(args, injectToken(pushURL, g.Token), "HEAD:"+ref)
 	_, err := g.run(ctx, dir, args...)
+	return err
+}
+
+// Fetch 从 repoURL 拉取单个 ref 到 FETCH_HEAD（不合并；token 注入同 Clone）。
+// ref 形如 "infera/abcd1234"。
+func (g *Git) Fetch(ctx context.Context, dir, rawURL, ref string) error {
+	_, err := g.run(ctx, dir, "fetch", injectToken(rawURL, g.Token), ref)
+	return err
+}
+
+// Merge 把 FETCH_HEAD 合并进当前分支（--no-edit）。冲突时返回 ErrMergeConflict
+// （可 errors.Is 识别）；workdir 停留在冲突状态，由调用方决定 reset/人工救援。
+func (g *Git) Merge(ctx context.Context, dir, msg string) error {
+	out, err := g.run(ctx, dir, "merge", "--no-edit", "-m", msg, "FETCH_HEAD")
+	if err != nil && strings.Contains(out, "CONFLICT") {
+		return fmt.Errorf("%w: %s", ErrMergeConflict, g.redact(out))
+	}
+	return err
+}
+
+// ResetHard 把 workdir 硬重置到指定 ref（冲突恢复：对齐人工解决后的远端分支）。
+func (g *Git) ResetHard(ctx context.Context, dir, ref string) error {
+	_, err := g.run(ctx, dir, "reset", "--hard", ref)
 	return err
 }
 

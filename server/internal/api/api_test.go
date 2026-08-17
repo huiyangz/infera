@@ -365,7 +365,6 @@ func TestResumeActive(t *testing.T) {
 	}, 200*time.Millisecond, 20*time.Millisecond)
 }
 
-
 func TestRepoRequired(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
