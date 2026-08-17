@@ -16,9 +16,7 @@ export function SignIn() {
     <AuthLayout>
       <Card className='max-w-sm gap-4'>
         <CardHeader>
-          <CardTitle className='text-lg tracking-tight'>
-            登录 infera
-          </CardTitle>
+          <CardTitle className='text-lg tracking-tight'>登录</CardTitle>
           <CardDescription>
             输入访问密码，进入 Agent 交付流水线
           </CardDescription>
