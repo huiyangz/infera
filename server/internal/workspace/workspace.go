@@ -108,8 +108,11 @@ func (m *Manager) Path(deliveryID string) string {
 
 // Release 按保留期延迟清理；retention<=0 立即清理。
 // 取 per-delivery 锁：与在途的 Acquire 串行（清理不与 clone 竞争同一目录）。
-// 清理路径由 root+id 现算，不查内存注册表——注册表随进程重启丢失，
+// 清理路径由 root+id 现算，不依赖注册表存在——注册表随进程重启丢失，
 // 重启后对已终态交付的 Release 仍必须清掉磁盘目录（否则 workdir 永久泄漏）。
+// 但删除前必须查注册表：窗口内同 ID re-Acquire（重启恢复/重试）会重新注册
+// 新目录，睡醒的计时器不得删掉活 workdir（持 per-delivery 锁检查+删除，
+// 与在途 Acquire 串行，否则检查与删除之间可能被 Acquire 抢注）。
 func (m *Manager) Release(deliveryID string) {
 	unlock := m.lockDelivery(deliveryID)
 	defer unlock()
@@ -124,6 +127,14 @@ func (m *Manager) Release(deliveryID string) {
 	}
 	go func() {
 		time.Sleep(m.retention)
+		unlock := m.lockDelivery(deliveryID)
+		defer unlock()
+		m.mu.Lock()
+		_, reRegistered := m.dirs[deliveryID]
+		m.mu.Unlock()
+		if reRegistered {
+			return // 窗口内被 re-Acquire 认领：活 workdir 不删
+		}
 		_ = os.RemoveAll(dir)
 	}()
 }

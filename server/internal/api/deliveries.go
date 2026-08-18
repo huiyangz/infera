@@ -298,9 +298,12 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		Split      []store.ChildSpec `json:"split"`
 		Tasks      []store.TaskSpec  `json:"tasks"`
 	}
-	raw, err := io.ReadAll(r.Body)
+	// 手工读 body（空/缺 body = 普通批准，decode 不接受空 body），
+	// 但必须与 decode 同款 1MiB 上限——MaxBytesReader 超限即报错，
+	// 不得整包读入内存再解析（内存放大防护）。
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
-		// 读体失败（客户端断连等）必须拒绝：吞错按空 body 继续会把门禁批掉。
+		// 读体失败（客户端断连/超限）必须拒绝：吞错按空 body 继续会把门禁批掉。
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
@@ -408,10 +411,10 @@ func (s *Server) withGateAction(w http.ResponseWriter, r *http.Request, action f
 // --- 驱动与锁 ---
 
 // lockFor 取/建 per-delivery 锁：引擎自身无并发保护，
-// 同一 delivery 同时只允许一个驱动者（create 的异步 driver / approve / reject 互斥）。
+// 同一 delivery 同时只允许一个驱动者（create 的异步 driver / approve / reject
+// / MCP 簿记互斥——与 MCP 面共享同一份注册表）。
 func (s *Server) lockFor(deliveryID string) *sync.Mutex {
-	v, _ := s.locks.LoadOrStore(deliveryID, &sync.Mutex{})
-	return v.(*sync.Mutex)
+	return s.locks.For(deliveryID)
 }
 
 // runDelivery 异步驱动（创建/重启恢复时调用）：拿 per-delivery 锁后推进到稳定。

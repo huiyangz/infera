@@ -102,9 +102,11 @@ func main() {
 
 	// MCP 服务（R3）：把驾驶面（上下文 / 本机交回 / 门操作）暴露给任意 MCP 客户端。
 	// 挂在 root 路由的 /mcp（api.Mux 原样挂在 /）；未设置 INFERA_MCP_TOKEN 时端点禁用。
-	// 簿记后的推进复用 api 的 per-delivery 锁驱动（RunDelivery），与 HTTP 面同一条推进路径。
+	// 簿记后的推进复用 api 的 per-delivery 锁驱动（RunDelivery），与 HTTP 面同一条推进路径；
+	// per-delivery 锁也共享同一份——MCP 簿记与 api 后台 driver 不得并发进无并发保护的引擎。
 	mcpSrv := mcp.New(st, eng, ws.Path, cfg.MCPToken)
 	mcpSrv.SetDrive(srv.RunDelivery)
+	mcpSrv.SetLocks(srv.DeliveryLocks())
 	root := chi.NewRouter()
 	root.Mount("/", srv.Mux())
 	root.Mount("/mcp", mcpSrv.Handler())

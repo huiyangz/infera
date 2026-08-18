@@ -6,9 +6,15 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// wsWriteWait 单帧写超时：对端停读（标签页挂起/网络半断）时内核缓冲写满，
+// 无超时的 WriteMessage 会永久阻塞——Publish 是引擎的同步通知路径，
+// 一条僵死连接就能反压引擎。var 供测试收紧（生产恒 10s）。
+var wsWriteWait = 10 * time.Second
 
 // wsClient 包一层 per-conn 写锁：gorilla 的 conn 不允许并发 WriteMessage
 // （会 panic/损坏帧），而 Publish 可能被多个引擎 goroutine 同时触发。
@@ -17,12 +23,20 @@ type wsClient struct {
 	wmu  sync.Mutex
 }
 
-// write 串行写一帧文本消息；慢/断开连接失败静默丢弃——
-// 读循环检测到断开后会 unsubscribe 清理。
+// write 串行写一帧文本消息，带写超时；失败（超时/断开）立即关闭连接——
+// 读循环随之退出并 unsubscribe，僵死连接不会长期占用订阅。
 func (w *wsClient) write(mt int, b []byte) error {
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
-	return w.conn.WriteMessage(mt, b)
+	if err := w.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
+		_ = w.conn.Close()
+		return err
+	}
+	if err := w.conn.WriteMessage(mt, b); err != nil {
+		_ = w.conn.Close()
+		return err
+	}
+	return nil
 }
 
 // hub 按 delivery 订阅分发；Publish 供引擎 Notify 注入调用（main 组装）。

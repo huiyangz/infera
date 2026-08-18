@@ -88,3 +88,30 @@ func TestMCPEndpoint(t *testing.T) {
 		t.Errorf("尾斜杠应被容错，得到 %q", got)
 	}
 }
+
+// TestLoadRejectsNonLoopbackListen：守护进程无鉴权面（本机网页按钮直连），
+// 监听地址只许回环——绑 0.0.0.0/局域网/域名等于把「拉起终端跑 CLI」暴露全网。
+func TestLoadRejectsNonLoopbackListen(t *testing.T) {
+	cases := []struct{ name, listen string }{
+		{"全接口 0.0.0.0", "0.0.0.0:8788"},
+		{"空 host 全接口", ":8788"},
+		{"局域网地址", "192.168.1.5:8788"},
+		{"域名", "example.com:8788"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := Load([]string{"--listen", c.listen}, func(string) string { return "" }); err == nil {
+				t.Errorf("--listen %s 应被拒绝（只许绑回环）", c.listen)
+			}
+		})
+	}
+}
+
+// TestLoadAcceptsLoopbackListen：回环三形态（127.0.0.1 / localhost / ::1）放行。
+func TestLoadAcceptsLoopbackListen(t *testing.T) {
+	for _, listen := range []string{"127.0.0.1:8788", "localhost:8788", "[::1]:8788"} {
+		if _, err := Load([]string{"--listen", listen}, func(string) string { return "" }); err != nil {
+			t.Errorf("回环 %s 应被接受: %v", listen, err)
+		}
+	}
+}

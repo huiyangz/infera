@@ -71,8 +71,16 @@ func (c *Config) validate() error {
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
 		return fmt.Errorf("--server 必须是 http(s) 基址（如 http://localhost:8080），得到 %q", c.Server)
 	}
-	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
+	host, _, err := net.SplitHostPort(c.Listen)
+	if err != nil {
 		return fmt.Errorf("--listen 必须是 host:port，得到 %q", c.Listen)
+	}
+	// 只许绑回环：守护进程无鉴权面（本机网页按钮直连，/handle 会拉终端跑 CLI），
+	// 绑 0.0.0.0/局域网/域名等于把本机执行暴露给全网；空 host（:port = 全接口）同拒。
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return fmt.Errorf("--listen 只允许本机回环（localhost/127.0.0.1/::1），得到 %q", c.Listen)
 	}
 	return nil
 }

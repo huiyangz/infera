@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sync"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/tokfinity/infera/internal/deliverylock"
 	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/store"
 )
@@ -42,18 +42,24 @@ type Server struct {
 
 	// locks per-delivery 驱动锁（deliveryID → *sync.Mutex）：
 	// 引擎无并发保护，创建的异步 driver 与 approve/reject 借此互斥。
-	locks sync.Map
+	// 与 MCP 面共享同一份（main 经 DeliveryLocks 注入 mcp）——两条驾驶面
+	// 并发进引擎会双写 UpdateDelivery / 双 advance / 事件乱序。
+	locks *deliverylock.Locks
 
 	// hub per-delivery websocket 订阅；Server.Publish 供 engine.Notify 注入。
 	hub *hub
 }
 
 func NewServer(st store.Store, password string, engine EngineAPI) *Server {
-	return &Server{st: st, auth: newSessionManager(password), engine: engine, hub: newHub()}
+	return &Server{st: st, auth: newSessionManager(password), engine: engine, hub: newHub(), locks: deliverylock.New()}
 }
 
 func (s *Server) SetEngine(e EngineAPI) { s.engine = e }
 func (s *Server) SetGit(g *git.Git)     { s.g = g }
+
+// DeliveryLocks 导出 per-delivery 锁注册表：main 把同一份注入 MCP 面
+// （mcp.Server.SetLocks），两条驾驶面对引擎的操作借此互斥。
+func (s *Server) DeliveryLocks() *deliverylock.Locks { return s.locks }
 
 // SetCookieSecure 开启 session cookie 的 Secure 属性（HTTPS 部署时装配）。
 func (s *Server) SetCookieSecure(v bool) *Server {

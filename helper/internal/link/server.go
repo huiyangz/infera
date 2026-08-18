@@ -93,10 +93,14 @@ func (d *Daemon) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHandle 「在本地处理此阶段」：body {"delivery_id": "..."}。
-// 错误一律 JSON + 可操作文本：配置问题（400）、infera 服务问题（400 透传服务端文本）、
-// 本机拉起问题（500）。
+// Origin 强制白名单（无 Origin / 非本机一律 403）：/handle 会驱动守护进程
+// 拉起终端执行 CLI，恶意网页可用 no-cors text/plain 简单请求直打本机——
+// CORS 头只挡「读响应」不挡「发请求」。/handle 只服务网页按钮（浏览器必带
+// Origin），非浏览器自动化走 MCP 直连，无 Origin 也拒。
+// 其余错误一律 JSON + 可操作文本：配置问题（400）、infera 服务问题（400 透传
+// 服务端文本）、本机拉起问题（500）。
 func (d *Daemon) handleHandle(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions { // CORS 预检
+	if r.Method == http.MethodOptions { // CORS 预检（仅本机来源回显 CORS 头）
 		d.cors(w, r)
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -104,6 +108,10 @@ func (d *Daemon) handleHandle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST, OPTIONS")
 		writeJSONStatus(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 POST"})
+		return
+	}
+	if !originAllowed(r) {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "Origin 不被允许（仅接受本机网页来源）"})
 		return
 	}
 	d.cors(w, r)
@@ -117,6 +125,10 @@ func (d *Daemon) handleHandle(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(body.DeliveryID) == "" {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "缺少 delivery_id"})
+		return
+	}
+	if !validDeliveryID(body.DeliveryID) {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "delivery_id 不合法（仅字母数字、-、_，最长 128）"})
 		return
 	}
 	if d.cfg.Token == "" {
@@ -171,8 +183,43 @@ func (d *Daemon) stage(plan *LaunchPlan, dir string) error {
 	return os.WriteFile(filepath.Join(dir, "prompt.txt"), []byte(plan.Prompt), 0o600)
 }
 
+// originAllowed /handle 的来源白名单：必须带 Origin 且主机为本机
+// （localhost/127.0.0.1/::1）。比 cors() 的回显判定更严——回显不给头
+// 只挡「读响应」，不挡「发请求」；no-cors 简单请求照样能打到守护进程。
+func originAllowed(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// validDeliveryID delivery_id 进路径（暂存目录 ~/.infera/link/<id>）前的校验：
+// 白名单字符集（UUID/短横线命名都覆盖），挡路径穿越（../、分隔符）与怪值。
+func validDeliveryID(id string) bool {
+	if len(id) > 128 {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return id != ""
+}
+
 // cors 本机来源回显 Origin（与 server /mcp 的 Origin 纪律同款：仅 localhost）。
-// 非本机来源不给头——浏览器同源策略会拦下响应。
+// /handle 已由 originAllowed 强制白名单；此处回显让正常网页按钮能读响应。
 func (d *Daemon) cors(w http.ResponseWriter, r *http.Request) {
 	o := r.Header.Get("Origin")
 	if o == "" {
