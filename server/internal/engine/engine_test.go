@@ -13,10 +13,12 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// fakeRunner 记录每次调用的 role，按 role 返回固定产物；specOutput 可注入（复杂度建议块测试）。
+// fakeRunner 记录每次调用的 role，按 role 返回固定产物；specOutput/tasksOutput 可注入
+// （复杂度建议块 / 任务清单块测试）。
 type fakeRunner struct {
-	calls      []agent.Request
-	specOutput string
+	calls       []agent.Request
+	specOutput  string
+	tasksOutput string
 }
 
 func (f *fakeRunner) Run(_ context.Context, req agent.Request) (agent.Result, error) {
@@ -31,7 +33,11 @@ func (f *fakeRunner) Run(_ context.Context, req agent.Request) (agent.Result, er
 	case "design":
 		return agent.Result{Output: "# 设计正文"}, nil
 	case "tasks":
-		return agent.Result{Output: "tasks: [1, 2]"}, nil
+		out := f.tasksOutput
+		if out == "" {
+			out = "任务清单：\n\n```infera-tasks\n[{\"title\":\"任务A\",\"detail\":\"做 A\"},{\"title\":\"任务B\",\"detail\":\"做 B\"}]\n```"
+		}
+		return agent.Result{Output: out}, nil
 	case "test_gen":
 		return agent.Result{Output: "tests: a_test.go"}, nil
 	case "code_gen":

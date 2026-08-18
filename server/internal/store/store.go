@@ -67,14 +67,23 @@ type ChildSpec struct {
 	Wave        int    `json:"wave"`
 }
 
+// TaskSpec 任务清单条目（tasks agent 产出 / tasks_approval 门可编辑覆盖；api/engine 共用）。
+type TaskSpec struct {
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+}
+
 // ApproveOpts 门禁批准选项（api/engine 共用，放 store 避免反向依赖）。
-// 单入口按当前门分发：spec_approval 用 Complexity；design_approval 用 Split。
+// 单入口按当前门分发：spec_approval 用 Complexity；design_approval 用 Split；
+// tasks_approval 用 Tasks。
 type ApproveOpts struct {
 	// Complexity 需求复杂度裁定（spec_approval 门）：small|large；
 	// 空 = 取 spec 末尾 infera-complexity 块的建议，再无建议 = small。
 	Complexity string `json:"complexity"`
 	// Split 非空 = 「批准并拆分」（design_approval 门专用）。
 	Split []ChildSpec `json:"split"`
+	// Tasks 非空 = 批准时覆盖任务清单（tasks_approval 门专用，同 split 编辑器模式）。
+	Tasks []TaskSpec `json:"tasks"`
 }
 
 // Agent 注册的执行者：runner 决定 config 语义（cli=command / http=url / docker=image+command / local=空）。

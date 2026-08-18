@@ -107,7 +107,8 @@ func (e *Engine) Start(ctx context.Context, deliveryID string) error {
 // Approve 通过当前人工门禁（唯一入口）：只做门禁簿记（清 gate、按门分发选项、推进、
 // 落盘）后立即返回，不驱动 agent——后续推进由调用方异步 Continue（API 层后台 goroutine）。
 // opts 按当前门校验：spec_approval 裁定 Complexity（空=取 spec 的 infera-complexity 建议，
-// 再空=small，老数据 ” 同语义）；design_approval 非空 Split=「批准并拆分」（见 approveSplit）。
+// 再空=small，老数据 ” 同语义）；design_approval 非空 Split=「批准并拆分」（见 approveSplit）；
+// tasks_approval 非空 Tasks=「批准并覆盖任务清单」（见 approveTasksOverride）。
 // 选项给错门 / 取值非法 → 报错且不消费门禁。拆分批准返回创建的子需求，其余返回 nil。
 func (e *Engine) Approve(ctx context.Context, deliveryID string, opts store.ApproveOpts) ([]store.Delivery, error) {
 	d, err := e.st.GetDelivery(ctx, deliveryID)
@@ -123,6 +124,12 @@ func (e *Engine) Approve(ctx context.Context, deliveryID string, opts store.Appr
 	}
 	if len(opts.Split) > 0 {
 		return e.approveSplit(ctx, d, opts.Split)
+	}
+	if len(opts.Tasks) > 0 {
+		if err := e.approveTasksOverride(ctx, d, opts.Tasks); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
 	if opts.Complexity != "" {
 		if d.PendingGate != "spec_approval" {
@@ -357,17 +364,29 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 	if err != nil {
 		return err
 	}
+	if node.Stage == "code_gen" {
+		// code_gen 有任务清单时逐任务实现（无则单次整体，见 stepCodeGen）。
+		return e.stepCodeGen(ctx, d, node, run, ar, spec, feedback)
+	}
+	prompt := agent.BuildPrompt(node.Stage, d.Description, spec, feedback)
+	addenda, err := e.promptAddenda(ctx, d, node.Stage)
+	if err != nil {
+		return err
+	}
 	res, err := ar.Run(ctx, agent.Request{
 		Role:    node.Stage,
-		Prompt:  agent.BuildPrompt(node.Stage, d.Description, spec, feedback),
+		Prompt:  prompt + addenda,
 		Workdir: e.ws.Path(d.ID),
 	})
 	if err != nil {
-		e.finishStageRun(ctx, run.ID, "failed")
-		e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
-		return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+		return e.agentFailed(ctx, d, node, run, err)
 	}
-	if err := e.st.SaveArtifact(ctx, &store.Artifact{
+	if node.Stage == "tasks" {
+		// tasks 节点：产出先解析为清单 JSON 再落盘（畸形块容错为空清单）。
+		if err := e.stepTasksAgent(ctx, d, res); err != nil {
+			return err
+		}
+	} else if err := e.st.SaveArtifact(ctx, &store.Artifact{
 		DeliveryID: d.ID,
 		Stage:      node.Stage,
 		Kind:       node.ArtifactKind,
@@ -452,9 +471,7 @@ func (e *Engine) stepGateReview(ctx context.Context, d *store.Delivery, node Nod
 		Workdir: e.ws.Path(d.ID),
 	})
 	if err != nil {
-		e.finishStageRun(ctx, run.ID, "failed")
-		e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
-		return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+		return e.agentFailed(ctx, d, node, run, err)
 	}
 	if err := e.st.SaveArtifact(ctx, &store.Artifact{
 		DeliveryID: d.ID,
@@ -577,6 +594,13 @@ func (e *Engine) block(ctx context.Context, d *store.Delivery, cause error) erro
 	return e.blockOpt(ctx, d, cause, true)
 }
 
+// agentFailed agent 调用失败的共同处理：stage_failed 事件 + blocked（设计内终态）。
+func (e *Engine) agentFailed(ctx context.Context, d *store.Delivery, node Node, run *store.StageRun, err error) error {
+	e.finishStageRun(ctx, run.ID, "failed")
+	e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
+	return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
+}
+
 // blockKeepWorkdir 同 block 但不释放 workspace：persist 失败时产出只存在于
 // workdir（push 没上去），必须原样保留供人工救援——这是数据安全不变量。
 func (e *Engine) blockKeepWorkdir(ctx context.Context, d *store.Delivery, cause error) error {
@@ -624,7 +648,12 @@ func (e *Engine) finishLatestRun(ctx context.Context, deliveryID, stage, status 
 
 // latestSpec 取最近一条 kind=spec 的产物内容（无则空串）。
 func (e *Engine) latestSpec(ctx context.Context, deliveryID string) (string, error) {
-	a, err := e.st.LatestArtifact(ctx, deliveryID, "spec")
+	return e.latestArtifactContent(ctx, deliveryID, "spec")
+}
+
+// latestArtifactContent 取最近一条指定 kind 的产物内容（无则空串）。
+func (e *Engine) latestArtifactContent(ctx context.Context, deliveryID, kind string) (string, error) {
+	a, err := e.st.LatestArtifact(ctx, deliveryID, kind)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", nil
 	}
@@ -632,6 +661,58 @@ func (e *Engine) latestSpec(ctx context.Context, deliveryID string) (string, err
 		return "", err
 	}
 	return a.Content, nil
+}
+
+// promptAddenda 角色模板之外的附加注入段（R9 / 任务层）：
+//   - spec：子需求（parent_id 非空）注入父的 spec + design artifact 作为约束参考；
+//   - tasks：大需求路径注入已批准的设计文档作为约束参考。
+//
+// 不适用 / 无可注入内容时返回空串。
+func (e *Engine) promptAddenda(ctx context.Context, d *store.Delivery, stage string) (string, error) {
+	switch stage {
+	case "spec":
+		return e.parentContext(ctx, d)
+	case "tasks":
+		design, err := e.latestArtifactContent(ctx, d.ID, "design")
+		if err != nil {
+			return "", err
+		}
+		if design == "" {
+			return "", nil
+		}
+		return "\n\n设计文档（约束参考）：\n" + design, nil
+	}
+	return "", nil
+}
+
+// parentContext 子需求的父上下文注入段：父的 spec + design artifact
+// （"作为约束参考，不要重写"）。无父 / 父暂无产物 → 空串不注入。
+func (e *Engine) parentContext(ctx context.Context, d *store.Delivery) (string, error) {
+	if d.ParentID == "" {
+		return "", nil
+	}
+	spec, err := e.latestArtifactContent(ctx, d.ParentID, "spec")
+	if err != nil {
+		return "", err
+	}
+	design, err := e.latestArtifactContent(ctx, d.ParentID, "design")
+	if err != nil {
+		return "", err
+	}
+	if spec == "" && design == "" {
+		return "", nil
+	}
+	var b strings.Builder
+	b.WriteString("\n\n以下是父需求规格/设计，作为约束参考，不要重写：")
+	if spec != "" {
+		b.WriteString("\n\n父需求规格：\n")
+		b.WriteString(spec)
+	}
+	if design != "" {
+		b.WriteString("\n\n父需求设计：\n")
+		b.WriteString(design)
+	}
+	return b.String(), nil
 }
 
 // latestTestOutput 取最近一条 unit_test 输出（截断 maxTestOutputRunes；无则空串）。

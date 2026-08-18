@@ -99,13 +99,14 @@ func TestLargePipelineThroughTasksGate(t *testing.T) {
 	require.Equal(t, "code_review", got.CurrentStage)
 	require.Equal(t, "code_review", got.PendingGate)
 
-	// 全序角色：spec → design → tasks → test_gen → code_gen → code_review。
-	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_review"}, ar.roles())
-	// 产物：design/tasks/tests/summary 逐门落盘。
+	// 全序角色：spec → design → tasks → test_gen → code_gen ×2（逐任务）→ code_review。
+	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_gen", "code_review"}, ar.roles())
+	// 产物：design/tests 逐门落盘；tasks 为解析后的清单 JSON；summary 为任务完成合成摘要。
 	require.Equal(t, "# 设计正文", artifactByKind(t, st, d.ID, "design").Content)
-	require.Equal(t, "tasks: [1, 2]", artifactByKind(t, st, d.ID, "tasks").Content)
+	require.Equal(t, `[{"title":"任务A","detail":"做 A"},{"title":"任务B","detail":"做 B"}]`, artifactByKind(t, st, d.ID, "tasks").Content)
 	require.NotNil(t, artifactByKind(t, st, d.ID, "tests"))
-	require.NotNil(t, artifactByKind(t, st, d.ID, "summary"))
+	require.Equal(t, "按任务清单完成 2 项实现：任务A、任务B", artifactByKind(t, st, d.ID, "summary").Content)
+	require.Contains(t, eventTypes(t, st, d.ID), "task_done")
 	// design prompt 带规格正文；tasks prompt 带上一轮（design 门）无反馈但有规格。
 	require.Contains(t, ar.calls[1].Prompt, "# 规格正文")
 	require.Contains(t, ar.calls[2].Prompt, "# 规格正文")
