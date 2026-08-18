@@ -73,6 +73,30 @@ type TaskSpec struct {
 	Detail string `json:"detail"`
 }
 
+// Finding 单条结构化审查意见（R10 双道审查契约，由本文件冻结）：
+// 审查 agent 在输出末尾附 ```infera-findings fenced block（JSON 数组），
+// 引擎容错解析（无块/坏 JSON → 空意见），报告 JSON 存 findings artifact。
+type Finding struct {
+	TaskIndex int    `json:"task_index"` // 关联任务序号（1-based；0=整体意见，不关联具体任务）
+	Severity  string `json:"severity"`   // critical|major|minor|info（未知值归一为 info）
+	Message   string `json:"message"`    // 意见内容（结论+理由）
+	Evidence  string `json:"evidence"`   // 证据引用（file:line / 函数名 / 代码片段）
+}
+
+// FindingsReport 一道门禁前置审查的结构化产出（findings artifact 的 content 形状）。
+type FindingsReport struct {
+	Review    string    `json:"review"`     // spec_conformance|code_quality
+	TaskBased bool      `json:"task_based"` // 规格符合性是否按任务清单逐项核验
+	Findings  []Finding `json:"findings"`   // 结构化意见（空=无意见）
+	Raw       string    `json:"raw"`        // agent 原始输出（畸形块时人工兜底阅读）
+}
+
+// findings artifact kind 约定（道名 + "_findings"）：引擎落盘与 API/前端读取共用。
+const (
+	KindSpecConformanceFindings = "spec_conformance_findings"
+	KindCodeQualityFindings     = "code_quality_findings"
+)
+
 // ApproveOpts 门禁批准选项（api/engine 共用，放 store 避免反向依赖）。
 // 单入口按当前门分发：spec_approval 用 Complexity；design_approval 用 Split；
 // tasks_approval 用 Tasks。

@@ -72,8 +72,9 @@ func TestSaveBindings(t *testing.T) {
 	require.Contains(t, err.Error(), "legacy-bad", "错误应写明哪个 agent 配置不合法")
 	require.Equal(t, seeded, bindingsSnapshot(t, st, ""))
 
-	// 合法保存：全量替换默认（spec→a2，其余→a1）
-	full := map[string]string{"spec": a2.ID, "test_gen": a1.ID, "code_gen": a1.ID, "code_review": a1.ID}
+	// 合法保存：全量替换默认（spec→a2，其余→a1，含 R10 双道审查节点）
+	full := map[string]string{"spec": a2.ID, "test_gen": a1.ID, "code_gen": a1.ID, "code_review": a1.ID,
+		"spec_conformance": a1.ID, "code_quality": a1.ID}
 	require.NoError(t, SaveBindings(ctx, st, "", full))
 	require.Equal(t, full, bindingsSnapshot(t, st, ""))
 

@@ -16,6 +16,7 @@ Agent 主导的代码交付流水线：提需求 → agent 生成规格 → 人�
   ```
 
   agent 节点产出产物，`[...]` 人工门禁暂停等待批准，`unit_test` 失败回环到 `code_gen`，连续 3 次失败转 blocked。
+- **R10 双道审查**：code_review 人工门前先跑两道独立 agent 审查——规格符合性（有任务清单时逐项核验）+ 代码质量，产出结构化 findings（`infera-findings` 契约，见 `docs/superpowers/specs/2026-08-19-r10-dual-review.md`）呈现给人工裁定；意见只呈现不拦截。两道为可绑定节点（`spec_conformance` / `code_quality`，默认编排需全覆盖——旧默认绑定升级后需重 PUT `/api/pipeline`）。
 
 ## 本地开发
 

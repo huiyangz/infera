@@ -630,6 +630,84 @@ func TestGateReturnsTasks(t *testing.T) {
 	}
 }
 
+// TestGateCodeReviewReturnsReviewsAndDiff：code_review 门响应带两道审查的
+// findings 报告（引用 + 内容）与真 diff；未产出的道 present=false；坏 JSON 容错为原文。
+func TestGateCodeReviewReturnsReviewsAndDiff(t *testing.T) {
+	ts, st, _ := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	d := seedGate(t, st, p.ID, "code_review", "agent_output", "预审意见")
+	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID, Stage: "code_review", Kind: "diff", Content: "diff --git a/a.go b/a.go",
+	}))
+	report := store.FindingsReport{
+		Review: "spec_conformance", TaskBased: true,
+		Findings: []store.Finding{{TaskIndex: 1, Severity: "major", Message: "任务1缺少 Y", Evidence: "a.go:9"}},
+		Raw:      "原始输出",
+	}
+	raw, err := json.Marshal(report)
+	require.NoError(t, err)
+	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID, Stage: "code_review", Kind: store.KindSpecConformanceFindings, Content: string(raw),
+	}))
+
+	var gate struct {
+		Diff    string `json:"diff"`
+		Reviews []struct {
+			Review     string          `json:"review"`
+			Present    bool            `json:"present"`
+			TaskBased  bool            `json:"task_based"`
+			ArtifactID string          `json:"artifact_id"`
+			Findings   []store.Finding `json:"findings"`
+			Raw        string          `json:"raw"`
+		} `json:"reviews"`
+	}
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
+	require.Contains(t, gate.Diff, "diff --git a/a.go")
+	require.Len(t, gate.Reviews, 2)
+
+	sc := gate.Reviews[0]
+	require.Equal(t, "spec_conformance", sc.Review)
+	require.True(t, sc.Present)
+	require.True(t, sc.TaskBased)
+	require.NotEmpty(t, sc.ArtifactID)
+	require.Len(t, sc.Findings, 1)
+	require.Equal(t, 1, sc.Findings[0].TaskIndex)
+	require.Equal(t, "任务1缺少 Y", sc.Findings[0].Message)
+	require.Equal(t, "原始输出", sc.Raw)
+
+	// 未产出的道（如 local 占位跳过）：present=false、无内容。
+	cq := gate.Reviews[1]
+	require.Equal(t, "code_quality", cq.Review)
+	require.False(t, cq.Present)
+	require.Empty(t, cq.Findings)
+	require.Empty(t, cq.Raw)
+
+	// 坏 JSON 的历史产物：present=true 但内容走原文兜底，不崩。
+	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{
+		DeliveryID: d.ID, Stage: "code_review", Kind: store.KindCodeQualityFindings, Content: "not-json",
+	}))
+	var g2 struct {
+		Reviews []struct {
+			Review   string          `json:"review"`
+			Present  bool            `json:"present"`
+			Findings []store.Finding `json:"findings"`
+			Raw      string          `json:"raw"`
+		} `json:"reviews"`
+	}
+	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&g2))
+	require.True(t, g2.Reviews[1].Present)
+	require.Nil(t, g2.Reviews[1].Findings)
+	require.Equal(t, "not-json", g2.Reviews[1].Raw)
+}
+
 func TestMergeResumeEndpoint(t *testing.T) {
 	ts, st, fe := newServerWithEngine(t)
 	c := login(t, ts.URL)

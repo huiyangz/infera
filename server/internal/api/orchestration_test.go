@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/store"
 )
 
@@ -61,6 +62,23 @@ func TestAgentsCRUD(t *testing.T) {
 	require.Len(t, list, 1)
 }
 
+// fullBindings 全节点绑定同一 agent 的默认编排 PUT 请求体（跟随 BindableNodes 扩展；
+// overrides 覆盖指定节点，如引用不存在的 agent 制造校验失败）。
+func fullBindings(base string, overrides map[string]string) string {
+	b := map[string]string{}
+	for _, n := range orchestration.BindableNodes {
+		b[n] = base
+	}
+	for n, id := range overrides {
+		b[n] = id
+	}
+	raw, err := json.Marshal(map[string]any{"bindings": b})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
 func TestAgentDeleteConflict(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
@@ -72,7 +90,7 @@ func TestAgentDeleteConflict(t *testing.T) {
 
 	// 默认绑定引用 → 409 且写明节点
 	preq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(`{"bindings":{"spec":"`+id+`","test_gen":"`+id+`","code_gen":"`+id+`","code_review":"`+id+`"}}`))
+		bytes.NewBufferString(fullBindings(id, nil)))
 	preq.Header.Set("Content-Type", "application/json")
 	resp, err := c.Do(preq)
 	require.NoError(t, err)
@@ -113,14 +131,14 @@ func TestDefaultPipelinePut(t *testing.T) {
 
 	// 不存在的 agent → 400
 	r, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(`{"bindings":{"spec":"`+id+`","test_gen":"`+id+`","code_gen":"00000000-0000-0000-0000-000000000000","code_review":"`+id+`"}}`))
+		bytes.NewBufferString(fullBindings(id, map[string]string{"code_gen": "00000000-0000-0000-0000-000000000000"})))
 	r.Header.Set("Content-Type", "application/json")
 	resp, _ = c.Do(r)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
 	// happy：全量替换
 	r, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(`{"bindings":{"spec":"`+id+`","test_gen":"`+id+`","code_gen":"`+id+`","code_review":"`+id+`"}}`))
+		bytes.NewBufferString(fullBindings(id, nil)))
 	r.Header.Set("Content-Type", "application/json")
 	resp, _ = c.Do(r)
 	require.NoError(t, err)
@@ -131,12 +149,12 @@ func TestDefaultPipelinePut(t *testing.T) {
 		Bindings map[string]string `json:"bindings"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pipe))
-	require.Len(t, pipe.Nodes, 4)
-	require.Len(t, pipe.Bindings, 4)
+	require.Len(t, pipe.Nodes, len(orchestration.BindableNodes))
+	require.Len(t, pipe.Bindings, len(orchestration.BindableNodes))
 
 	defs, err := st.ListBindings(ctx, "")
 	require.NoError(t, err)
-	require.Len(t, defs, 4)
+	require.Len(t, defs, len(orchestration.BindableNodes))
 }
 
 func TestProjectPipelineOverrideAndClear(t *testing.T) {
@@ -159,7 +177,7 @@ func TestProjectPipelineOverrideAndClear(t *testing.T) {
 		return resp
 	}
 	r, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(`{"bindings":{"spec":"`+defID+`","test_gen":"`+defID+`","code_gen":"`+defID+`","code_review":"`+defID+`"}}`))
+		bytes.NewBufferString(fullBindings(defID, nil)))
 	r.Header.Set("Content-Type", "application/json")
 	resp, _ := c.Do(r)
 	require.Equal(t, 200, resp.StatusCode)

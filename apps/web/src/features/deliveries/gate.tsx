@@ -17,7 +17,8 @@ import {
   rejectGate,
   type ApproveOptions,
 } from '@/lib/infera-api'
-import type { ChildSpec, TaskSpec } from '@/lib/infera-types'
+import type { ChildSpec, Finding, GateReview, TaskSpec } from '@/lib/infera-types'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -55,10 +56,124 @@ const GATE_META: Record<
   },
   code_review: {
     title: '代码审查',
-    approveHint: '批准后合入（PR 已就绪）；打回则 Coder Agent 重做',
+    approveHint:
+      '基于两道 Agent 审查意见与 diff 裁定（意见只呈现不拦截）；批准后合入（PR 已就绪），打回则 Coder Agent 重做',
     artifactLabel: 'Reviewer 意见',
     showPR: true,
   },
+}
+
+/** R10 双道审查 → 展示配置；未知道名回退原文标题 */
+const REVIEW_META: Record<string, { title: string; emptyHint: string }> = {
+  spec_conformance: {
+    title: '规格符合性审查',
+    emptyHint: '未发现规格偏差',
+  },
+  code_quality: { title: '代码质量审查', emptyHint: '未发现质量问题' },
+}
+
+/** 严重度 → 中文标签 + 单色分级（DESIGN.md 无信号色：用 tonal step 而非红黄） */
+const SEVERITY_META: Record<
+  string,
+  { label: string; className: string }
+> = {
+  critical: {
+    label: '严重',
+    className: 'border-transparent bg-primary text-primary-foreground',
+  },
+  major: {
+    label: '重要',
+    className: 'border-transparent bg-secondary text-secondary-foreground',
+  },
+  minor: { label: '轻微', className: 'text-foreground' },
+  info: { label: '提示', className: 'text-muted-foreground' },
+}
+
+/** 单条审查意见：严重度 + 关联任务序号 + 结论 + 证据引用（有 PR 时可跳转查看） */
+function FindingRow({ f, prUrl }: { f: Finding; prUrl?: string }) {
+  const sev = SEVERITY_META[f.severity] ?? SEVERITY_META.info
+  const evidenceClass =
+    'font-mono text-xs text-muted-foreground underline decoration-dotted underline-offset-4 hover:text-foreground'
+  return (
+    <li className='space-y-1 border-b pb-3 last:border-b-0 last:pb-0'>
+      <div className='flex flex-wrap items-center gap-2'>
+        <Badge variant='outline' className={sev.className}>
+          {sev.label}
+        </Badge>
+        {f.task_index > 0 && (
+          <Badge variant='outline' className='font-mono text-muted-foreground'>
+            任务 #{f.task_index}
+          </Badge>
+        )}
+      </div>
+      <p className='text-sm leading-relaxed'>{f.message}</p>
+      {f.evidence &&
+        (prUrl ? (
+          <a
+            href={prUrl}
+            target='_blank'
+            rel='noreferrer'
+            title='在 PR 中查看证据'
+            className={evidenceClass}
+          >
+            {f.evidence}
+          </a>
+        ) : (
+          <span className='font-mono text-xs text-muted-foreground'>
+            {f.evidence}
+          </span>
+        ))}
+    </li>
+  )
+}
+
+/** 一道审查意见卡片：findings 列表（严重度 + 任务序号 + 证据跳转）+ 原始输出折叠 */
+function ReviewCard({ review, prUrl }: { review: GateReview; prUrl?: string }) {
+  const meta = REVIEW_META[review.review] ?? {
+    title: review.review,
+    emptyHint: '无意见',
+  }
+  const findings = review.findings ?? []
+  return (
+    <div className='rounded-lg border p-4'>
+      <div className='mb-3 flex items-center justify-between gap-2'>
+        <h3 className='text-sm font-medium'>{meta.title}</h3>
+        {!review.present ? (
+          <span className='text-xs text-muted-foreground'>
+            未产出（本机交互占位）
+          </span>
+        ) : findings.length === 0 ? (
+          <span className='text-xs text-muted-foreground'>{meta.emptyHint}</span>
+        ) : (
+          <span className='text-xs text-muted-foreground'>
+            {findings.length} 条意见
+          </span>
+        )}
+      </div>
+      {review.present && review.task_based && (
+        <p className='mb-2 text-xs text-muted-foreground'>
+          按任务清单逐项核验
+        </p>
+      )}
+      {review.present && findings.length > 0 && (
+        <ul className='space-y-3'>
+          {findings.map((f, i) => (
+            <FindingRow key={i} f={f} prUrl={prUrl} />
+          ))}
+        </ul>
+      )}
+      {review.present && review.raw && (
+        <details className='mt-3'>
+          <summary className='cursor-pointer text-xs text-muted-foreground select-none'>
+            原始输出
+          </summary>
+          <pre className='mt-2 max-h-60 overflow-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
+            {review.raw}
+          </pre>
+        </details>
+      )}
+    </div>
+  )
 }
 
 /** 复杂度（交付模式）选项：spec 审批门裁定 */
@@ -171,6 +286,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   const isSpec = data.gate === 'spec_approval'
   const isDesign = data.gate === 'design_approval'
   const isTasks = data.gate === 'tasks_approval'
+  const isReview = data.gate === 'code_review'
   // AI 复杂度建议：'' = 无建议，按 small 预选
   const suggestion = data.complexity_suggestion === 'large' ? 'large' : 'small'
   const picked = complexity ?? suggestion
@@ -215,7 +331,8 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
         </div>
       </Header>
 
-      <div className='mx-auto max-w-3xl p-6'>
+      {/* 代码审查门加宽：两道审查意见与 diff 并列需要横向空间 */}
+      <div className={`mx-auto p-6 ${isReview ? 'max-w-6xl' : 'max-w-3xl'}`}>
         <Card>
           <CardHeader>
             <CardTitle>{meta.title}</CardTitle>
@@ -248,6 +365,32 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                   {data.pr_url}
                 </a>
               </p>
+            )}
+
+            {/* 代码审查门（R10）：两道 Agent 审查意见与代码 diff 并列——人审审查意见 */}
+            {isReview && (
+              <div className='grid gap-4 xl:grid-cols-2'>
+                <div className='space-y-4'>
+                  {(data.reviews ?? []).map((r) => (
+                    <ReviewCard
+                      key={r.review}
+                      review={r}
+                      prUrl={data.pr_url || undefined}
+                    />
+                  ))}
+                  {!(data.reviews ?? []).length && (
+                    <p className='text-sm text-muted-foreground'>
+                      （无审查意见产出）
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <h3 className='mb-2 text-sm font-medium'>代码 diff</h3>
+                  <pre className='max-h-[36rem] overflow-auto rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
+                    {data.diff || '（无 diff）'}
+                  </pre>
+                </div>
+              </div>
             )}
 
             {/* 规格门：交付模式裁定（small 直达 / large 走 SDD） */}

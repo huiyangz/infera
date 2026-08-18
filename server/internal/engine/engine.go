@@ -305,6 +305,12 @@ func (e *Engine) step(ctx context.Context, d *store.Delivery) error {
 				return err
 			}
 		}
+		if len(node.FindingsReviews) > 0 {
+			// R10 双道审查：结构化 findings 全部产出后门禁才挂起（缺道/失败 blocked）。
+			if err := e.stepFindingsReviews(ctx, d, node, run); err != nil {
+				return err
+			}
+		}
 		d.PendingGate = node.Stage
 		if err := e.st.UpdateDelivery(ctx, d); err != nil {
 			return err

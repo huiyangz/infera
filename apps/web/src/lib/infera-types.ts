@@ -36,6 +36,30 @@ export interface TaskSpec {
   detail: string
 }
 
+/** 单条结构化审查意见（R10 双道审查契约，与 server store.Finding 对齐） */
+export interface Finding {
+  /** 关联任务序号（1-based；0=整体意见，不关联具体任务） */
+  task_index: number
+  /** critical | major | minor | info（未知值已由引擎归一为 info） */
+  severity: 'critical' | 'major' | 'minor' | 'info'
+  message: string
+  /** 证据引用（file:line / 函数名 / 代码片段） */
+  evidence: string
+}
+
+/** code_review 门禁响应里的单道审查（findings 引用 + 内容） */
+export interface GateReview {
+  review: 'spec_conformance' | 'code_quality'
+  /** 该道是否已产出（本机交互占位跳过时 false） */
+  present: boolean
+  /** 规格符合性审查是否按任务清单逐项核验 */
+  task_based: boolean
+  artifact_id?: string
+  findings: Finding[] | null
+  /** agent 原始输出（畸形块时人工兜底阅读） */
+  raw?: string
+}
+
 export interface ProjectStats {
   active: number
   pending: number
@@ -156,6 +180,15 @@ export const STAGE_META: Record<string, { label: string; hint: string }> = {
     label: '审查与交付',
     hint: 'Reviewer Agent 预审，人工确认后开出 PR',
   },
+  // R10 双道审查（code_review 门禁前置；非流水线阶段，仅供编排绑定处展示）
+  spec_conformance: {
+    label: '规格符合性审查',
+    hint: 'code_review 门禁前置：按任务清单/规格逐项核验实现',
+  },
+  code_quality: {
+    label: '代码质量审查',
+    hint: 'code_review 门禁前置：质量维度独立审查',
+  },
   // SDD 节点（large 复杂度路径）
   design: { label: '设计生成', hint: 'Design Agent 依据规格产出实现设计' },
   design_approval: { label: '设计审批', hint: '人工门禁：确认设计后继续' },
@@ -217,4 +250,8 @@ export interface GateInfo {
   split_plan?: ChildSpec[] | null
   /** tasks_approval：引擎解析后的任务清单（坏内容为 null） */
   tasks?: TaskSpec[] | null
+  /** code_review：门禁挂起前固化的真 diff（无则空串） */
+  diff?: string
+  /** code_review：两道门禁前置审查的 findings 报告（R10） */
+  reviews?: GateReview[]
 }

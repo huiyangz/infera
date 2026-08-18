@@ -93,8 +93,8 @@ func TestCodeGenPerTaskLoop(t *testing.T) {
 	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → test_gen
 	require.NoError(t, e.Continue(ctx, d.ID))                      // → code_review 门
 
-	// 全序角色：spec → design → tasks → test_gen → code_gen ×2（逐任务）→ code_review。
-	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_gen", "code_review"}, ar.roles())
+	// 全序角色：spec → design → tasks → test_gen → code_gen ×2（逐任务）→ code_review → 双道审查。
+	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}, ar.roles())
 	cg := codeGenCalls(ar)
 	require.Len(t, cg, 2)
 	require.Contains(t, ar.calls[cg[0]].Prompt, "当前任务 1/2：任务A")

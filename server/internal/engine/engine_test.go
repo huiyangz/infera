@@ -208,12 +208,13 @@ func TestPipelineHappyPath(t *testing.T) {
 	require.Empty(t, got.PendingGate)
 	require.Equal(t, []string{"spec"}, ar.roles()) // 无 agent 被同步驱动
 
-	// Continue：test_gen → code_gen → unit_test（过）→ code_review 前置预审 → 停门禁。
+	// Continue：test_gen → code_gen → unit_test（过）→ code_review 前置预审
+	// → R10 双道审查 → 停门禁。
 	require.NoError(t, e.Continue(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_review", got.CurrentStage)
 	require.Equal(t, "code_review", got.PendingGate)
-	require.Equal(t, []string{"spec", "test_gen", "code_gen", "code_review"}, ar.roles())
+	require.Equal(t, []string{"spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}, ar.roles())
 	require.Equal(t, "tests: a_test.go", artifactByKind(t, st, d.ID, "tests").Content)
 	require.Equal(t, "改了 2 个文件", artifactByKind(t, st, d.ID, "summary").Content)
 	require.NotNil(t, artifactByKind(t, st, d.ID, "test_output"))
@@ -325,8 +326,10 @@ func TestRejectLoopsBack(t *testing.T) {
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Empty(t, got.RejectReason)
-	// calls: spec, spec(重写), test_gen, code_gen, code_review, code_gen(重跑)
-	require.Contains(t, ar.calls[5].Prompt, "人打回：实现遗漏边界")
+	// calls: spec, spec(重写), test_gen, code_gen, code_review, 双道审查, code_gen(重跑)
+	// —— 重跑的 code_gen prompt 带人打回意见（取最后一次 code_gen 调用，不依赖序号）。
+	cg := codeGenCalls(ar)
+	require.Contains(t, ar.calls[cg[len(cg)-1]].Prompt, "人打回：实现遗漏边界")
 }
 
 func TestStartAcquiresWorkspace(t *testing.T) {

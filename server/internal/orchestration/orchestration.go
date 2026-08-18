@@ -13,8 +13,11 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// BindableNodes 当前图上可绑定 agent 的节点（单一事实来源；design/tasks 在后续批次加入）。
-var BindableNodes = []string{"spec", "test_gen", "code_gen", "code_review"}
+// BindableNodes 当前图上可绑定 agent 的节点（单一事实来源）：流水线 agent 节点 +
+// code_review 门禁前置审查（Reviewer 预审与 R10 双道结构化审查）。
+// Resolve / 默认编排 PUT 都要求全覆盖——升级加节点后旧默认绑定需重 PUT pipeline
+// （缺绑定的交付按既有约定在 agent 阶段 blocked，stage_failed 写明缺哪些）。
+var BindableNodes = []string{"spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
 
 // ErrLocalRunner runner=local 的哨兵：本机交互通道（批 B 实装），本批语义 = 交付停在该阶段。
 var ErrLocalRunner = errors.New("orchestration: local runner（本机交互，批 B 实装；本批停在该阶段等待）")
