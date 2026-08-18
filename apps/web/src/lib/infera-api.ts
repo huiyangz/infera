@@ -55,19 +55,22 @@ export async function createProject(input: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
-    }),
+    })
   )
 }
 export async function getProject(id: string): Promise<Project> {
   return json(await fetch(`/api/projects/${id}`))
 }
-export async function patchProjectPinned(id: string, pinned: boolean): Promise<Project> {
+export async function patchProjectPinned(
+  id: string,
+  pinned: boolean
+): Promise<Project> {
   return json(
     await fetch(`/api/projects/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pinned }),
-    }),
+    })
   )
 }
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
@@ -77,6 +80,39 @@ export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
 // —— agent 编排 ——
 export async function listAgents(): Promise<Agent[]> {
   return json(await fetch('/api/agents'))
+}
+export async function createAgent(input: {
+  name: string
+  runner: Agent['runner']
+  config: Record<string, unknown>
+}): Promise<Agent> {
+  return json(
+    await fetch('/api/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+  )
+}
+/** PATCH 局部更新；config 非 nil 即整体替换 */
+export async function updateAgent(
+  id: string,
+  input: {
+    name: string
+    runner: Agent['runner']
+    config: Record<string, unknown>
+  }
+): Promise<Agent> {
+  return json(
+    await fetch(`/api/agents/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+  )
+}
+export async function deleteAgent(id: string): Promise<void> {
+  json(await fetch(`/api/agents/${id}`, { method: 'DELETE' }))
 }
 export async function getPipeline(): Promise<PipelineInfo> {
   return json(await fetch('/api/pipeline'))
@@ -88,7 +124,7 @@ export async function putPipeline(bindings: BindingMap): Promise<PipelineInfo> {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bindings }),
-    }),
+    })
   )
 }
 export async function getProjectPipeline(id: string): Promise<ProjectPipeline> {
@@ -97,26 +133,26 @@ export async function getProjectPipeline(id: string): Promise<ProjectPipeline> {
 /** 全量替换项目覆盖；传 {} 清空全部覆盖、回退默认 */
 export async function putProjectPipeline(
   id: string,
-  bindings: BindingMap,
+  bindings: BindingMap
 ): Promise<ProjectPipeline> {
   return json(
     await fetch(`/api/projects/${id}/pipeline`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bindings }),
-    }),
+    })
   )
 }
 export async function createDelivery(
   projectId: string,
-  input: { title: string; description?: string },
+  input: { title: string; description?: string }
 ): Promise<Delivery> {
   return json(
     await fetch(`/api/projects/${projectId}/deliveries`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
-    }),
+    })
   )
 }
 
@@ -129,7 +165,7 @@ export async function getGate(id: string): Promise<GateInfo> {
 }
 export async function approveGate(
   id: string,
-  split?: ChildSpec[],
+  split?: ChildSpec[]
 ): Promise<Delivery> {
   return json(
     await fetch(`/api/deliveries/${id}/approve`, {
@@ -137,21 +173,24 @@ export async function approveGate(
       headers: { 'Content-Type': 'application/json' },
       // 仅在显式拆分时携带 body；空数组视为普通批准
       body: split?.length ? JSON.stringify({ split }) : undefined,
-    }),
+    })
   )
 }
 /** 合并冲突恢复：人工推送 infera/<父前8> 分支后继续父流水线 */
 export async function mergeResume(id: string): Promise<Delivery> {
   return json(
-    await fetch(`/api/deliveries/${id}/merge/resume`, { method: 'POST' }),
+    await fetch(`/api/deliveries/${id}/merge/resume`, { method: 'POST' })
   )
 }
-export async function rejectGate(id: string, reason: string): Promise<Delivery> {
+export async function rejectGate(
+  id: string,
+  reason: string
+): Promise<Delivery> {
   return json(
     await fetch(`/api/deliveries/${id}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
-    }),
+    })
   )
 }
