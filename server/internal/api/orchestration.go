@@ -49,6 +49,11 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	if body.Config == nil {
 		body.Config = map[string]any{}
 	}
+	// 配置预校验：cli 必有命令、http 必有 URL、docker 必有镜像（提前于交付期暴露）
+	if err := orchestration.ValidateConfig(body.Runner, body.Config); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	a := &store.Agent{Name: strings.TrimSpace(body.Name), Runner: body.Runner, Config: body.Config}
 	if err := s.st.CreateAgent(r.Context(), a); err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -96,6 +101,11 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Config != nil {
 		a.Config = body.Config
+	}
+	// 合并结果预校验（runner 与 config 匹配；换 runner 未补 config 在这里拦下）
+	if err := orchestration.ValidateConfig(a.Runner, a.Config); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if err := s.st.UpdateAgent(r.Context(), a); err != nil {
 		if errors.Is(err, store.ErrConflict) {
@@ -215,31 +225,10 @@ func (s *Server) putPipeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "默认编排必须覆盖全部节点，缺少: "+strings.Join(missing, ", "))
 		return
 	}
-	// 节点合法性 + agent 存在性
-	agents, err := s.st.ListAgents(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取 agent 列表失败")
+	// 节点/agent/配置校验 + 单事务替换（任一步失败整体回滚，无半写）
+	if err := orchestration.SaveBindings(r.Context(), s.st, "", body.Bindings); err != nil {
+		saveBindingsErr(w, err)
 		return
-	}
-	exists := map[string]bool{}
-	for _, a := range agents {
-		exists[a.ID] = true
-	}
-	for node, id := range body.Bindings {
-		if !bindable(node) {
-			writeError(w, http.StatusBadRequest, "不可绑定的节点: "+node)
-			return
-		}
-		if !exists[id] {
-			writeError(w, http.StatusBadRequest, "节点 "+node+" 引用了不存在的 agent")
-			return
-		}
-	}
-	for _, n := range orchestration.BindableNodes {
-		if err := s.st.UpsertBinding(r.Context(), &store.PipelineBinding{Node: n, AgentID: body.Bindings[n]}); err != nil {
-			writeError(w, http.StatusInternalServerError, "写入绑定失败")
-			return
-		}
 	}
 	s.getPipeline(w, r)
 }
@@ -309,53 +298,20 @@ func (s *Server) putProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	if body.Bindings == nil {
 		body.Bindings = map[string]string{}
 	}
-	agents, err := s.st.ListAgents(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取 agent 列表失败")
+	// 校验 + 单事务全量替换覆盖（空集合 = 清空；无半写）
+	if err := orchestration.SaveBindings(r.Context(), s.st, projectID, body.Bindings); err != nil {
+		saveBindingsErr(w, err)
 		return
-	}
-	exists := map[string]bool{}
-	for _, a := range agents {
-		exists[a.ID] = true
-	}
-	for node, id := range body.Bindings {
-		if !bindable(node) {
-			writeError(w, http.StatusBadRequest, "不可绑定的节点: "+node)
-			return
-		}
-		if !exists[id] {
-			writeError(w, http.StatusBadRequest, "节点 "+node+" 引用了不存在的 agent")
-			return
-		}
-	}
-	// 全量替换覆盖：旧的、不在新表里的逐个删
-	current, err := s.st.ListBindings(r.Context(), projectID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取项目绑定失败")
-		return
-	}
-	for _, b := range current {
-		if _, keep := body.Bindings[b.Node]; !keep {
-			if err := s.st.DeleteBinding(r.Context(), projectID, b.Node); err != nil && !errors.Is(err, store.ErrNotFound) {
-				writeError(w, http.StatusInternalServerError, "删除绑定失败")
-				return
-			}
-		}
-	}
-	for node, id := range body.Bindings {
-		if err := s.st.UpsertBinding(r.Context(), &store.PipelineBinding{ProjectID: projectID, Node: node, AgentID: id}); err != nil {
-			writeError(w, http.StatusInternalServerError, "写入绑定失败")
-			return
-		}
 	}
 	s.getProjectPipeline(w, r)
 }
 
-func bindable(node string) bool {
-	for _, n := range orchestration.BindableNodes {
-		if n == node {
-			return true
-		}
+// saveBindingsErr 统一映射 SaveBindings 错误：校验失败 → 400（原因可直接展示），其余 → 500。
+func saveBindingsErr(w http.ResponseWriter, err error) {
+	var invalid *orchestration.ErrInvalidBinding
+	if errors.As(err, &invalid) {
+		writeError(w, http.StatusBadRequest, invalid.Message)
+		return
 	}
-	return false
+	writeError(w, http.StatusInternalServerError, "写入绑定失败")
 }

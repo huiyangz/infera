@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/tokfinity/infera/internal/agent"
@@ -102,38 +103,94 @@ func ValidateComplete(effective map[string]Effective) error {
 // docker → DockerRunner（config.image + config.command）；
 // http → HTTPRunner（config.url）；
 // local → (nil, ErrLocalRunner)，引擎据此停车等待本机交互。
+// 配置要求与 ValidateConfig 一致（同一份校验，两个消费时机）。
 func RunnerFor(a store.Agent) (agent.Runner, error) {
+	if err := ValidateConfig(a.Runner, a.Config); err != nil {
+		return nil, fmt.Errorf("agent %s: %w", a.Name, err)
+	}
 	switch a.Runner {
 	case "cli":
-		argv, err := strSlice(a.Config, "command")
-		if err != nil {
-			return nil, err
-		}
-		if len(argv) == 0 {
-			return nil, fmt.Errorf("agent %s: cli runner 需要 config.command", a.Name)
-		}
+		argv, _ := strSlice(a.Config, "command")
 		return agent.NewLocal(argv), nil
 	case "docker":
 		image, _ := a.Config["image"].(string)
-		if image == "" {
-			return nil, fmt.Errorf("agent %s: docker runner 需要 config.image", a.Name)
-		}
-		argv, err := strSlice(a.Config, "command")
-		if err != nil {
-			return nil, err
-		}
+		argv, _ := strSlice(a.Config, "command")
 		return agent.NewDocker(image, argv), nil
 	case "http":
 		url, _ := a.Config["url"].(string)
-		if url == "" {
-			return nil, fmt.Errorf("agent %s: http runner 需要 config.url", a.Name)
-		}
 		return agent.NewHTTP(url), nil
 	case "local":
 		return nil, ErrLocalRunner
 	default:
 		return nil, fmt.Errorf("agent %s: 未知 runner %q", a.Name, a.Runner)
 	}
+}
+
+// ErrInvalidBinding 绑定保存校验失败（api 映射 400）；Message 可直接展示给用户。
+type ErrInvalidBinding struct{ Message string }
+
+func (e *ErrInvalidBinding) Error() string { return e.Message }
+
+// ValidateConfig 校验 runner 与 config 匹配（agent 保存预校验，交付前暴露）：
+// cli 必有非空 command、http 必有非空 url、docker 必有非空 image
+// （command 可选但类型须合法）、local 无额外要求。
+// 错误信息带字段名（如 "config.command 不能为空"）。
+func ValidateConfig(runner string, config map[string]any) error {
+	switch runner {
+	case "cli":
+		argv, err := strSlice(config, "command")
+		if err != nil {
+			return err
+		}
+		if len(argv) == 0 {
+			return fmt.Errorf("config.command 不能为空（cli runner 需要命令数组）")
+		}
+	case "http":
+		if url, _ := config["url"].(string); url == "" {
+			return fmt.Errorf("config.url 不能为空（http runner 需要 URL）")
+		}
+	case "docker":
+		if image, _ := config["image"].(string); image == "" {
+			return fmt.Errorf("config.image 不能为空（docker runner 需要镜像）")
+		}
+		if _, err := strSlice(config, "command"); err != nil {
+			return err
+		}
+	case "local":
+		// 无额外要求
+	default:
+		return fmt.Errorf("未知 runner %q", runner)
+	}
+	return nil
+}
+
+// SaveBindings 校验并原子保存一组绑定（默认与项目级共用；projectID 空 = 全局默认）：
+// 节点必须可绑定、agent 必须存在且配置合法——把交付期才会暴露的 blocked 提前到保存时。
+// 校验失败 *ErrInvalidBinding；通过后走 store 单事务替换，任一步失败整体回滚（无半写）。
+func SaveBindings(ctx context.Context, st store.Store, projectID string, bindings map[string]string) error {
+	for node := range bindings {
+		if !slices.Contains(BindableNodes, node) {
+			return &ErrInvalidBinding{Message: "不可绑定的节点: " + node}
+		}
+	}
+	agents, err := st.ListAgents(ctx)
+	if err != nil {
+		return err
+	}
+	byID := make(map[string]store.Agent, len(agents))
+	for _, a := range agents {
+		byID[a.ID] = a
+	}
+	for node, id := range bindings {
+		a, ok := byID[id]
+		if !ok {
+			return &ErrInvalidBinding{Message: "节点 " + node + " 引用了不存在的 agent"}
+		}
+		if err := ValidateConfig(a.Runner, a.Config); err != nil {
+			return &ErrInvalidBinding{Message: fmt.Sprintf("节点 %s 的 agent「%s」配置不合法: %v", node, a.Name, err)}
+		}
+	}
+	return st.ReplaceBindings(ctx, projectID, bindings)
 }
 
 // strSlice 从 config 取字符串数组（JSON 反序列化出来是 []any）。
