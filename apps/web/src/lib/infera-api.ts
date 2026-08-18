@@ -14,31 +14,54 @@ import type {
   TaskSpec,
 } from './infera-types'
 
+/** fetch 非 2xx 时抛出的业务错误：携带 HTTP status，供全局 401 处理等按状态分流。 */
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function json<T>(r: Response): Promise<T> {
   if (!r.ok) {
     const e = await r.json().catch(() => ({}))
-    throw new Error((e as { error?: string }).error || `HTTP ${r.status}`)
+    throw new ApiError(
+      r.status,
+      (e as { error?: string }).error || `HTTP ${r.status}`
+    )
   }
   return r.json() as Promise<T>
 }
 
 // —— auth ——
-export async function login(password: string): Promise<boolean> {
-  const r = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  })
-  return r.ok
+/**
+ * 登录：成功由后端 set HttpOnly cookie；密码错误（401）与网络/服务器错误均 reject
+ * （ApiError / TypeError），调用方据此区分「密码错误」与「连不上」提示。
+ */
+export async function login(password: string): Promise<void> {
+  await json(
+    await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+  )
 }
 export async function logout(): Promise<boolean> {
   const r = await fetch('/api/logout', { method: 'POST' })
   return r.ok
 }
+/**
+ * 会话探测：未登录（401，或 200 带 logged_in:false）返回 false；
+ * 其余非 2xx（如 5xx）如实抛错——别把后端故障吞成「未登录」误导跳登录页。
+ */
 export async function me(): Promise<{ logged_in: boolean }> {
   const r = await fetch('/api/me')
-  if (!r.ok) return { logged_in: false }
-  return r.json()
+  if (r.status === 401) return { logged_in: false }
+  return json(r)
 }
 
 // —— projects ——

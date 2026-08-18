@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -191,6 +192,10 @@ const STAGE_STATUS_TEXT: Record<StageState, string> = {
   failed: '已阻塞',
 }
 
+/** 加载中/无数据时的稳定空引用：避免 useMemo 依赖每次 render 变化 */
+const EMPTY_TIMELINE: TimelineEvent[] = []
+const EMPTY_ARTIFACTS: Artifact[] = []
+
 export function DeliveryDetail({
   deliveryId,
   embedded = false,
@@ -198,12 +203,13 @@ export function DeliveryDetail({
   deliveryId: string
   embedded?: boolean
 }) {
-  useDeliveryEvents(deliveryId)
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
     queryFn: () => getDelivery(deliveryId),
   })
+  // WS 订阅带上所属项目：事件失效只打本项目相关 query
+  useDeliveryEvents(deliveryId, data?.delivery.project_id)
   // 本机交互通道（R4）：编排里 local 绑定的节点集合（加载中为 null）
   const localNodes = useLocalNodes(data?.delivery.project_id)
   const resume = useMutation({
@@ -214,6 +220,33 @@ export function DeliveryDetail({
     },
     onError: (e: Error) => toast.error(e.message),
   })
+
+  // 派生数据集中在 memo 里：timeline/artifacts 的全量 reverse/filter
+  // 只在数据变化时执行，不再每次 render 重算
+  const timeline = data?.timeline ?? EMPTY_TIMELINE
+  const artifacts = data?.artifacts ?? EMPTY_ARTIFACTS
+  // 最新一次合并冲突事件里给人工的 git 指令
+  const conflictInstructions = useMemo(
+    () =>
+      [...timeline]
+        .reverse()
+        .find((e) => e.event_type === 'merge_conflict')?.payload as
+        | { instructions?: string; branches?: string[] }
+        | undefined,
+    [timeline]
+  )
+  const taskProgressData = useMemo(
+    () => taskProgress(artifacts, timeline),
+    [artifacts, timeline]
+  )
+  // code_review 门禁固化（persist）时落盘的真实 git diff（从新往旧取最近一条）
+  const latestDiff = useMemo(
+    () =>
+      [...artifacts]
+        .reverse()
+        .find((a) => a.stage === 'code_review' && a.kind === 'diff'),
+    [artifacts]
+  )
 
   if (isLoading || !data)
     return (
@@ -229,7 +262,7 @@ export function DeliveryDetail({
       </div>
     )
 
-  const { delivery, timeline, artifacts } = data
+  const { delivery } = data
   const children = data.children ?? []
   // 停在本机绑定节点（local 停车）：展示「在本地处理此阶段」入口
   const parkedAtLocal = parkedAtLocalNode(delivery, localNodes)
@@ -239,12 +272,6 @@ export function DeliveryDetail({
     delivery.current_stage === 'code_gen' &&
     !delivery.pending_gate
   const kidsDone = children.filter((c) => c.status === 'completed').length
-  // 最新一次合并冲突事件里给人工的 git 指令
-  const conflictInstructions = [...timeline]
-    .reverse()
-    .find((e) => e.event_type === 'merge_conflict')?.payload as
-    | { instructions?: string; branches?: string[] }
-    | undefined
   // 阶段条按交付模式派生：small/老数据 7 阶段；large 全 11（拆分父含跳过态）
   const stages = stagesForDelivery(delivery)
   const currentIdx = stages.indexOf(delivery.current_stage as StageName)
@@ -259,11 +286,6 @@ export function DeliveryDetail({
     )
   const eventsOf = (s: StageName) => timeline.filter((e) => e.stage === s)
   const doneCount = stages.filter((s, i) => stateOf(s, i) === 'done').length
-  const taskProgressData = taskProgress(artifacts, timeline)
-  // 最新一次实现产出的真实 git diff（从新往旧找第一条）
-  const latestDiff = [...artifacts]
-    .reverse()
-    .find((a) => a.stage === 'code_review' && a.kind === 'diff')
 
   const titleBlock = (
     <div className='flex w-full items-start justify-between gap-4'>

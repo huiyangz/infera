@@ -22,10 +22,16 @@ export default defineConfig({
     },
   },
   server: {
-    // dev 下把 /api 转发到 infera Go 后端
+    // dev 下把 /api 与 /ws（WebSocket）转发到 infera Go 后端：
+    // 前端一律用同源地址，环境差异收敛在代理层（不再硬编码 ws://localhost:8080）
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'http://localhost:8080',
+        ws: true,
         changeOrigin: true,
       },
     },

@@ -255,10 +255,24 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   const back = () =>
     navigate({ to: '/deliveries/$id', params: { id: deliveryId } })
 
+  // 审批/打回后流水线会推进：只失效本交付与所属项目的相关 query（列表统计跟着变）
+  const invalidateAfterDecision = () => {
+    qc.invalidateQueries({ queryKey: ['delivery', deliveryId] })
+    qc.invalidateQueries({ queryKey: ['gate', deliveryId] })
+    const projectId = detail?.delivery.project_id
+    if (projectId) {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['project-deliveries', projectId] })
+    } else {
+      qc.invalidateQueries({ queryKey: ['project-deliveries'] })
+    }
+    qc.invalidateQueries({ queryKey: ['projects'] })
+  }
+
   const approve = useMutation({
     mutationFn: (opts?: ApproveOptions) => approveGate(deliveryId, opts),
     onSuccess: (_d, opts) => {
-      qc.invalidateQueries()
+      invalidateAfterDecision()
       if (opts?.split?.length)
         toast.success(`已拆分为 ${opts.split.length} 个子需求，流水线调度中`)
       else if (opts?.tasks?.length)
@@ -271,7 +285,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   const reject = useMutation({
     mutationFn: () => rejectGate(deliveryId, reason),
     onSuccess: () => {
-      qc.invalidateQueries()
+      invalidateAfterDecision()
       toast.success('已打回，Agent 将重新处理')
       back()
     },

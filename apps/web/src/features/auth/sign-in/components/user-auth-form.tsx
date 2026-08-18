@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from '@tanstack/react-router'
 import { Loader2, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
-import { login } from '@/lib/infera-api'
+import { ApiError, login } from '@/lib/infera-api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -41,11 +41,20 @@ export function UserAuthForm({
 
   async function onSubmit(data: z.infer<typeof formSchema>) {
     setIsLoading(true)
-    const ok = await login(data.password)
-    setIsLoading(false)
-    if (!ok) {
-      toast.error('密码错误')
+    try {
+      await login(data.password)
+    } catch (e) {
+      // 区分错误语义：401 = 密码不对；网络异常/5xx 别说成密码错误
+      if (e instanceof ApiError && e.status === 401) {
+        toast.error('密码错误')
+      } else if (e instanceof ApiError) {
+        toast.error(e.message || '登录失败，请稍后重试')
+      } else {
+        toast.error('无法连接服务器，请稍后重试')
+      }
       return
+    } finally {
+      setIsLoading(false)
     }
     toast.success('欢迎回来')
     navigate({ to: redirectTo || '/', replace: true })
