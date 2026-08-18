@@ -176,7 +176,7 @@ func createAgentE2E(t *testing.T, c *http.Client, base, name, script string) str
 	r, err := c.Post(base+"/api/agents", "application/json", bytes.NewReader(raw))
 	require.NoError(t, err)
 	defer r.Body.Close()
-	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, http.StatusCreated, r.StatusCode)
 	var a struct {
 		ID string `json:"id"`
 	}

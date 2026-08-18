@@ -250,6 +250,8 @@ func (pg *Pg) ListChildDeliveries(ctx context.Context, parentID string) ([]Deliv
 
 // events / artifacts / stage_runs
 
+// AppendEvent 单语句插入并 RETURNING created_at：插入与回读原子，
+// 不留"行已插入但调用方拿不到时间戳"的中间态。
 func (pg *Pg) AppendEvent(ctx context.Context, e *Event) error {
 	if e.ID == "" {
 		e.ID = uuid.NewString()
@@ -258,13 +260,9 @@ func (pg *Pg) AppendEvent(ctx context.Context, e *Event) error {
 	if payload == nil {
 		payload = []byte(`{}`) // payload 列 NOT NULL
 	}
-	_, err := pg.pool.Exec(ctx,
-		`INSERT INTO events (id,delivery_id,stage,event_type,payload) VALUES ($1,$2,$3,$4,$5)`,
-		e.ID, e.DeliveryID, e.Stage, e.EventType, payload)
-	if err != nil {
-		return err
-	}
-	return pg.pool.QueryRow(ctx, `SELECT created_at FROM events WHERE id=$1`, e.ID).Scan(&e.CreatedAt)
+	return mapErr(pg.pool.QueryRow(ctx,
+		`INSERT INTO events (id,delivery_id,stage,event_type,payload) VALUES ($1,$2,$3,$4,$5) RETURNING created_at`,
+		e.ID, e.DeliveryID, e.Stage, e.EventType, payload).Scan(&e.CreatedAt))
 }
 
 func (pg *Pg) ListEvents(ctx context.Context, deliveryID string) ([]Event, error) {
@@ -285,17 +283,14 @@ func (pg *Pg) ListEvents(ctx context.Context, deliveryID string) ([]Event, error
 	return out, rows.Err()
 }
 
+// SaveArtifact 单语句插入并 RETURNING created_at（与 AppendEvent 同理，原子回读）。
 func (pg *Pg) SaveArtifact(ctx context.Context, a *Artifact) error {
 	if a.ID == "" {
 		a.ID = uuid.NewString()
 	}
-	_, err := pg.pool.Exec(ctx,
-		`INSERT INTO artifacts (id,delivery_id,stage,kind,content) VALUES ($1,$2,$3,$4,$5)`,
-		a.ID, a.DeliveryID, a.Stage, a.Kind, a.Content)
-	if err != nil {
-		return err
-	}
-	return pg.pool.QueryRow(ctx, `SELECT created_at FROM artifacts WHERE id=$1`, a.ID).Scan(&a.CreatedAt)
+	return mapErr(pg.pool.QueryRow(ctx,
+		`INSERT INTO artifacts (id,delivery_id,stage,kind,content) VALUES ($1,$2,$3,$4,$5) RETURNING created_at`,
+		a.ID, a.DeliveryID, a.Stage, a.Kind, a.Content).Scan(&a.CreatedAt))
 }
 
 // LatestArtifact 取指定 kind 的最新一条产物（无则 ErrNotFound）。
@@ -359,9 +354,11 @@ func (pg *Pg) FinishStageRun(ctx context.Context, id string, status string) erro
 	return nil
 }
 
+// LatestStageRun 取该阶段最近一次运行。started_at 并列时按 attempt、id 稳定排序
+// （attempt 由调用方按 latest 递增分配，天然单调），防同刻并列取错旧行。
 func (pg *Pg) LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error) {
 	return scanStageRun(pg.pool.QueryRow(ctx,
-		`SELECT `+stageRunCols+` FROM stage_runs WHERE delivery_id=$1 AND stage=$2 ORDER BY started_at DESC LIMIT 1`,
+		`SELECT `+stageRunCols+` FROM stage_runs WHERE delivery_id=$1 AND stage=$2 ORDER BY started_at DESC, attempt DESC, id DESC LIMIT 1`,
 		deliveryID, stage))
 }
 
@@ -426,16 +423,25 @@ func (pg *Pg) GetAgent(ctx context.Context, id string) (*Agent, error) {
 	return scanAgent(pg.pool.QueryRow(ctx, `SELECT `+agentCols+` FROM agents WHERE id=$1`, id))
 }
 
+// UpdateAgent 按读到的 updated_at 条件更新（乐观锁）：并发读-改-写的后写者
+// 条件不命中 → 回读定性（不存在 → ErrNotFound；版本过期 → ErrConflict）。
 func (pg *Pg) UpdateAgent(ctx context.Context, a *Agent) error {
 	cfg := a.Config
 	if cfg == nil {
 		cfg = map[string]any{}
 	}
 	err := pg.pool.QueryRow(ctx,
-		`UPDATE agents SET name=$2,runner=$3,config=$4,updated_at=now() WHERE id=$1 RETURNING updated_at`,
-		a.ID, a.Name, a.Runner, cfg).Scan(&a.UpdatedAt)
+		`UPDATE agents SET name=$2,runner=$3,config=$4,updated_at=now()
+		 WHERE id=$1 AND updated_at=$5 RETURNING updated_at`,
+		a.ID, a.Name, a.Runner, cfg, a.UpdatedAt).Scan(&a.UpdatedAt)
 	if isUnique(err) {
 		return ErrConflict
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := pg.GetAgent(ctx, a.ID); gerr != nil {
+			return gerr // ErrNotFound 或底层错误
+		}
+		return ErrConflict // 行在、版本过期：并发覆盖
 	}
 	return mapErr(err)
 }
@@ -539,6 +545,21 @@ func (pg *Pg) ListBindings(ctx context.Context, projectID string) ([]PipelineBin
 		return nil, err
 	}
 	defer rows.Close()
+	return collectBindings(rows)
+}
+
+// ListAllBindings 全部绑定（默认 + 所有项目覆盖）单查询带回，按创建时间升序。
+func (pg *Pg) ListAllBindings(ctx context.Context) ([]PipelineBinding, error) {
+	rows, err := pg.pool.Query(ctx, `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectBindings(rows)
+}
+
+// collectBindings 公共行扫描（ListBindings / ListAllBindings 共用）。
+func collectBindings(rows pgx.Rows) ([]PipelineBinding, error) {
 	out := make([]PipelineBinding, 0)
 	for rows.Next() {
 		var b PipelineBinding

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tokfinity/infera/internal/agent"
 	"github.com/tokfinity/infera/internal/git"
@@ -41,6 +42,24 @@ var errStop = errors.New("engine: stop this run")
 
 // parentDriveTimeout 子需求完成后的异步父推进（合并循环）时间上限。
 const parentDriveTimeout = 30 * time.Minute
+
+// agentRunTimeout 单次 agent 调用的总时限：CLI 卡死（等输入）/ 远端挂起时，
+// 交付不能无限占用 per-delivery 驱动。var 而非 const：测试注入短时限。
+var agentRunTimeout = 30 * time.Minute
+
+// runAgent 带总超时跑一次 agent（全部引擎侧 agent 调用的唯一出口）。
+// 超时按 agent 失败约定收场：错误包装 timeout 说明（stage_failed 事件可区分），
+// 调用方走 agentFailed → blocked。ctx 截止而 runner 返回的是派生错误
+// （如被杀进程的 "signal: killed"）也识别为超时。
+func runAgent(ctx context.Context, ar agent.Runner, req agent.Request) (agent.Result, error) {
+	actx, cancel := context.WithTimeout(ctx, agentRunTimeout)
+	defer cancel()
+	res, err := ar.Run(actx, req)
+	if err != nil && actx.Err() != nil && errors.Is(actx.Err(), context.DeadlineExceeded) {
+		return res, fmt.Errorf("agent run timeout (>%s): %w", agentRunTimeout, err)
+	}
+	return res, err
+}
 
 // Engine 阶段图执行器。只认识 Graph 的节点类型与下一跳，不认识具体业务。
 type Engine struct {
@@ -235,6 +254,8 @@ func (e *Engine) Reject(ctx context.Context, deliveryID, reason string) error {
 
 // ensureWorkspace 首次进入时 Acquire 仓库并持久化（WorkspaceReady 幂等标志）。
 // 绿地项目 base_commit 为空，不能用 BaseCommit 判重——否则每次 Start 都重复 Acquire。
+// 事件记 d.CurrentStage：普通交付首次进入时是 intake，拆分父在 mergeLoop 里
+// 补 Acquire 时是 code_gen——固定记 intake 会把 mergeLoop 的失败标错阶段。
 func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 	if d.WorkspaceReady {
 		return nil
@@ -246,8 +267,8 @@ func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 	_, base, err := e.ws.Acquire(ctx, d.ID, proj.RepoURL, proj.DefaultBranch)
 	if err != nil {
 		// workspace 获取失败同 agent 失败约定：记 stage_failed 事件 + blocked 终态，
-		// 错误上抛（调用方决定记日志），避免 delivery 永远停在 intake 无痕迹。
-		e.emit(ctx, d, "intake", "stage_failed", map[string]string{"error": err.Error()})
+		// 错误上抛（调用方决定记日志），避免 delivery 无痕迹卡死。
+		e.emit(ctx, d, d.CurrentStage, "stage_failed", map[string]string{"error": err.Error()})
 		return e.block(ctx, d, fmt.Errorf("workspace acquire: %w", err))
 	}
 	d.BaseCommit = base
@@ -255,7 +276,7 @@ func (e *Engine) ensureWorkspace(ctx context.Context, d *store.Delivery) error {
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
 		return err
 	}
-	e.emit(ctx, d, "intake", "workspace_ready", map[string]string{"base_commit": base})
+	e.emit(ctx, d, d.CurrentStage, "workspace_ready", map[string]string{"base_commit": base})
 	return nil
 }
 
@@ -356,10 +377,10 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 			e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{"error": err.Error()})
 			return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
 		}
-		// local 占位：交付停在当前节点等本机交互（批 B 实装通道）。
-		// 每次重驱动都会再发一次事件（无去重守卫）——可接受，前端幂等展示。
+		// local 占位：交付停在当前节点等本机交互（MCP / infera-link 通道）。
+		// 事件幂等：见 emitLocalPending（重驱动不刷屏，新停车照常广播）。
 		e.finishStageRun(ctx, run.ID, "done")
-		e.emit(ctx, d, node.Stage, "local_stage_pending", map[string]string{"node": node.Stage})
+		e.emitLocalPending(ctx, d, node.Stage, node.Stage)
 		return errStop
 	}
 	spec, err := e.latestSpec(ctx, d.ID)
@@ -379,7 +400,7 @@ func (e *Engine) stepAgent(ctx context.Context, d *store.Delivery, node Node, ru
 	if err != nil {
 		return err
 	}
-	res, err := ar.Run(ctx, agent.Request{
+	res, err := runAgent(ctx, ar, agent.Request{
 		Role:    node.Stage,
 		Prompt:  prompt + addenda,
 		Workdir: e.ws.Path(d.ID),
@@ -430,7 +451,7 @@ func (e *Engine) persistAtGate(ctx context.Context, d *store.Delivery, node Node
 		DeliveryID: d.ID,
 		Stage:      node.Stage,
 		Kind:       "diff",
-		Content:    res.Diff,
+		Content:    capDiff(res.Diff),
 	}); serr != nil {
 		return serr
 	}
@@ -452,6 +473,23 @@ func (e *Engine) persistAtGate(ctx context.Context, d *store.Delivery, node Node
 	return nil
 }
 
+// maxDiffBytes diff artifact 的落库上限（字节）：大改动 diff 动辄数 MiB，
+// 原样入库撑爆存储与时间线；截断后审查页仍有内容，完整 diff 在固化分支/PR 上。
+const maxDiffBytes = 1 << 20 // 1 MiB
+
+// capDiff 超过 maxDiffBytes 时截断并尾缀标记；截点回退到合法 UTF-8 边界
+// （最多回退 3 字节，不切坏多字节字符）。
+func capDiff(s string) string {
+	if len(s) <= maxDiffBytes {
+		return s
+	}
+	cut := s[:maxDiffBytes]
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return cut + fmt.Sprintf("\n…（diff 超过 %d 字节已截断，完整内容见固化分支/PR）", maxDiffBytes)
+}
+
 // stepGateReview 跑门禁的前置 agent（预审），产出 agent_output artifact 供门禁展示。
 // 只预审不推进——推进由人工 Approve 决定。
 // 审查节点绑定为 local runner（本机交互占位）时跳过预审：门禁照常挂起等人工。
@@ -464,14 +502,14 @@ func (e *Engine) stepGateReview(ctx context.Context, d *store.Delivery, node Nod
 			return e.block(ctx, d, fmt.Errorf("stage %s: %w", node.Stage, err))
 		}
 		e.finishStageRun(ctx, run.ID, "done")
-		e.emit(ctx, d, node.Stage, "local_stage_pending", map[string]string{"node": node.ReviewRole})
+		e.emitLocalPending(ctx, d, node.Stage, node.ReviewRole)
 		return nil
 	}
 	spec, err := e.latestSpec(ctx, d.ID)
 	if err != nil {
 		return err
 	}
-	res, err := ar.Run(ctx, agent.Request{
+	res, err := runAgent(ctx, ar, agent.Request{
 		Role:    node.ReviewRole,
 		Prompt:  agent.BuildPrompt(node.ReviewRole, d.Description, spec, ""),
 		Workdir: e.ws.Path(d.ID),
@@ -760,4 +798,40 @@ func (e *Engine) emit(ctx context.Context, d *store.Delivery, stage, eventType s
 	if e.Notify != nil {
 		e.Notify(d.ID, stage, eventType)
 	}
+}
+
+// emitLocalPending 广播本机停车事件（幂等）：交付已停在 node 等本机交回、
+// 且从上次广播后未动过（无交回 / 无门禁动作）时跳过——重复驱动（重启恢复、
+// driveLocked 回环）不再刷屏；真正离开后再停车（新停车）照常广播。
+func (e *Engine) emitLocalPending(ctx context.Context, d *store.Delivery, eventStage, node string) {
+	if e.localParkAnnounced(ctx, d.ID, node) {
+		return
+	}
+	e.emit(ctx, d, eventStage, "local_stage_pending", map[string]string{"node": node})
+}
+
+// localParkAnnounced 交付是否已广播过 node 的本机停车（事件流末尾回溯）：
+// 先遇到 local_stage_pending{node}（其后没有该节点的 local_stage_submitted、
+// 也没有任何门禁 approve/reject——即交付从停车点未动过）→ 已广播。
+// 事件读失败按未广播处理（可见性优先，宁可重发）。
+func (e *Engine) localParkAnnounced(ctx context.Context, deliveryID, node string) bool {
+	evs, err := e.st.ListEvents(ctx, deliveryID)
+	if err != nil {
+		return false
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		switch evs[i].EventType {
+		case "gate_approved", "gate_rejected":
+			return false // 门禁动过 = 已进入新一轮，停车是新停车
+		case "local_stage_submitted", "local_stage_pending":
+			var p struct {
+				Node string `json:"node"`
+			}
+			if err := json.Unmarshal(evs[i].Payload, &p); err != nil || p.Node != node {
+				continue
+			}
+			return evs[i].EventType == "local_stage_pending"
+		}
+	}
+	return false
 }

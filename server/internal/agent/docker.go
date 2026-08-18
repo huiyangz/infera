@@ -15,7 +15,7 @@ import (
 // RunInContainer 各调用复用，不再 per-call 建连/关闭。
 var dockerCli atomic.Value // *client.Client
 
-// dockerClient 取共享客户端；未初始化时创建（首次失败重试一次）后缓存。
+// dockerClient 取共享客户端；未初始化时创建后缓存。
 // 并发首次调用可能各建一次、Store 后写者胜——被覆盖的客户端只是多余对象，无副作用。
 func dockerClient() (*client.Client, error) {
 	if cli, ok := dockerCli.Load().(*client.Client); ok {
@@ -23,10 +23,7 @@ func dockerClient() (*client.Client, error) {
 	}
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		cli, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	dockerCli.Store(cli)
 	return cli, nil

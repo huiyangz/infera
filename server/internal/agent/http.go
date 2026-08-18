@@ -18,6 +18,10 @@ const maxErrBody = 512
 
 // HTTPRunner 把 agent 请求转发给远端 HTTP 服务：
 // POST config.url {"role","prompt","workdir"} → 200 {"output":"..."}。
+//
+// workdir 契约：发送的是服务端本地绝对路径（与 cli/docker runner 的 Workdir 同源）。
+// 这意味着远端服务必须能访问同一路径下的同一 workdir——部署上要求共享卷或同机；
+// 若远端只能理解自己的相对标识，应由远端服务自行维护「绝对路径 ↔ 自有标识」映射。
 type HTTPRunner struct {
 	url string
 	hc  *http.Client

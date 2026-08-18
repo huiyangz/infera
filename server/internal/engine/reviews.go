@@ -92,7 +92,7 @@ func (e *Engine) stepFindingsReview(ctx context.Context, d *store.Delivery, node
 			return e.block(ctx, d, fmt.Errorf("stage %s review %s: %w", node.Stage, review, err))
 		}
 		// local 占位：该道跳过（本机交互 = 人工即审查员），门禁照常挂起。
-		e.emit(ctx, d, node.Stage, "local_stage_pending", map[string]string{"node": review})
+		e.emitLocalPending(ctx, d, node.Stage, review)
 		return nil
 	}
 	spec, err := e.latestSpec(ctx, d.ID)
@@ -103,7 +103,7 @@ func (e *Engine) stepFindingsReview(ctx context.Context, d *store.Delivery, node
 	if err != nil {
 		return err
 	}
-	res, err := ar.Run(ctx, agent.Request{Role: review, Prompt: prompt, Workdir: e.ws.Path(d.ID)})
+	res, err := runAgent(ctx, ar, agent.Request{Role: review, Prompt: prompt, Workdir: e.ws.Path(d.ID)})
 	if err != nil {
 		e.finishStageRun(ctx, run.ID, "failed")
 		e.emit(ctx, d, node.Stage, "stage_failed", map[string]string{

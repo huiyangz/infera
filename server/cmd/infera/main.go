@@ -24,7 +24,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	if cfg.Password == "" {
 		log.Fatal("INFERA_PASSWORD 未设置")
 	}
@@ -53,6 +56,8 @@ func main() {
 	// SetGit 必须在建第一个 delivery 前就位：createProject 的 LsRemote 可达性校验依赖它。
 	srv := api.NewServer(st, cfg.Password, nil)
 	srv.SetGit(g)
+	// HTTPS 终端部署时开启 cookie Secure（本地 http 开发保持关闭）。
+	srv.SetCookieSecure(os.Getenv("INFERA_COOKIE_SECURE") == "true")
 
 	// 默认编排种子：无默认绑定时注册 default-cli / local-console 并绑定全部节点。
 	// spec 默认走 default-cli（E2E 需要可跑通）；SEED_LOCAL_SPEC=true 切到本机交互占位。
@@ -123,8 +128,13 @@ func seedDefaultOrchestration(ctx context.Context, st store.Store, agentCmd stri
 	if err := st.CreateAgent(ctx, local); err != nil && !errors.Is(err, store.ErrConflict) {
 		return err
 	}
-	// 重名（半种子状态）时回读拿 id。
-	for _, a := range mustAgents(ctx, st) {
+	// 重名（半种子状态）时回读拿 id。读失败必须上抛：吞错会继续用空
+	// agent id 绑定出坏数据（误导性错误 + 半种子状态）。
+	agents, err := st.ListAgents(ctx)
+	if err != nil {
+		return err
+	}
+	for _, a := range agents {
 		switch a.Name {
 		case "default-cli":
 			cli.ID = a.ID
@@ -147,12 +157,4 @@ func seedDefaultOrchestration(ctx context.Context, st store.Store, agentCmd stri
 	}
 	log.Printf("seed: 默认编排就绪（spec→%s，test_gen/code_gen/code_review/双道审查→default-cli）", specName)
 	return nil
-}
-
-func mustAgents(ctx context.Context, st store.Store) []store.Agent {
-	agents, err := st.ListAgents(ctx)
-	if err != nil {
-		return nil
-	}
-	return agents
 }

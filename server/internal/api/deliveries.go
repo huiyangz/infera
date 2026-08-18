@@ -85,7 +85,7 @@ func (s *Server) handleCreateDelivery(w http.ResponseWriter, r *http.Request) {
 	})
 	// 异步驱动引擎：创建即返回，推进在后台进行（门禁/终态时 driver 停车）。
 	go s.runDelivery(d.ID)
-	writeJSON(w, http.StatusOK, d)
+	writeJSON(w, http.StatusCreated, d)
 }
 
 func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
@@ -159,7 +159,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if d.PendingGate == "" {
-		writeError(w, http.StatusBadRequest, "no pending gate")
+		writeError(w, http.StatusBadRequest, "当前没有待审批的门禁")
 		return
 	}
 	kind := gateArtifactKind(d.PendingGate)
@@ -298,7 +298,13 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		Split      []store.ChildSpec `json:"split"`
 		Tasks      []store.TaskSpec  `json:"tasks"`
 	}
-	if raw, err := io.ReadAll(r.Body); err == nil && len(bytes.TrimSpace(raw)) > 0 {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		// 读体失败（客户端断连等）必须拒绝：吞错按空 body 继续会把门禁批掉。
+		writeError(w, http.StatusBadRequest, "请求体不合法")
+		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &body); err != nil {
 			writeError(w, http.StatusBadRequest, "请求体不合法")
 			return
@@ -425,7 +431,11 @@ func (s *Server) RunDelivery(deliveryID string) {
 // resumeParentTimeout 重启恢复驱动拆分父（合并队列，可能包含多次 fetch/merge）的时间上限。
 const resumeParentTimeout = 30 * time.Minute
 
-// ResumeActive 服务重启后的恢复：对所有 active 交付重新点火后台驱动。
+// maxResumeConcurrency ResumeActive 的恢复驱动并发上限：重启时上百 active 交付
+// 同时点火会打爆 agent 后端/DB；信号量排队放行（每交付仍各自 per-delivery 锁串行）。
+const maxResumeConcurrency = 8
+
+// ResumeActive 服务重启后的恢复：对所有 active 交付重新点火后台驱动（并发受限）。
 // gate-parked 的被驱动循环的状态检查直接跳过（零引擎调用）；停在 code_gen 回环 /
 // 中断在半路的从 CurrentStage 继续（workspace 未就绪则由 Start 重新 Acquire）。
 // 拆分父（split_mode 且停在 code_gen）例外：那是"等子需求/合并"语义，
@@ -440,10 +450,13 @@ func (s *Server) ResumeActive(ctx context.Context) {
 		log.Printf("resume: list active deliveries: %v", err)
 		return
 	}
+	sem := make(chan struct{}, maxResumeConcurrency)
 	for _, d := range ds {
 		if d.SplitMode && d.CurrentStage == "code_gen" {
 			id := d.ID
+			sem <- struct{}{}
 			go func() {
+				defer func() { <-sem }()
 				pctx, cancel := context.WithTimeout(context.Background(), resumeParentTimeout)
 				defer cancel()
 				if err := s.engine.MaybeDriveParent(pctx, id); err != nil {
@@ -452,7 +465,12 @@ func (s *Server) ResumeActive(ctx context.Context) {
 			}()
 			continue
 		}
-		go s.runDelivery(d.ID)
+		id := d.ID
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			s.runDelivery(id)
+		}()
 	}
 	log.Printf("resume: resumed %d active deliveries", len(ds))
 }

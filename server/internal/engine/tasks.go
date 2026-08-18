@@ -82,7 +82,7 @@ func (e *Engine) stepCodeGen(ctx context.Context, d *store.Delivery, node Node, 
 	}
 	if len(tasks) == 0 {
 		// 老数据 / 空清单：单次整体实现（旧路径）。
-		res, err := ar.Run(ctx, agent.Request{Role: node.Stage, Prompt: base, Workdir: e.ws.Path(d.ID)})
+		res, err := runAgent(ctx, ar, agent.Request{Role: node.Stage, Prompt: base, Workdir: e.ws.Path(d.ID)})
 		if err != nil {
 			return e.agentFailed(ctx, d, node, run, err)
 		}
@@ -104,7 +104,7 @@ func (e *Engine) stepCodeGen(ctx context.Context, d *store.Delivery, node Node, 
 		}
 		prompt := fmt.Sprintf("%s\n\n当前任务 %d/%d：%s\n任务详情：%s", base, idx, len(tasks), t.Title, t.Detail)
 		// 任务级输出不落盘；真 diff 由 code_review 门禁 Persist 产出。
-		if _, err := ar.Run(ctx, agent.Request{Role: node.Stage, Prompt: prompt, Workdir: e.ws.Path(d.ID)}); err != nil {
+		if _, err := runAgent(ctx, ar, agent.Request{Role: node.Stage, Prompt: prompt, Workdir: e.ws.Path(d.ID)}); err != nil {
 			return e.agentFailed(ctx, d, node, run, err)
 		}
 		if err := e.st.SaveArtifact(ctx, &store.Artifact{
@@ -121,7 +121,7 @@ func (e *Engine) stepCodeGen(ctx context.Context, d *store.Delivery, node Node, 
 	if ran == 0 && feedback != "" {
 		// 无剩余任务但有失败反馈：单次修复调用（反馈已在 base prompt 里），
 		// 摘要维持任务清单合成结果不变。
-		if _, err := ar.Run(ctx, agent.Request{Role: node.Stage, Prompt: base, Workdir: e.ws.Path(d.ID)}); err != nil {
+		if _, err := runAgent(ctx, ar, agent.Request{Role: node.Stage, Prompt: base, Workdir: e.ws.Path(d.ID)}); err != nil {
 			return e.agentFailed(ctx, d, node, run, err)
 		}
 		e.finishStageRun(ctx, run.ID, "done")

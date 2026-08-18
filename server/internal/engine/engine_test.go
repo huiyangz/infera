@@ -485,10 +485,11 @@ func TestFailCountResetsOnPass(t *testing.T) {
 	require.Equal(t, StatusActive, got.Status)
 }
 
-// fakePersister 记录每次输入；err 非空时模拟固化失败。
+// fakePersister 记录每次输入；err 非空时模拟固化失败；diff 可注入（截断测试）。
 type fakePersister struct {
 	calls []persist.Input
 	err   error
+	diff  string
 }
 
 func (f *fakePersister) Persist(_ context.Context, in persist.Input) (persist.Result, error) {
@@ -496,8 +497,12 @@ func (f *fakePersister) Persist(_ context.Context, in persist.Input) (persist.Re
 	if f.err != nil {
 		return persist.Result{}, f.err
 	}
+	diff := f.diff
+	if diff == "" {
+		diff = "diff --git a/hello.txt b/hello.txt"
+	}
 	return persist.Result{
-		Diff:   "diff --git a/hello.txt b/hello.txt",
+		Diff:   diff,
 		PRURL:  "https://github.com/example/repo/pull/7",
 		Branch: "infera/abcd1234",
 	}, nil

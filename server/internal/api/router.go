@@ -36,6 +36,10 @@ type Server struct {
 	engine EngineAPI
 	g      *git.Git // 可选：创建项目时做 LsRemote 可达性校验
 
+	// cookieSecure session cookie 的 Secure 属性：HTTPS 终端开启（防明文泄露），
+	// 本地 http 开发保持关闭（否则浏览器丢弃 cookie）。main 按 env 装配。
+	cookieSecure bool
+
 	// locks per-delivery 驱动锁（deliveryID → *sync.Mutex）：
 	// 引擎无并发保护，创建的异步 driver 与 approve/reject 借此互斥。
 	locks sync.Map
@@ -50,6 +54,12 @@ func NewServer(st store.Store, password string, engine EngineAPI) *Server {
 
 func (s *Server) SetEngine(e EngineAPI) { s.engine = e }
 func (s *Server) SetGit(g *git.Git)     { s.g = g }
+
+// SetCookieSecure 开启 session cookie 的 Secure 属性（HTTPS 部署时装配）。
+func (s *Server) SetCookieSecure(v bool) *Server {
+	s.cookieSecure = v
+	return s
+}
 
 // Mux 装配全部路由。公开：health/login/logout/me/ws；其余需认证。
 // /ws 暂挂公开组（MVP：前端带 cookie 连接），后续可加 requireAuth。
@@ -95,6 +105,28 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError 统一错误响应：{"error": 人类可读文案, "code": 机器可读码}。
+// code 由状态码派生，客户端按 code 分支而不解析文案（文案可能随措辞调整）。
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	writeJSON(w, status, map[string]string{"error": msg, "code": errorCode(status)})
+}
+
+// errorCode 状态码 → 稳定错误码（新增取值需全端同步）。
+func errorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "invalid_request"
+	case http.StatusUnauthorized:
+		return "unauthorized"
+	case http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict:
+		return "conflict"
+	case http.StatusServiceUnavailable:
+		return "unavailable"
+	default:
+		return "internal"
+	}
 }

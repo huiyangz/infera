@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strings"
 )
@@ -17,14 +18,28 @@ type Config struct {
 	TestCmd      string // unit_test 命令（本地模式）
 }
 
-func Load() Config {
+// devDatabaseURL 开发回落值：docker-compose 的本地 postgres（127.0.0.1:5433）。
+// 仅开发模式使用——生产（INFERA_ENV=production）必须显式设置 DATABASE_URL。
+const devDatabaseURL = "postgres://infera:infera@localhost:5433/infera_v2?sslmode=disable"
+
+// Load 装配配置。INFERA_ENV=production 时启用严格模式：缺失关键项直接报错
+// （内置默认值连上错误的库比启动失败更危险）。
+func Load() (Config, error) {
 	addr := getenv("PORT", ":8080")
 	if !strings.HasPrefix(addr, ":") {
 		addr = ":" + addr // 容错：PORT=8080 与 PORT=:8080 等价
 	}
+	production := os.Getenv("INFERA_ENV") == "production"
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		if production {
+			return Config{}, errors.New("INFERA_ENV=production 要求显式设置 DATABASE_URL（不内置默认连接串）")
+		}
+		dbURL = devDatabaseURL
+	}
 	return Config{
 		Addr:         addr,
-		DatabaseURL:  getenv("DATABASE_URL", "postgres://infera:infera@localhost:5433/infera_v2?sslmode=disable"),
+		DatabaseURL:  dbURL,
 		Password:     os.Getenv("INFERA_PASSWORD"),
 		MCPToken:     os.Getenv("INFERA_MCP_TOKEN"),
 		GitHubToken:  os.Getenv("GITHUB_TOKEN"),
@@ -32,7 +47,7 @@ func Load() Config {
 		AgentCmd:     getenv("AGENT_CMD", "claude"),
 		RepoWorkRoot: getenv("REPO_WORK_ROOT", "/tmp/infera-workdirs"),
 		TestCmd:      getenv("TEST_CMD", "true"),
-	}
+	}, nil
 }
 
 func getenv(k, def string) string {

@@ -66,7 +66,7 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 
 	r, _ := c.Post(ts.URL+"/api/projects", "application/json",
 		bytes.NewBufferString(`{"name":"demo","repo_url":"https://github.com/x/y","default_branch":"main"}`))
-	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, 201, r.StatusCode)
 	var p store.Project
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&p))
 
@@ -261,7 +261,7 @@ func TestDeliveryLifecycleAPI(t *testing.T) {
 
 	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
 		bytes.NewBufferString(`{"title":"需求A","description":"描述"}`))
-	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, 201, r.StatusCode)
 	var d store.Delivery
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
 	require.Equal(t, "intake", d.CurrentStage)
@@ -358,7 +358,7 @@ func TestDeliveryEngineStartErrorSwallowed(t *testing.T) {
 
 	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
 		bytes.NewBufferString(`{"title":"需求B"}`))
-	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, 201, r.StatusCode)
 	var d store.Delivery
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
 	require.Equal(t, "active", d.Status)

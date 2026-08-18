@@ -96,6 +96,20 @@ func (g *Git) LsRemote(ctx context.Context, rawURL string) error {
 	return err
 }
 
+// RemoteRef 返回远端分支 ref 的当前 commit（分支不存在返回空串）。
+// 用于推送前比对：远端已是目标内容时跳过 push（无变更轮次）。
+func (g *Git) RemoteRef(ctx context.Context, rawURL, ref string) (string, error) {
+	out, err := g.run(ctx, "", "ls-remote", injectToken(rawURL, g.Token), ref)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", nil
+	}
+	return fields[0], nil
+}
+
 // Clone 浅克隆指定分支。成功后立刻把 origin 的 URL 重置为 rawURL：
 // token 只出现在本次 clone 的命令行参数里，不写进 workdir 的 .git/config。
 // （CommitAndPush 用显式 pushURL 推送，不依赖存储的 remote。）
