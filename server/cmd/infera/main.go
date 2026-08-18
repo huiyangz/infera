@@ -8,12 +8,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/tokfinity/infera/internal/agent"
 	"github.com/tokfinity/infera/internal/api"
 	"github.com/tokfinity/infera/internal/config"
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
+	"github.com/tokfinity/infera/internal/mcp"
 	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
@@ -84,8 +86,20 @@ func main() {
 	// （gate-parked 零引擎调用、中断的从 CurrentStage 继续）。
 	srv.ResumeActive(context.Background())
 
+	// MCP 服务（R3）：把驾驶面（上下文 / 本机交回 / 门操作）暴露给任意 MCP 客户端。
+	// 挂在 root 路由的 /mcp（api.Mux 原样挂在 /）；未设置 INFERA_MCP_TOKEN 时端点禁用。
+	// 簿记后的推进复用 api 的 per-delivery 锁驱动（RunDelivery），与 HTTP 面同一条推进路径。
+	mcpSrv := mcp.New(st, eng, ws.Path, cfg.MCPToken)
+	mcpSrv.SetDrive(srv.RunDelivery)
+	root := chi.NewRouter()
+	root.Mount("/", srv.Mux())
+	root.Mount("/mcp", mcpSrv.Handler())
+	if cfg.MCPToken != "" {
+		log.Printf("mcp: 已启用（/mcp，Bearer token 鉴权）")
+	}
+
 	log.Printf("infera listening on %s (workdir root %s)", cfg.Addr, cfg.RepoWorkRoot)
-	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Mux()))
+	log.Fatal(http.ListenAndServe(cfg.Addr, root))
 }
 
 // seedDefaultOrchestration 幂等种子：无默认绑定时注册 default-cli（command 取

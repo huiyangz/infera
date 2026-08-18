@@ -2,6 +2,17 @@ package config
 
 import "testing"
 
+func TestLoadMCPToken(t *testing.T) {
+	t.Setenv("INFERA_MCP_TOKEN", "")
+	if got := Load().MCPToken; got != "" {
+		t.Fatalf("未设置时 MCPToken 应为空（/mcp 禁用），got %q", got)
+	}
+	t.Setenv("INFERA_MCP_TOKEN", "secret-token")
+	if got := Load().MCPToken; got != "secret-token" {
+		t.Fatalf("MCPToken = %q, want %q", got, "secret-token")
+	}
+}
+
 func TestLoadAddrPortFootgun(t *testing.T) {
 	cases := []struct {
 		name string

@@ -35,6 +35,7 @@ cp .env.example .env        # 填 INFERA_PASSWORD 等
 | `PORT` | `8080` | HTTP 端口（`8080` 与 `:8080` 写法均可） |
 | `DATABASE_URL` | `postgres://infera:infera@localhost:5433/infera_v2?sslmode=disable` | postgres 连接串 |
 | `INFERA_PASSWORD` | 必填 | 登录密码（单用户，缺则启动 fatal） |
+| `INFERA_MCP_TOKEN` | 空（禁用） | MCP 服务 Bearer token（`/mcp` 端点，见 [docs/mcp.md](docs/mcp.md)） |
 | `GITHUB_TOKEN` | 空 | 导入已有仓库 / 推 PR 用 |
 | `AGENT_CMD` | `claude` | agent 命令；本地调试可用 `echo` |
 | `AGENT_BACKEND` | 空（本地进程） | `docker` = 容器执行（配合 `AGENT_IMAGE`） |
@@ -50,3 +51,7 @@ AGENT_CMD=pi
 ```
 
 本地进程模式下引擎以 `AGENT_CMD "$INFERA_PROMPT"` 执行（prompt 同时写 stdin），并通过环境变量传入 `INFERA_ROLE`（spec / test_gen / code_gen / code_review）与 `INFERA_WORKDIR`。任何吃参数/stdin、输出 Markdown 的 CLI agent 均可接入。
+
+## MCP 服务（外部 agent 驾驶流水线）
+
+设置 `INFERA_MCP_TOKEN` 后，`/mcp` 暴露 MCP 服务（无状态 Streamable HTTP，Bearer 鉴权），claude / codex 等任意 MCP 客户端可驾驶流水线：`get_context` 查交付上下文、`submit_stage_output` 交回本机绑定节点（local 绑定）的阶段产出、`get_gate` / `approve_gate` / `reject_gate` 查看与裁定人工门禁（走引擎 Approve/Reject 单入口）。配置示例与冒烟记录见 [docs/mcp.md](docs/mcp.md)。
