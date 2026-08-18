@@ -429,6 +429,35 @@ func (m *Memory) DeleteBinding(_ context.Context, projectID, node string) error 
 	return nil
 }
 
+// ReplaceBindings 原子替换某项目的全部绑定（与 Pg 的单事务语义对齐）：
+// 锁内先整体校验（项目、每个 agent 存在），全部通过才删旧写新——
+// 任一步不通过直接返回，集合永不半写。
+func (m *Memory) ReplaceBindings(_ context.Context, projectID string, byNode map[string]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if projectID != "" {
+		if _, ok := m.projects[projectID]; !ok {
+			return ErrNotFound
+		}
+	}
+	for _, agentID := range byNode {
+		if _, ok := m.agents[agentID]; !ok {
+			return ErrNotFound
+		}
+	}
+	for key, b := range m.bindings {
+		if b.ProjectID == projectID {
+			delete(m.bindings, key)
+		}
+	}
+	now := time.Now().UTC()
+	for node, agentID := range byNode {
+		cp := PipelineBinding{ID: uuid.NewString(), ProjectID: projectID, Node: node, AgentID: agentID, CreatedAt: now}
+		m.bindings[bindingKey(projectID, node)] = &cp
+	}
+	return nil
+}
+
 func (m *Memory) ListBindings(_ context.Context, projectID string) ([]PipelineBinding, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

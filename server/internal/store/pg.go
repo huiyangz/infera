@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"maps"
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -491,6 +493,35 @@ func (pg *Pg) DeleteBinding(ctx context.Context, projectID, node string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ReplaceBindings 单事务原子替换某项目的全部绑定：先删旧、再按节点序写入新集合，
+// 任一步失败整体回滚（调用方拿到错误时原状态一字不差）。projectID 空串 = 全局默认。
+// 按节点序插入使失败位置确定：排在失败项之前的写入已真实落过，回滚覆盖的正是半写场景。
+func (pg *Pg) ReplaceBindings(ctx context.Context, projectID string, byNode map[string]string) error {
+	err := pgx.BeginFunc(ctx, pg.pool, func(tx pgx.Tx) error {
+		var err error
+		if projectID == "" {
+			_, err = tx.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id IS NULL`)
+		} else {
+			_, err = tx.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1`, projectID)
+		}
+		if err != nil {
+			return err
+		}
+		for _, node := range slices.Sorted(maps.Keys(byNode)) {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,$2,$3,$4)`,
+				uuid.NewString(), nullableParent(projectID), node, byNode[node]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if isFKViolation(err) { // agent_id / project_id 不存在
+		return ErrNotFound
+	}
+	return err
 }
 
 // ListBindings：projectID 空串 = 全局默认，否则该项目的覆盖绑定。

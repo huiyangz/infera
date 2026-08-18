@@ -36,8 +36,8 @@ func TestAgentsCRUD(t *testing.T) {
 
 	id := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
 
-	// 重名 → 409
-	r, _ = c.Post(ts.URL+"/api/agents", "application/json", bytes.NewBufferString(`{"name":"default-cli","runner":"cli"}`))
+	// 重名 → 409（配置合法才会走到名字冲突检查）
+	r, _ = c.Post(ts.URL+"/api/agents", "application/json", bytes.NewBufferString(`{"name":"default-cli","runner":"cli","config":{"command":["echo","hi"]}}`))
 	require.Equal(t, http.StatusConflict, r.StatusCode)
 
 	// 非法 runner → 400
