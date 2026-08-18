@@ -1,10 +1,23 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Check, ChevronLeft, Plus, Undo2, X } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronUp,
+  Plus,
+  Undo2,
+  X,
+} from 'lucide-react'
 import { toast } from 'sonner'
-import { approveGate, getGate, rejectGate } from '@/lib/infera-api'
-import type { ChildSpec } from '@/lib/infera-types'
+import {
+  approveGate,
+  getGate,
+  rejectGate,
+  type ApproveOptions,
+} from '@/lib/infera-api'
+import type { ChildSpec, TaskSpec } from '@/lib/infera-types'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -23,9 +36,21 @@ const GATE_META: Record<
   { title: string; approveHint: string; artifactLabel: string; showPR: boolean }
 > = {
   spec_approval: {
-    title: 'Spec 审批',
-    approveHint: '批准后进入测试生成；打回则 Spec Agent 重写',
+    title: '规格审批',
+    approveHint: '选定交付模式后批准；打回则 Spec Agent 重写',
     artifactLabel: 'Spec 内容',
+    showPR: false,
+  },
+  design_approval: {
+    title: '设计审批',
+    approveHint: '批准后进入任务生成；打回则 Design Agent 重写',
+    artifactLabel: '设计文档',
+    showPR: false,
+  },
+  tasks_approval: {
+    title: '任务审批',
+    approveHint: '批准后 Coder Agent 按清单逐任务实现；打回则 Task Agent 重列',
+    artifactLabel: '任务清单',
     showPR: false,
   },
   code_review: {
@@ -36,6 +61,53 @@ const GATE_META: Record<
   },
 }
 
+/** 复杂度（交付模式）选项：spec 审批门裁定 */
+const COMPLEXITY_OPTIONS: {
+  value: 'small' | 'large'
+  label: string
+  hint: string
+}[] = [
+  {
+    value: 'small',
+    label: '小需求',
+    hint: '规格确认后直达测试生成与实现（7 阶段）',
+  },
+  {
+    value: 'large',
+    label: '大需求',
+    hint: '先做设计与任务拆解、逐门审批后实现（11 阶段）',
+  },
+]
+
+/** 复杂度 segmented 控件：选中项高亮，点击即改判 */
+function ComplexityPicker({
+  value,
+  onChange,
+}: {
+  value: 'small' | 'large'
+  onChange: (v: 'small' | 'large') => void
+}) {
+  return (
+    <div className='inline-flex items-center rounded-lg border bg-muted/50 p-0.5'>
+      {COMPLEXITY_OPTIONS.map((o) => (
+        <button
+          key={o.value}
+          type='button'
+          onClick={() => onChange(o.value)}
+          className={
+            'rounded-md px-4 py-1.5 text-sm font-medium transition-colors ' +
+            (value === o.value
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground')
+          }
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function GatePage({ deliveryId }: { deliveryId: string }) {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -44,21 +116,25 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
     queryFn: () => getGate(deliveryId),
   })
   const [reason, setReason] = useState('')
-  // 拆分方案行（spec_approval 专属）：AI 建议预填，可增删改
+  // spec_approval：交付模式（AI 建议预选，可改判）
+  const [complexity, setComplexity] = useState<'small' | 'large' | null>(null)
+  // design_approval：拆分方案行（AI 建议预填，可增删改）
   const [rows, setRows] = useState<ChildSpec[] | null>(null)
+  // tasks_approval：任务清单行（引擎清单预填，可增删改/调序；null = 未编辑）
+  const [taskRows, setTaskRows] = useState<TaskSpec[] | null>(null)
 
   const back = () =>
     navigate({ to: '/deliveries/$id', params: { id: deliveryId } })
 
   const approve = useMutation({
-    mutationFn: (split?: ChildSpec[]) => approveGate(deliveryId, split),
-    onSuccess: (_d, split) => {
+    mutationFn: (opts?: ApproveOptions) => approveGate(deliveryId, opts),
+    onSuccess: (_d, opts) => {
       qc.invalidateQueries()
-      toast.success(
-        split?.length
-          ? `已拆分为 ${split.length} 个子需求，流水线调度中`
-          : '已批准，流水线继续',
-      )
+      if (opts?.split?.length)
+        toast.success(`已拆分为 ${opts.split.length} 个子需求，流水线调度中`)
+      else if (opts?.tasks?.length)
+        toast.success(`已按 ${opts.tasks.length} 项任务清单开始实现`)
+      else toast.success('已批准，流水线继续')
       back()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -93,11 +169,34 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   }
 
   const isSpec = data.gate === 'spec_approval'
+  const isDesign = data.gate === 'design_approval'
+  const isTasks = data.gate === 'tasks_approval'
+  // AI 复杂度建议：'' = 无建议，按 small 预选
+  const suggestion = data.complexity_suggestion === 'large' ? 'large' : 'small'
+  const picked = complexity ?? suggestion
+  const overridden = complexity !== null && complexity !== suggestion
   // 懒播种：首次渲染用 AI 建议（或空）填充，之后完全由用户编辑
-  const splitRows = rows ?? (data.split_plan ?? [])
+  const splitRows = rows ?? data.split_plan ?? []
   const setSplitRows = (next: ChildSpec[]) => setRows(next)
   const splitValid =
     splitRows.length > 0 && splitRows.every((r) => r.title.trim().length > 0)
+  // 任务清单：未编辑（null）时跟随引擎清单展示
+  const tasks = taskRows ?? data.tasks ?? []
+  const tasksDirty = taskRows !== null
+  const setTasks = (next: TaskSpec[]) => setTaskRows(next)
+  const moveTask = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= tasks.length) return
+    const next = [...tasks]
+    const moved = next[i]
+    next[i] = next[j]
+    next[j] = moved
+    setTasks(next)
+  }
+  const tasksValid = tasks.every((t) => t.title.trim().length > 0)
+  // 编辑过且清单非空 → 批准时携带覆盖；清空 = 普通批准
+  const tasksOverride =
+    tasksDirty && tasks.length > 0 && tasksValid ? tasks : undefined
 
   return (
     <>
@@ -123,12 +222,19 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
             <CardDescription>{meta.approveHint}</CardDescription>
           </CardHeader>
           <CardContent className='space-y-5'>
-            <div>
-              <h3 className='mb-2 text-sm font-medium'>{meta.artifactLabel}</h3>
-              <pre className='min-h-24 rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
-                {data.agent_output?.output || '（无 Agent 产出）'}
-              </pre>
-            </div>
+            {/* 任务门的原始产出（清单 JSON）由下方编辑器承载；解析失败时兜底展示 */}
+            {(!isTasks || data.tasks == null) && (
+              <div>
+                <h3 className='mb-2 text-sm font-medium'>
+                  {isTasks
+                    ? `${meta.artifactLabel}（原始产出）`
+                    : meta.artifactLabel}
+                </h3>
+                <pre className='min-h-24 rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
+                  {data.agent_output?.output || '（无 Agent 产出）'}
+                </pre>
+              </div>
+            )}
 
             {meta.showPR && data.pr_url && (
               <p className='text-sm'>
@@ -144,7 +250,31 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
               </p>
             )}
 
+            {/* 规格门：交付模式裁定（small 直达 / large 走 SDD） */}
             {isSpec && (
+              <div className='space-y-2'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>交付模式</h3>
+                  {data.complexity_suggestion ? (
+                    <span className='text-xs text-muted-foreground'>
+                      AI 建议：{suggestion === 'large' ? '大需求' : '小需求'}
+                      {overridden && '（已改判）'}
+                    </span>
+                  ) : (
+                    <span className='text-xs text-muted-foreground'>
+                      AI 未给出建议，默认小需求
+                    </span>
+                  )}
+                </div>
+                <ComplexityPicker value={picked} onChange={setComplexity} />
+                <p className='text-xs text-muted-foreground'>
+                  {COMPLEXITY_OPTIONS.find((o) => o.value === picked)?.hint}
+                </p>
+              </div>
+            )}
+
+            {/* 设计门：拆分执行（可选，编辑器自规格门迁入） */}
+            {isDesign && (
               <div className='space-y-2'>
                 <div className='flex items-center justify-between'>
                   <h3 className='text-sm font-medium'>拆分执行（可选）</h3>
@@ -163,8 +293,8 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                       onChange={(e) =>
                         setSplitRows(
                           splitRows.map((row, j) =>
-                            j === i ? { ...row, title: e.target.value } : row,
-                          ),
+                            j === i ? { ...row, title: e.target.value } : row
+                          )
                         )
                       }
                     />
@@ -177,8 +307,8 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                           splitRows.map((row, j) =>
                             j === i
                               ? { ...row, description: e.target.value }
-                              : row,
-                          ),
+                              : row
+                          )
                         )
                       }
                     />
@@ -193,10 +323,13 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                             j === i
                               ? {
                                   ...row,
-                                  wave: Math.max(1, Number(e.target.value) || 1),
+                                  wave: Math.max(
+                                    1,
+                                    Number(e.target.value) || 1
+                                  ),
                                 }
-                              : row,
-                          ),
+                              : row
+                          )
                         )
                       }
                     />
@@ -228,8 +361,92 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
               </div>
             )}
 
+            {/* 任务门：清单编辑器（增删改 + 调序；批准时可覆盖引擎清单） */}
+            {isTasks && (
+              <div className='space-y-2'>
+                <div className='flex items-center justify-between'>
+                  <h3 className='text-sm font-medium'>任务清单</h3>
+                  <span className='text-xs text-muted-foreground'>
+                    {tasks.length
+                      ? `共 ${tasks.length} 项，按序实现`
+                      : '清单为空，可直接批准（Coder Agent 整体实现）'}
+                  </span>
+                </div>
+                {tasks.map((t, i) => (
+                  <div key={i} className='flex items-center gap-2'>
+                    <span className='w-5 shrink-0 text-right font-mono text-xs text-muted-foreground'>
+                      {i + 1}
+                    </span>
+                    <Input
+                      className='w-56 shrink-0'
+                      placeholder='任务标题'
+                      value={t.title}
+                      onChange={(e) =>
+                        setTasks(
+                          tasks.map((row, j) =>
+                            j === i ? { ...row, title: e.target.value } : row
+                          )
+                        )
+                      }
+                    />
+                    <Input
+                      className='flex-1'
+                      placeholder='任务详情…'
+                      value={t.detail}
+                      onChange={(e) =>
+                        setTasks(
+                          tasks.map((row, j) =>
+                            j === i ? { ...row, detail: e.target.value } : row
+                          )
+                        )
+                      }
+                    />
+                    <div className='flex shrink-0 items-center'>
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        aria-label='上移'
+                        disabled={i === 0}
+                        onClick={() => moveTask(i, -1)}
+                      >
+                        <ChevronUp />
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        aria-label='下移'
+                        disabled={i === tasks.length - 1}
+                        onClick={() => moveTask(i, 1)}
+                      >
+                        <ChevronDown />
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        aria-label='删除该任务'
+                        onClick={() =>
+                          setTasks(tasks.filter((_, j) => j !== i))
+                        }
+                      >
+                        <X />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  onClick={() =>
+                    setTasks([...tasks, { title: '', detail: '' }])
+                  }
+                >
+                  <Plus /> 添加任务
+                </Button>
+              </div>
+            )}
+
             <div className='flex items-center gap-2'>
-              {isSpec ? (
+              {isDesign ? (
                 <>
                   <Button
                     size='lg'
@@ -241,16 +458,26 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                   <Button
                     size='lg'
                     disabled={!splitValid || approve.isPending}
-                    onClick={() => approve.mutate(splitRows)}
+                    onClick={() => approve.mutate({ split: splitRows })}
                   >
                     <Check /> 批准并拆分
                   </Button>
                 </>
+              ) : isTasks ? (
+                <Button
+                  size='lg'
+                  disabled={!tasksValid || approve.isPending}
+                  onClick={() => approve.mutate({ tasks: tasksOverride })}
+                >
+                  <Check /> 批准，开始实现
+                </Button>
               ) : (
                 <Button
                   size='lg'
                   disabled={approve.isPending}
-                  onClick={() => approve.mutate(undefined)}
+                  onClick={() =>
+                    approve.mutate(isSpec ? { complexity: picked } : undefined)
+                  }
                 >
                   <Check /> 批准
                 </Button>

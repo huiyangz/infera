@@ -1,10 +1,10 @@
 import { Link } from '@tanstack/react-router'
 import { Workflow } from 'lucide-react'
-import { useSidebar } from '@/components/ui/sidebar'
 import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from '@/components/ui/sidebar'
 
 /**
