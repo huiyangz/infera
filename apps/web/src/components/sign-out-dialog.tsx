@@ -1,5 +1,4 @@
 import { useNavigate, useLocation } from '@tanstack/react-router'
-import { useAuthStore } from '@/stores/auth-store'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { logout } from '@/lib/infera-api'
 
@@ -11,7 +10,6 @@ interface SignOutDialogProps {
 export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
   const navigate = useNavigate()
   const location = useLocation()
-  const { auth } = useAuthStore()
 
   const handleSignOut = () => {
     const currentPath = location.href
@@ -20,7 +18,6 @@ export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
     logout()
       .catch(() => false)
       .finally(() => {
-        auth.reset()
         // Preserve current location for redirect after sign-in
         navigate({
           to: '/sign-in',
