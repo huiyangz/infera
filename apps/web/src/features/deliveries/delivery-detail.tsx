@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { toast } from 'sonner'
 import {
   Check,
   ChevronLeft,
@@ -10,14 +9,18 @@ import {
   Loader2,
   X,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { getDelivery, mergeResume } from '@/lib/infera-api'
 import {
   GATES,
-  STAGES,
+  SPLIT_PARENT_SKIPPED,
   STAGE_META,
   stageLabel,
+  stagesForDelivery,
+  type Artifact,
   type DeliveryStatus,
   type StageName,
+  type TaskSpec,
   type TimelineEvent,
 } from '@/lib/infera-types'
 import { dateTime, timeAgo } from '@/lib/time'
@@ -57,6 +60,11 @@ const EVENT_LABEL: Record<string, string> = {
   gate_pending: '进入门禁',
   gate_approved: '审批通过',
   gate_rejected: '审批打回',
+  complexity_set: '复杂度已裁定',
+  task_done: '任务完成',
+  tasks_overridden: '任务清单已覆盖',
+  wave_started: '批次启动',
+  local_stage_pending: '待本机执行',
   test_failed: '测试失败',
   stage_failed: '阶段失败',
   delivery_completed: '交付完成',
@@ -73,9 +81,65 @@ const EVENT_LABEL: Record<string, string> = {
   merge_failed: '合并失败',
 }
 
+/** 拆分父被跳过阶段的说明（阶段档案区展示） */
+const SPLIT_SKIP_HINT: Record<string, string> = {
+  tasks: '拆分执行：任务拆解由子需求各自完成，父不做任务拆解',
+  tasks_approval: '拆分执行：任务清单由子需求各自审批，父直接合并子分支',
+  test_gen: '拆分执行：子需求各自生成测试，父在合并后统一跑单元测试',
+}
+
+/**
+ * 任务进度（large 模式 tasks→code_gen 逐任务实现）：
+ * 清单取最新 kind=tasks artifact（引擎解析后的 JSON，覆盖后为新追加）；
+ * 完成集合取 kind=task_done artifact（content=1-based 序号）；
+ * 无清单 artifact 时从 task_done 事件回退拼装。无可展示进度返回 null。
+ */
+function taskProgress(
+  artifacts: Artifact[],
+  timeline: TimelineEvent[]
+): { tasks: TaskSpec[]; done: Set<number> } | null {
+  const done = new Set<number>()
+  for (const a of artifacts) {
+    if (a.kind === 'task_done') {
+      const idx = Number.parseInt(a.content, 10)
+      if (Number.isFinite(idx) && idx > 0) done.add(idx)
+    }
+  }
+  const latest = [...artifacts].reverse().find((a) => a.kind === 'tasks')
+  if (latest) {
+    try {
+      const tasks = JSON.parse(latest.content) as TaskSpec[]
+      if (Array.isArray(tasks) && tasks.length > 0) return { tasks, done }
+    } catch {
+      // 坏 JSON：落到事件回退
+    }
+  }
+  // 回退：无清单 artifact（老数据）时用 task_done 事件的 total + title 拼装
+  const doneEvents = timeline.filter((e) => e.event_type === 'task_done')
+  if (doneEvents.length === 0) return null
+  let total = 0
+  const byIndex = new Map<number, string>()
+  for (const e of doneEvents) {
+    const p = e.payload as {
+      index?: number
+      total?: number
+      title?: string
+    } | null
+    if (typeof p?.total === 'number') total = Math.max(total, p.total)
+    if (typeof p?.index === 'number' && p.title) byIndex.set(p.index, p.title)
+    if (typeof p?.index === 'number') done.add(p.index)
+  }
+  if (total <= 0) return null
+  const tasks: TaskSpec[] = []
+  for (let i = 1; i <= total; i++)
+    tasks.push({ title: byIndex.get(i) ?? `任务 ${i}`, detail: '' })
+  return { tasks, done }
+}
+
 /**
  * 阶段状态需结合 delivery 终态判定：
  * completed → 全部 done；blocked → 当前阶段 failed（无 spinner），之前 done，之后 pending。
+ * 拆分父的 tasks/tasks_approval/test_gen 恒为跳过态（任务与测试由子需求承担）。
  */
 function stageState(
   stage: StageName,
@@ -85,8 +149,7 @@ function stageState(
   status: DeliveryStatus,
   splitMode = false
 ): StageState {
-  // 拆分执行：父的测试生成不跑（子需求各自生成、父合并后统一跑单元测试）
-  if (splitMode && stage === 'test_gen') return 'skipped'
+  if (splitMode && SPLIT_PARENT_SKIPPED.has(stage)) return 'skipped'
   if (status === 'completed') return 'done'
   if (status === 'blocked') {
     if (idx < currentIdx) return 'done'
@@ -101,7 +164,8 @@ function stageState(
 
 function StageIcon({ state, idle }: { state: StageState; idle?: boolean }) {
   if (state === 'done') return <Check className='size-3.5' strokeWidth={2.5} />
-  if (state === 'skipped') return <Check className='size-3.5' strokeWidth={2.5} />
+  if (state === 'skipped')
+    return <Check className='size-3.5' strokeWidth={2.5} />
   if (state === 'failed') return <X className='size-3.5' strokeWidth={2.5} />
   if (state === 'current' || state === 'gate-waiting')
     return idle ? (
@@ -116,7 +180,7 @@ const STAGE_STATUS_TEXT: Record<StageState, string> = {
   done: '完成',
   current: '进行中',
   'gate-waiting': '等待你的审批',
-  'skipped': '跳过',
+  skipped: '跳过',
   pending: '',
   failed: '已阻塞',
 }
@@ -148,7 +212,7 @@ export function DeliveryDetail({
       <div
         className={
           embedded
-            ? 'w-full space-y-6 px-8 pb-8 pt-4'
+            ? 'w-full space-y-6 px-8 pt-4 pb-8'
             : 'mx-auto max-w-4xl space-y-6 p-6'
         }
       >
@@ -168,11 +232,12 @@ export function DeliveryDetail({
   // 最新一次合并冲突事件里给人工的 git 指令
   const conflictInstructions = [...timeline]
     .reverse()
-    .find((e) => e.event_type === 'merge_conflict')
-    ?.payload as
+    .find((e) => e.event_type === 'merge_conflict')?.payload as
     | { instructions?: string; branches?: string[] }
     | undefined
-  const currentIdx = STAGES.indexOf(delivery.current_stage as StageName)
+  // 阶段条按交付模式派生：small/老数据 7 阶段；large 全 11（拆分父含跳过态）
+  const stages = stagesForDelivery(delivery)
+  const currentIdx = stages.indexOf(delivery.current_stage as StageName)
   const stateOf = (s: StageName, i: number) =>
     stageState(
       s,
@@ -180,10 +245,11 @@ export function DeliveryDetail({
       i,
       delivery.pending_gate,
       delivery.status,
-      delivery.split_mode,
+      delivery.split_mode
     )
   const eventsOf = (s: StageName) => timeline.filter((e) => e.stage === s)
-  const doneCount = STAGES.filter((s, i) => stateOf(s, i) === 'done').length
+  const doneCount = stages.filter((s, i) => stateOf(s, i) === 'done').length
+  const taskProgressData = taskProgress(artifacts, timeline)
   // 最新一次实现产出的真实 git diff（从新往旧找第一条）
   const latestDiff = [...artifacts]
     .reverse()
@@ -209,7 +275,7 @@ export function DeliveryDetail({
   return (
     <>
       {embedded ? (
-        <div className='border-b px-8 pb-3 pt-4'>{titleBlock}</div>
+        <div className='border-b px-8 pt-4 pb-3'>{titleBlock}</div>
       ) : (
         <Header fixed>
           <div className='flex w-full items-start justify-between gap-4'>
@@ -243,7 +309,7 @@ export function DeliveryDetail({
       <div
         className={
           embedded
-            ? 'w-full space-y-6 px-8 pb-8 pt-4'
+            ? 'w-full space-y-6 px-8 pt-4 pb-8'
             : 'mx-auto max-w-4xl space-y-6 p-6'
         }
       >
@@ -295,18 +361,18 @@ export function DeliveryDetail({
             <div className='flex items-center justify-between'>
               <CardTitle className='text-sm font-medium'>阶段推进</CardTitle>
               <span className='text-xs text-muted-foreground'>
-                {doneCount} / {STAGES.length} 阶段完成 · 失败回环{' '}
+                {doneCount} / {stages.length} 阶段完成 · 失败回环{' '}
                 {delivery.fail_count} 次
               </span>
             </div>
           </CardHeader>
           <CardContent>
             <ol className='flex items-start'>
-              {STAGES.map((s, i) => {
+              {stages.map((s, i) => {
                 const state = stateOf(s, i)
                 const active = state === 'current' || state === 'gate-waiting'
                 const filled = state === 'done' || state === 'failed'
-                const isLast = i === STAGES.length - 1
+                const isLast = i === stages.length - 1
                 const idle =
                   splitWaiting && s === 'code_gen' && state === 'current'
                 return (
@@ -315,11 +381,13 @@ export function DeliveryDetail({
                       <div
                         className={
                           'flex size-7 shrink-0 items-center justify-center rounded-full border ' +
-                          (filled
-                            ? 'border-primary bg-primary text-primary-foreground'
-                            : active
-                              ? 'border-primary text-foreground'
-                              : 'border-input text-muted-foreground')
+                          (state === 'skipped'
+                            ? 'border-dashed border-input text-muted-foreground'
+                            : filled
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : active
+                                ? 'border-primary text-foreground'
+                                : 'border-input text-muted-foreground')
                         }
                       >
                         {GATES.has(s) && !filled ? (
@@ -395,12 +463,68 @@ export function DeliveryDetail({
           </CardContent>
         </Card>
 
+        {/* 任务进度（large 模式逐任务实现；task_done 持久推进） */}
+        {taskProgressData && (
+          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+            <CardHeader className='pb-0'>
+              <div className='flex items-center justify-between'>
+                <CardTitle className='text-sm font-medium'>任务进度</CardTitle>
+                <span className='text-xs text-muted-foreground'>
+                  任务{' '}
+                  {
+                    [...taskProgressData.done].filter(
+                      (i) => i <= taskProgressData.tasks.length
+                    ).length
+                  }{' '}
+                  / {taskProgressData.tasks.length} 完成
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ol className='space-y-2.5'>
+                {taskProgressData.tasks.map((t, i) => {
+                  const done = taskProgressData.done.has(i + 1)
+                  return (
+                    <li key={i} className='flex items-center gap-2.5'>
+                      <span
+                        className={
+                          'flex size-5 shrink-0 items-center justify-center rounded-full border ' +
+                          (done
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-input text-muted-foreground')
+                        }
+                      >
+                        {done ? (
+                          <Check className='size-3' strokeWidth={2.5} />
+                        ) : (
+                          <Circle className='size-2.5' />
+                        )}
+                      </span>
+                      <span
+                        className={
+                          'text-sm ' +
+                          (done ? 'text-foreground' : 'text-muted-foreground')
+                        }
+                        title={t.detail || undefined}
+                      >
+                        {i + 1}. {t.title}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ol>
+            </CardContent>
+          </Card>
+        )}
+
         {/* 子需求清单（拆分父专属） */}
         {delivery.split_mode && children.length > 0 && (
           <Card className={embedded ? 'gap-3 py-4' : undefined}>
             <CardHeader className='pb-0'>
               <div className='flex items-center justify-between'>
-                <CardTitle className='text-sm font-medium'>子需求清单</CardTitle>
+                <CardTitle className='text-sm font-medium'>
+                  子需求清单
+                </CardTitle>
                 <span className='text-xs text-muted-foreground'>
                   {kidsDone} / {children.length} 完成
                 </span>
@@ -417,7 +541,10 @@ export function DeliveryDetail({
                     className='flex items-center justify-between gap-3 rounded-md px-1 py-1 transition-colors hover:bg-accent/50'
                   >
                     <span className='flex min-w-0 items-center gap-2'>
-                      <Badge variant='outline' className='shrink-0 px-1.5 text-[10px]'>
+                      <Badge
+                        variant='outline'
+                        className='shrink-0 px-1.5 text-[10px]'
+                      >
                         批次 {c.wave || 1}
                       </Badge>
                       <span className='truncate text-sm'>{c.title}</span>
@@ -444,7 +571,7 @@ export function DeliveryDetail({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {STAGES.map((s, i) => {
+            {stages.map((s, i) => {
               const state = stateOf(s, i)
               const events = eventsOf(s)
               return (
@@ -475,7 +602,8 @@ export function DeliveryDetail({
                       </div>
                       {state === 'skipped' ? (
                         <p className='mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground'>
-                          拆分执行：子需求各自生成测试，父在合并后统一跑单元测试
+                          {SPLIT_SKIP_HINT[s] ??
+                            '拆分执行：该阶段由子需求各自完成'}
                         </p>
                       ) : (
                         state !== 'pending' && (
@@ -526,8 +654,8 @@ export function DeliveryDetail({
                             : state === 'failed'
                               ? '已阻塞'
                               : state === 'done'
-                              ? '完成'
-                              : '未开始'}
+                                ? '完成'
+                                : '未开始'}
                     </Badge>
                   </div>
                 </div>

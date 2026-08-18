@@ -11,6 +11,7 @@ import type {
   PipelineInfo,
   Project,
   ProjectPipeline,
+  TaskSpec,
 } from './infera-types'
 
 async function json<T>(r: Response): Promise<T> {
@@ -163,16 +164,26 @@ export async function getDelivery(id: string): Promise<DeliveryDetail> {
 export async function getGate(id: string): Promise<GateInfo> {
   return json(await fetch(`/api/deliveries/${id}/gate`))
 }
+/** 门禁批准选项（按当前门取用：spec_approval→complexity / design_approval→split / tasks_approval→tasks） */
+export interface ApproveOptions {
+  complexity?: 'small' | 'large'
+  split?: ChildSpec[]
+  tasks?: TaskSpec[]
+}
+
 export async function approveGate(
   id: string,
-  split?: ChildSpec[]
+  opts?: ApproveOptions
 ): Promise<Delivery> {
+  // 仅在有实质选项时携带 body；否则空 body = 普通批准
+  const hasOpts =
+    !!opts &&
+    (!!opts.complexity || !!opts.split?.length || !!opts.tasks?.length)
   return json(
     await fetch(`/api/deliveries/${id}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // 仅在显式拆分时携带 body；空数组视为普通批准
-      body: split?.length ? JSON.stringify({ split }) : undefined,
+      body: hasOpts ? JSON.stringify(opts) : undefined,
     })
   )
 }
