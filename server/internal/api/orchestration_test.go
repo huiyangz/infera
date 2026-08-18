@@ -111,6 +111,33 @@ func TestAgentDeleteConflict(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, nresp.StatusCode)
 }
 
+// TestPipelinePutAcceptsLegacyBindings：默认编排 PUT 只强校验基准节点——
+// 升级前的 6 节点绑定（无 design/tasks）仍合法（R11：缺绑定走兜底不 blocked，
+// 旧配置/旧客户端免重 PUT）。
+func TestPipelinePutAcceptsLegacyBindings(t *testing.T) {
+	ts, st := newServer(t)
+	c := login(t, ts.URL)
+
+	id := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
+
+	legacy := map[string]string{}
+	for _, n := range orchestration.RequiredNodes {
+		legacy[n] = id
+	}
+	raw, err := json.Marshal(map[string]any{"bindings": legacy})
+	require.NoError(t, err)
+	r, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(r)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	defs, err := st.ListBindings(context.Background(), "")
+	require.NoError(t, err)
+	require.Len(t, defs, len(orchestration.RequiredNodes), "旧集合全量替换：恰好基准节点")
+}
+
 func TestDefaultPipelinePut(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
@@ -197,8 +224,8 @@ func TestProjectPipelineOverrideAndClear(t *testing.T) {
 	require.Equal(t, "project", pj.Effective["test_gen"]["from"])
 	require.Equal(t, "default", pj.Effective["spec"]["from"])
 
-	// 未知节点 → 400
-	resp = put(`{"bindings":{"design":"` + ovID + `"}}`)
+	// 未知节点 → 400（design 现已是可绑定节点，取真不存在的名字）
+	resp = put(`{"bindings":{"nonexistent_stage":"` + ovID + `"}}`)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	_ = resp.Body.Close()
 

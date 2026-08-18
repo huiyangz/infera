@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -22,10 +23,30 @@ type sessionManager struct {
 
 	mu       sync.Mutex
 	sessions map[string]time.Time
+
+	// 登录失败限速（per-IP）：连续失败达 maxFails 锁 lockWindow，
+	// 每次失败响应延迟 failDelay（拖慢在线爆破）。测试可调小窗口值。
+	fails       map[string]*loginFails
+	maxFails    int
+	lockWindow  time.Duration
+	failDelay   time.Duration
+}
+
+// loginFails 某来源 IP 的连续失败计数与锁定截止时间。
+type loginFails struct {
+	count       int
+	lockedUntil time.Time
 }
 
 func newSessionManager(password string) *sessionManager {
-	return &sessionManager{password: password, sessions: map[string]time.Time{}}
+	return &sessionManager{
+		password:   password,
+		sessions:   map[string]time.Time{},
+		fails:      map[string]*loginFails{},
+		maxFails:   5,
+		lockWindow: time.Minute,
+		failDelay:  750 * time.Millisecond,
+	}
 }
 
 // checkPassword 常数时间比较，避免时序侧信道。
@@ -107,18 +128,74 @@ func (s *Server) sessionToken(r *http.Request) string {
 	return c.Value
 }
 
+// clientIP 提取 RemoteAddr 的 host 部分（不含端口）。不信任可伪造的
+// X-Forwarded-For——伪造头即可换 per-IP 限速身份。
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// locked 该 IP 是否处于锁定窗口内（窗口过期惰性清零计数）。
+func (m *sessionManager) locked(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f := m.fails[ip]
+	if f == nil {
+		return false
+	}
+	if time.Now().Before(f.lockedUntil) {
+		return true
+	}
+	if !f.lockedUntil.IsZero() {
+		delete(m.fails, ip) // 窗口已过：锁与计数作废
+	}
+	return false
+}
+
+// recordFailure 记一次失败；连续失败达上限进入锁定窗口。
+func (m *sessionManager) recordFailure(ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	f := m.fails[ip]
+	if f == nil {
+		f = &loginFails{}
+		m.fails[ip] = f
+	}
+	f.count++
+	if f.count >= m.maxFails {
+		f.lockedUntil = time.Now().Add(m.lockWindow)
+	}
+}
+
+// clearFailures 成功登录清零该 IP 的失败计数（偶发输错不累积到锁定）。
+func (m *sessionManager) clearFailures(ip string) {
+	m.mu.Lock()
+	delete(m.fails, ip)
+	m.mu.Unlock()
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if s.auth.locked(ip) {
+		writeError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
+		return
+	}
 	var body struct {
 		Password string `json:"password"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
 	if !s.auth.checkPassword(body.Password) {
+		s.auth.recordFailure(ip)
+		time.Sleep(s.auth.failDelay) // 失败响应延迟：拖慢在线爆破
 		writeError(w, http.StatusUnauthorized, "密码错误")
 		return
 	}
+	s.auth.clearFailures(ip)
 	token, err := s.auth.create()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "无法创建会话")

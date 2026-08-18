@@ -221,12 +221,21 @@ func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 	return out, rows.Err()
 }
 
+// UpdateDelivery 按读到的 updated_at 条件更新（乐观锁，同 UpdateAgent）：
+// 并发读-改-写的后写者条件不命中 → 回读定性（不存在 → ErrNotFound；版本过期 → ErrConflict），
+// 全行覆盖不得静默冲掉并发修改。
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
 		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,complexity=$15,updated_at=now()
-		 WHERE id=$1 RETURNING updated_at`,
-		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity).
+		 WHERE id=$1 AND updated_at=$16 RETURNING updated_at`,
+		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity, d.UpdatedAt).
 		Scan(&d.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := pg.GetDelivery(ctx, d.ID); gerr != nil {
+			return gerr // ErrNotFound 或底层错误
+		}
+		return ErrConflict // 行在、版本过期：并发覆盖
+	}
 	return mapErr(err)
 }
 

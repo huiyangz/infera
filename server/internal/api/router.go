@@ -61,8 +61,9 @@ func (s *Server) SetCookieSecure(v bool) *Server {
 	return s
 }
 
-// Mux 装配全部路由。公开：health/login/logout/me/ws；其余需认证。
-// /ws 暂挂公开组（MVP：前端带 cookie 连接），后续可加 requireAuth。
+// Mux 装配全部路由。公开：health/login/logout/me；其余需认证。
+// /ws 挂认证组 + Origin 校验 + delivery 存在性校验（事件流是登录面内容，
+// 不得让未认证方订阅任意 delivery）。
 func (s *Server) Mux() http.Handler {
 	r := chi.NewRouter()
 
@@ -72,10 +73,10 @@ func (s *Server) Mux() http.Handler {
 	r.Post("/api/login", s.handleLogin)
 	r.Post("/api/logout", s.handleLogout)
 	r.Get("/api/me", s.handleMe)
-	r.Get("/ws", s.handleWS)
 
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
+		r.Get("/ws", s.handleWS)
 		r.Get("/api/projects", s.listProjects)
 		r.Post("/api/projects", s.createProject)
 		r.Get("/api/projects/{id}", s.getProject)
@@ -124,6 +125,8 @@ func errorCode(status int) string {
 		return "not_found"
 	case http.StatusConflict:
 		return "conflict"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
 	case http.StatusServiceUnavailable:
 		return "unavailable"
 	default:

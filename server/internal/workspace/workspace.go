@@ -108,17 +108,16 @@ func (m *Manager) Path(deliveryID string) string {
 
 // Release 按保留期延迟清理；retention<=0 立即清理。
 // 取 per-delivery 锁：与在途的 Acquire 串行（清理不与 clone 竞争同一目录）。
+// 清理路径由 root+id 现算，不查内存注册表——注册表随进程重启丢失，
+// 重启后对已终态交付的 Release 仍必须清掉磁盘目录（否则 workdir 永久泄漏）。
 func (m *Manager) Release(deliveryID string) {
 	unlock := m.lockDelivery(deliveryID)
 	defer unlock()
 	m.mu.Lock()
-	dir := m.dirs[deliveryID]
 	delete(m.dirs, deliveryID)
 	delete(m.bases, deliveryID)
 	m.mu.Unlock()
-	if dir == "" {
-		return
-	}
+	dir := filepath.Join(m.root, deliveryID)
 	if m.retention <= 0 {
 		_ = os.RemoveAll(dir)
 		return
@@ -127,4 +126,35 @@ func (m *Manager) Release(deliveryID string) {
 		time.Sleep(m.retention)
 		_ = os.RemoveAll(dir)
 	}()
+}
+
+// Sweep 清扫孤儿 workdir：注册表只在内存，进程重启即丢——上次进程遗留
+// （已终态、延迟清理计时器随进程消失）的目录按「keep 认领 + 注册表在途 +
+// 保留期内（按目录 mtime 代理最后活动时间）」之外回收。
+// keep 应认领一切仍需保留 workdir 的交付（active/queued/blocked——blocked
+// 可能是 persist 失败保留的救援现场，绝不能扫掉）；错误静默（root 不存在 =
+// 无孤儿可扫）。
+func (m *Manager) Sweep(keep func(deliveryID string) bool) {
+	entries, err := os.ReadDir(m.root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-m.retention)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		m.mu.Lock()
+		_, inflight := m.dirs[id]
+		m.mu.Unlock()
+		if inflight || (keep != nil && keep(id)) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(m.root, id))
+	}
 }

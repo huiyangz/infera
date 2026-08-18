@@ -3,31 +3,48 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
 )
 
+// wsClient 包一层 per-conn 写锁：gorilla 的 conn 不允许并发 WriteMessage
+// （会 panic/损坏帧），而 Publish 可能被多个引擎 goroutine 同时触发。
+type wsClient struct {
+	conn *websocket.Conn
+	wmu  sync.Mutex
+}
+
+// write 串行写一帧文本消息；慢/断开连接失败静默丢弃——
+// 读循环检测到断开后会 unsubscribe 清理。
+func (w *wsClient) write(mt int, b []byte) error {
+	w.wmu.Lock()
+	defer w.wmu.Unlock()
+	return w.conn.WriteMessage(mt, b)
+}
+
 // hub 按 delivery 订阅分发；Publish 供引擎 Notify 注入调用（main 组装）。
 type hub struct {
 	mu   sync.Mutex
-	subs map[string]map[*websocket.Conn]struct{}
+	subs map[string]map[*wsClient]struct{}
 }
 
-func newHub() *hub { return &hub{subs: map[string]map[*websocket.Conn]struct{}{}} }
+func newHub() *hub { return &hub{subs: map[string]map[*wsClient]struct{}{}} }
 
-func (h *hub) subscribe(deliveryID string, c *websocket.Conn) {
+func (h *hub) subscribe(deliveryID string, c *wsClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	set, ok := h.subs[deliveryID]
 	if !ok {
-		set = map[*websocket.Conn]struct{}{}
+		set = map[*wsClient]struct{}{}
 		h.subs[deliveryID] = set
 	}
 	set[c] = struct{}{}
 }
 
-func (h *hub) unsubscribe(deliveryID string, c *websocket.Conn) {
+func (h *hub) unsubscribe(deliveryID string, c *wsClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	set, ok := h.subs[deliveryID]
@@ -40,38 +57,57 @@ func (h *hub) unsubscribe(deliveryID string, c *websocket.Conn) {
 	}
 }
 
-// Publish 向某 delivery 的所有订阅者广播 {stage, event} JSON；
-// 慢/断开连接写失败静默丢弃——读循环检测到断开后会 unsubscribe 清理。
+// Publish 向某 delivery 的所有订阅者广播 {stage, event} JSON。
+// hub.mu 只保护订阅表快照；对同一 conn 的写由 per-conn 写锁串行化。
 func (h *hub) Publish(deliveryID, stage, eventType string) {
 	b, _ := json.Marshal(map[string]string{"stage": stage, "event": eventType})
 	h.mu.Lock()
-	conns := make([]*websocket.Conn, 0, len(h.subs[deliveryID]))
+	conns := make([]*wsClient, 0, len(h.subs[deliveryID]))
 	for c := range h.subs[deliveryID] {
 		conns = append(conns, c)
 	}
 	h.mu.Unlock()
 	for _, c := range conns {
-		_ = c.WriteMessage(websocket.TextMessage, b)
+		_ = c.write(websocket.TextMessage, b)
 	}
 }
 
-var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+// sameOrigin 校验 Origin 与请求 Host 同源（大小写不敏感；语义同 gorilla
+// 默认 checkSameOrigin）。无 Origin 的非浏览器客户端放行；浏览器跨站连接拒绝。
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
 
-// handleWS GET /ws?delivery=<id> —— 升级连接并保持（读循环只为检测断开）。
-// MVP 挂公开组：前端带 cookie 连接即可，后续可加 requireAuth。
+var upgrader = websocket.Upgrader{CheckOrigin: sameOrigin}
+
+// handleWS GET /ws?delivery=<id> —— 校验 delivery 存在后升级连接并保持
+// （读循环只为检测断开）。挂在 requireAuth 组：事件流是登录面内容。
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	deliveryID := r.URL.Query().Get("delivery")
 	if deliveryID == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if _, err := s.st.GetDelivery(r.Context(), deliveryID); err != nil {
+		writeStoreErr(w, err, "delivery 不存在", "读取 delivery 失败")
+		return
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	s.hub.subscribe(deliveryID, c)
+	client := &wsClient{conn: c}
+	s.hub.subscribe(deliveryID, client)
 	defer func() {
-		s.hub.unsubscribe(deliveryID, c)
+		s.hub.unsubscribe(deliveryID, client)
 		_ = c.Close()
 	}()
 	for {

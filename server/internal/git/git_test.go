@@ -204,6 +204,26 @@ func TestFetchMergeResetHard(t *testing.T) {
 	require.Len(t, head, 40)
 }
 
+// TestFetchMissingRefSentinel：fetch 不存在的远端 ref → ErrRefNotFound 哨兵
+// （可 errors.Is 识别；引擎据此走「子需求无分支」跳过合并，不做输出字符串匹配）。
+// 其它 fetch 失败（如仓库不可达）不得误报为该哨兵。
+func TestFetchMissingRefSentinel(t *testing.T) {
+	origin := newBare(t)
+	g := New()
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "work")
+	require.NoError(t, g.Clone(ctx, origin, "main", dir))
+
+	err := g.Fetch(ctx, dir, origin, "infera/does-not-exist")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrRefNotFound)
+
+	// 非「ref 不存在」的失败（本地路径不存在）不得误标哨兵。
+	err = g.Fetch(ctx, dir, filepath.Join(t.TempDir(), "no-such-origin"), "infera/x")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrRefNotFound)
+}
+
 func TestInjectToken(t *testing.T) {
 	tests := []struct {
 		name   string

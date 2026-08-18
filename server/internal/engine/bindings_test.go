@@ -46,6 +46,40 @@ func TestResolveRunnerPerNode(t *testing.T) {
 	require.Equal(t, []string{"test_gen"}, rolesOf(special))
 }
 
+// TestUnboundOptionalNodesFallBack：可选节点（design/tasks）未绑定
+// （ResolveRunner 返回 nil,nil——main 装配对旧默认绑定的行为）→ 引擎回退
+// 构造时的 ar 继续跑，不得 blocked（R11 冒烟阻塞点）。
+func TestUnboundOptionalNodesFallBack(t *testing.T) {
+	st := store_Memory(t)
+	fallback := &markRunner{mark: "fallback"}
+	e := New(st, fallback, &FakeWS{}, passTR{})
+	e.ResolveRunner = func(_ context.Context, _, node string) (agent.Runner, error) {
+		switch node {
+		case "spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality":
+			return fallback, nil // 基准节点：已绑定
+		case "design", "tasks":
+			return nil, nil // 可选节点：未绑定 → 兜底
+		default:
+			return nil, &orchestration.ErrIncompleteBindings{Missing: []string{node}}
+		}
+	}
+	d := seedEngine(t, st)
+	ctx := context.Background()
+
+	require.NoError(t, e.Start(ctx, d.ID)) // spec → spec_approval
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{Complexity: ComplexityLarge}))
+	require.NoError(t, e.Continue(ctx, d.ID)) // design → design_approval
+	require.Equal(t, "design_approval", get(t, st, d.ID).PendingGate)
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → tasks
+	require.NoError(t, e.Continue(ctx, d.ID))                      // tasks → tasks_approval
+	require.Equal(t, "tasks_approval", get(t, st, d.ID).PendingGate)
+
+	// design/tasks 由兜底 runner 执行（不 blocked、产物照常落盘）。
+	require.Contains(t, rolesOf(fallback), "design")
+	require.Contains(t, rolesOf(fallback), "tasks")
+	require.Equal(t, StatusActive, get(t, st, d.ID).Status)
+}
+
 // TestLocalRunnerParksAtStage：节点绑定 local runner → 不跑 agent、
 // 交付停在当前节点、发 local_stage_pending 事件，仍 active。
 func TestLocalRunnerParksAtStage(t *testing.T) {
