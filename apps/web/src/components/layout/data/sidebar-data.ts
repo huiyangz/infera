@@ -1,4 +1,4 @@
-import { FolderKanban, Workflow } from 'lucide-react'
+import { Bot, FolderKanban, Workflow } from 'lucide-react'
 import { type SidebarData } from '../types'
 
 export const sidebarData: SidebarData = {
@@ -22,6 +22,11 @@ export const sidebarData: SidebarData = {
           title: '项目',
           url: '/',
           icon: FolderKanban,
+        },
+        {
+          title: 'Agent',
+          url: '/agents',
+          icon: Bot,
         },
       ],
     },
