@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -102,12 +104,81 @@ func (e *Engine) Start(ctx context.Context, deliveryID string) error {
 	return e.run(ctx, d)
 }
 
-// Approve 通过当前人工门禁：只做门禁簿记（清 gate、推进到下一阶段、落盘）后立即返回，
-// 不驱动 agent——后续推进由调用方异步 Continue（API 层后台 goroutine），避免同步阻塞。
-// 拆分批准走 ApproveWithSplit（本方法 = 无拆分的普通批准）。
-func (e *Engine) Approve(ctx context.Context, deliveryID string) error {
-	_, err := e.ApproveWithSplit(ctx, deliveryID, nil)
-	return err
+// Approve 通过当前人工门禁（唯一入口）：只做门禁簿记（清 gate、按门分发选项、推进、
+// 落盘）后立即返回，不驱动 agent——后续推进由调用方异步 Continue（API 层后台 goroutine）。
+// opts 按当前门校验：spec_approval 裁定 Complexity（空=取 spec 的 infera-complexity 建议，
+// 再空=small，老数据 ” 同语义）；design_approval 非空 Split=「批准并拆分」（见 approveSplit）。
+// 选项给错门 / 取值非法 → 报错且不消费门禁。拆分批准返回创建的子需求，其余返回 nil。
+func (e *Engine) Approve(ctx context.Context, deliveryID string, opts store.ApproveOpts) ([]store.Delivery, error) {
+	d, err := e.st.GetDelivery(ctx, deliveryID)
+	if err != nil {
+		return nil, err
+	}
+	if d.PendingGate == "" {
+		return nil, fmt.Errorf("engine: delivery %s has no pending gate", d.ID)
+	}
+	node, ok := Graph[d.PendingGate]
+	if !ok {
+		return nil, fmt.Errorf("engine: unknown gate stage %q", d.PendingGate)
+	}
+	if len(opts.Split) > 0 {
+		return e.approveSplit(ctx, d, opts.Split)
+	}
+	if opts.Complexity != "" {
+		if d.PendingGate != "spec_approval" {
+			return nil, fmt.Errorf("engine: complexity is only allowed at spec_approval, not %q", d.PendingGate)
+		}
+		if opts.Complexity != ComplexitySmall && opts.Complexity != ComplexityLarge {
+			return nil, fmt.Errorf("engine: invalid complexity %q (want small|large)", opts.Complexity)
+		}
+		d.Complexity = opts.Complexity
+	} else if d.PendingGate == "spec_approval" {
+		c, err := e.suggestedComplexity(ctx, d)
+		if err != nil {
+			return nil, err
+		}
+		d.Complexity = c
+	}
+	gate := d.PendingGate
+	next := node.Next
+	if gate == "spec_approval" {
+		next = nextAfterGate(d, node)
+	}
+	if err := e.approveGate(ctx, d, next); err != nil {
+		return nil, err
+	}
+	if gate == "spec_approval" {
+		e.emit(ctx, d, gate, "complexity_set", map[string]string{"complexity": d.Complexity})
+	}
+	return nil, nil
+}
+
+// suggestedComplexity spec_approval 无人工裁定时的复杂度裁定：
+// spec 末尾的 infera-complexity fenced block 给建议；无/坏块默认 small。
+func (e *Engine) suggestedComplexity(ctx context.Context, d *store.Delivery) (string, error) {
+	spec, err := e.latestSpec(ctx, d.ID)
+	if err != nil {
+		return "", err
+	}
+	if c := ParseComplexitySuggestion(spec); c != "" {
+		return c, nil
+	}
+	return ComplexitySmall, nil
+}
+
+// complexityRe 从 spec 全文里提取 ```infera-complexity fenced block（AI 的复杂度建议）。
+var complexityRe = regexp.MustCompile("```infera-complexity\\n([\\s\\S]*?)\\n```")
+
+// ParseComplexitySuggestion 解析 spec 文本里的复杂度建议（small|large）；无/坏块返回空串。
+func ParseComplexitySuggestion(spec string) string {
+	m := complexityRe.FindStringSubmatch(spec)
+	if m == nil {
+		return ""
+	}
+	if c := strings.TrimSpace(m[1]); c == ComplexitySmall || c == ComplexityLarge {
+		return c
+	}
+	return ""
 }
 
 // Continue 从当前状态推进到下一个停车点（门禁 / 失败回环 / 终态 / 错误）。
@@ -398,13 +469,13 @@ func (e *Engine) stepGateReview(ctx context.Context, d *store.Delivery, node Nod
 }
 
 // stageFeedback 组装带入本轮 prompt 的上一轮反馈（空串 = 无反馈）：
-//   - spec：spec_approval 门禁的人打回意见（消费一次后清空持久化的 RejectReason）
+//   - spec/design/tasks：各自门禁的人打回意见（消费一次后清空持久化的 RejectReason）
 //   - code_gen：code_review 门禁的人打回意见 + 上一轮 unit_test 失败输出（FailCount>0 时）
 //
 // 反馈只注入回退后该阶段的第一次重跑，避免每轮都背着旧意见。
 func (e *Engine) stageFeedback(ctx context.Context, d *store.Delivery, stage string) (string, error) {
 	switch stage {
-	case "spec":
+	case "spec", "design", "tasks":
 		return e.consumeRejectReason(ctx, d)
 	case "code_gen":
 		fb, err := e.consumeRejectReason(ctx, d)

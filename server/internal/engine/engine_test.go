@@ -13,16 +13,25 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// fakeRunner 记录每次调用的 role，按 role 返回固定产物。
+// fakeRunner 记录每次调用的 role，按 role 返回固定产物；specOutput 可注入（复杂度建议块测试）。
 type fakeRunner struct {
-	calls []agent.Request
+	calls      []agent.Request
+	specOutput string
 }
 
 func (f *fakeRunner) Run(_ context.Context, req agent.Request) (agent.Result, error) {
 	f.calls = append(f.calls, req)
 	switch req.Role {
 	case "spec":
-		return agent.Result{Output: "# 规格正文"}, nil
+		out := f.specOutput
+		if out == "" {
+			out = "# 规格正文"
+		}
+		return agent.Result{Output: out}, nil
+	case "design":
+		return agent.Result{Output: "# 设计正文"}, nil
+	case "tasks":
+		return agent.Result{Output: "tasks: [1, 2]"}, nil
 	case "test_gen":
 		return agent.Result{Output: "tests: a_test.go"}, nil
 	case "code_gen":
@@ -113,6 +122,12 @@ func newEnv(t *testing.T, tr TestRunner) (*Engine, *store.Memory, *FakeWS, *fake
 	return New(st, ar, ws, tr), st, ws, ar
 }
 
+// approve 门禁批准的测试便捷封装（丢弃返回的子需求，只留 error 供断言）。
+func approve(ctx context.Context, e *Engine, deliveryID string, opts store.ApproveOpts) error {
+	_, err := e.Approve(ctx, deliveryID, opts)
+	return err
+}
+
 func seed(t *testing.T, st *store.Memory) *store.Delivery {
 	t.Helper()
 	ctx := context.Background()
@@ -181,7 +196,7 @@ func TestPipelineHappyPath(t *testing.T) {
 	require.Equal(t, "# 规格正文", artifactByKind(t, st, d.ID, "spec").Content)
 
 	// Approve 只做门禁簿记：清 gate、推进到下一阶段，不跑 agent。
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	got = get(t, st, d.ID)
 	require.Equal(t, "test_gen", got.CurrentStage)
 	require.Empty(t, got.PendingGate)
@@ -207,7 +222,7 @@ func TestPipelineHappyPath(t *testing.T) {
 	require.Equal(t, ws.Path(d.ID), ar.calls[3].Workdir)
 
 	// Approve 终审（Next=DONE）→ completed + 释放 workspace。
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	got = get(t, st, d.ID)
 	require.Equal(t, StatusCompleted, got.Status)
 	require.Equal(t, "code_review", got.CurrentStage)
@@ -229,8 +244,8 @@ func TestUnitTestLoopAndBlocked(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))  // 门禁簿记 → test_gen
-	require.NoError(t, e.Continue(ctx, d.ID)) // test_gen → code_gen → unit_test 失败
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // 门禁簿记 → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID))                      // test_gen → code_gen → unit_test 失败
 
 	// 第 1 次失败：回环 code_gen，FailCount=1，仍 active、无门禁。
 	got := get(t, st, d.ID)
@@ -291,7 +306,7 @@ func TestRejectLoopsBack(t *testing.T) {
 	require.Contains(t, ar.calls[1].Prompt, "人打回：验收标准缺失")
 
 	// 一路放行到 code_review，驳回 → 回到 code_gen，意见同样落盘并注入重跑 prompt。
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
 	got = get(t, st, d.ID)
 	require.Equal(t, "code_review", got.PendingGate)
@@ -317,9 +332,9 @@ func TestStartAcquiresWorkspace(t *testing.T) {
 	require.NoError(t, e.Start(ctx, d.ID))
 	require.True(t, ws.acquireCalled)
 
-	require.NoError(t, e.Approve(ctx, d.ID))  // → test_gen
-	require.NoError(t, e.Continue(ctx, d.ID)) // → code_review 门禁
-	require.NoError(t, e.Approve(ctx, d.ID))  // → DONE
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID))                      // → code_review 门禁
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → DONE
 	require.True(t, ws.released)
 	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
 }
@@ -329,13 +344,13 @@ func TestApproveRejectWithoutGate(t *testing.T) {
 	d := seed(t, st)
 	ctx := context.Background()
 
-	require.Error(t, e.Approve(ctx, d.ID))
+	require.Error(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.Error(t, e.Reject(ctx, d.ID, "nope"))
 
 	require.NoError(t, e.Start(ctx, d.ID))
 	require.NoError(t, e.Reject(ctx, d.ID, "重写"))
 	// 驳回后门禁已清空，再 Approve 应报错。
-	require.Error(t, e.Approve(ctx, d.ID))
+	require.Error(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 }
 
 func TestAgentFailureBlocks(t *testing.T) {
@@ -402,9 +417,9 @@ func TestStartOnCompletedDeliveryErrors(t *testing.T) {
 
 	// 一路放行到 completed。
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
 
 	// 已完成的 delivery 不可再驱动："not active" 守卫报错（Start 与 Continue 一致）。
@@ -441,8 +456,8 @@ func TestFailCountResetsOnPass(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))  // 门禁簿记 → test_gen
-	require.NoError(t, e.Continue(ctx, d.ID)) // → unit_test 失败 #1，回环 code_gen
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // 门禁簿记 → test_gen
+	require.NoError(t, e.Continue(ctx, d.ID))                      // → unit_test 失败 #1，回环 code_gen
 	got := get(t, st, d.ID)
 	require.Equal(t, 1, got.FailCount)
 	require.Equal(t, "code_gen", got.CurrentStage)
@@ -485,7 +500,7 @@ func driveToCodeReview(t *testing.T, e *Engine, st *store.Memory) *store.Deliver
 	ctx := context.Background()
 	d := seed(t, st)
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
 	return d
 }
@@ -516,7 +531,7 @@ func TestPersistAtCodeReviewGate(t *testing.T) {
 	got := get(t, st, d.ID)
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Equal(t, StatusActive, got.Status)
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.Equal(t, StatusCompleted, get(t, st, d.ID).Status)
 	require.Len(t, fp.calls, 1)
 }
@@ -530,7 +545,7 @@ func TestPersistFailureBlocksKeepsWorkdir(t *testing.T) {
 	ctx := context.Background()
 	d := seed(t, st)
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 
 	err := e.Continue(ctx, d.ID)
 	require.Error(t, err)

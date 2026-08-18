@@ -91,13 +91,14 @@ esac
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "应停在 spec 审批门")
 
-	// 3. gate 拿到 spec artifact
+	// 3. gate 拿到 spec artifact；spec 无 complexity 块 → 建议空串（前端按 small 预选）
 	var gate gateJSON
 	get(t, client, base+"/api/deliveries/"+d.ID+"/gate", &gate)
 	require.Equal(t, "spec_approval", gate.Gate)
 	require.Contains(t, gate.AgentOutput.Output, "规格")
+	require.Empty(t, gate.ComplexitySuggestion)
 
-	// 4. 批准 spec → code_review 门禁（经过 test_gen/code_gen/unit_test）
+	// 4. 批准 spec（无建议 → small）→ 直达 test_gen → code_review 门禁（不进 design/tasks）
 	post(t, client, base+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
 	waitFor(t, client, base, d.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "code_review"
@@ -126,6 +127,10 @@ esac
 	require.GreaterOrEqual(t, kinds["diff"], 1)
 	require.GreaterOrEqual(t, kinds["test_output"], 1)
 	require.Contains(t, diffContent, "+++ b/hello.txt", "diff artifact 应是真实 git diff 而非 agent 摘要")
+	// 小需求：complexity=small、不进设计/任务阶段。
+	require.Equal(t, "small", det.Delivery.Complexity)
+	require.Equal(t, 0, kinds["design"])
+	require.Equal(t, 0, kinds["tasks"])
 
 	// 7. 事件链完整
 	eventTypes := []string{}
@@ -134,6 +139,7 @@ esac
 	}
 	require.Contains(t, eventTypes, "workspace_ready")
 	require.Contains(t, eventTypes, "gate_pending")
+	require.Contains(t, eventTypes, "complexity_set")
 	require.Contains(t, eventTypes, "persist_done")
 	require.Contains(t, eventTypes, "delivery_completed")
 }
@@ -349,6 +355,8 @@ type gateJSON struct {
 		Output string `json:"output"`
 	} `json:"agent_output"`
 	PRURL string `json:"pr_url"`
+	// spec_approval 门：AI 复杂度建议（无/坏块 = 空串）。
+	ComplexitySuggestion string `json:"complexity_suggestion"`
 }
 
 // post 发 JSON POST，断言 200；out 非 nil 时解码响应体。
@@ -448,8 +456,9 @@ func driveChildren(t *testing.T, c *http.Client, base, projectID, parentID strin
 	}
 }
 
-// TestSplitFlow 拆分全链路：AI spec 带 infera-split 建议 → gate 解析 split_plan →
-// 批准并拆分 → wave1 两子需求并行过门 → 增量合并进父 → wave2 启动 → 全部合并 →
+// TestSplitFlow 拆分全链路：AI spec 带 infera-complexity 建议 → 按建议 large 进设计门 →
+// AI design 带 infera-split 建议 → gate 解析 split_plan → 批准并拆分 →
+// wave1 两子需求并行过门（子各自 small 全流程）→ 增量合并进父 → wave2 启动 → 全部合并 →
 // 父 unit_test/code_review（persist 推父分支）→ completed；bare 上父分支含全部产物。
 func TestSplitFlow(t *testing.T) {
 	dbURL := os.Getenv("TEST_DATABASE_URL")
@@ -468,16 +477,20 @@ func TestSplitFlow(t *testing.T) {
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 
-	// fake agent：spec 按根/子区分（根 description 带 ROOT-SPEC 标记，产出拆分建议块；
-	// 子需求 spec 通用文本，避免把文件名泄进子 prompt）；code_gen 按 prompt 里的文件名写文件。
+	// fake agent：根 spec 带 ROOT-SPEC 标记 → 产出 complexity 建议块（large）；
+	// design 产出拆分建议块；子需求 spec 通用文本（无块 → small）；
+	// code_gen 按 prompt 里的文件名写文件。
 	fakeScript := filepath.Join(t.TempDir(), "fake-agent.sh")
 	require.NoError(t, os.WriteFile(fakeScript, []byte(`#!/bin/sh
 case "$INFERA_ROLE" in
   spec)
     case "$INFERA_PROMPT" in
-      *ROOT-SPEC*) F=$(printf '\140\140\140'); printf '# 规格总览\n\n%sinfera-split\n[{"title":"子A","description":"写入 a.txt","wave":1},{"title":"子B","description":"写入 b.txt","wave":1},{"title":"子C","description":"写入 c.txt","wave":2}]\n%s\n' "$F" "$F" ;;
+      *ROOT-SPEC*) F=$(printf '\140\140\140'); printf '# 规格总览\n\n%sinfera-complexity\nlarge\n%s\n' "$F" "$F" ;;
       *) echo "# 子规格" ;;
     esac ;;
+  design)
+    F=$(printf '\140\140\140'); printf '# 设计正文\n\n%sinfera-split\n[{"title":"子A","description":"写入 a.txt","wave":1},{"title":"子B","description":"写入 b.txt","wave":1},{"title":"子C","description":"写入 c.txt","wave":2}]\n%s\n' "$F" "$F" ;;
+  tasks) echo "任务清单" ;;
   test_gen) echo "tests" ;;
   code_gen)
     for f in a.txt b.txt c.txt; do
@@ -519,11 +532,23 @@ esac
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "父停在 spec 门")
 
-	// gate 解析出 AI 拆分建议
+	// spec 门：complexity_suggestion=large（spec 末尾 infera-complexity 块）；
+	// 批准不带 complexity → 按建议 large → 进设计门。
+	var specGate gateJSON
+	get(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/gate", &specGate)
+	require.Equal(t, "spec_approval", specGate.Gate)
+	require.Equal(t, "large", specGate.ComplexitySuggestion)
+	post(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/approve", `{}`, nil)
+	specDet := waitFor(t, client, ts.URL, parent.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "design_approval"
+	}, "按建议 large 进设计门")
+	require.Equal(t, "large", specDet.Delivery.Complexity)
+
+	// design 门：解析出 AI 拆分建议（design 末尾 infera-split 块）
 	var gate splitGateJSON
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/gate", &gate)
-	require.Equal(t, "spec_approval", gate.Gate)
-	require.NotNil(t, gate.SplitPlan, "spec 带 infera-split 块应解析出 split_plan")
+	require.Equal(t, "design_approval", gate.Gate)
+	require.NotNil(t, gate.SplitPlan, "design 带 infera-split 块应解析出 split_plan")
 	require.Len(t, *gate.SplitPlan, 3)
 	require.Equal(t, 1, (*gate.SplitPlan)[0].Wave)
 	require.Equal(t, 1, (*gate.SplitPlan)[1].Wave)
@@ -557,6 +582,8 @@ esac
 	}
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID, &det)
 	require.True(t, det.Delivery.SplitMode)
+	require.Equal(t, "large", det.Delivery.Complexity)
+	require.Equal(t, "code_gen", det.Delivery.CurrentStage, "拆分父停 code_gen（跳过 tasks/tasks_approval/test_gen）")
 	require.NotNil(t, det.Children)
 	require.Len(t, *det.Children, 3)
 
@@ -573,7 +600,7 @@ esac
 	}
 	require.Equal(t, 3, completed, "三个子需求都应完成")
 
-	// 父事件链：split / merge_done / 收尾
+	// 父事件链：complexity_set / split / merge_done / 收尾
 	var final detailJSON
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID, &final)
 	require.Equal(t, "completed", final.Delivery.Status)
@@ -581,6 +608,7 @@ esac
 	for _, e := range final.Timeline {
 		eventNames[e.EventType] = true
 	}
+	require.True(t, eventNames["complexity_set"])
 	require.True(t, eventNames["split"])
 	require.True(t, eventNames["merge_done"])
 	require.True(t, eventNames["persist_done"])
@@ -594,6 +622,114 @@ esac
 		_, err := os.Stat(filepath.Join(merged, f))
 		require.NoError(t, err, "父分支应含 %s", f)
 	}
+}
+
+// TestLargeNoSplitFlow 大需求不拆分链路：spec 带 complexity 块 → 显式批准 large →
+// design（不带 split 块，gate split_plan=null）→ 普通批准 → tasks → tasks_approval →
+// test_gen → code_gen → unit_test → code_review → completed。
+func TestLargeNoSplitFlow(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("TEST_DATABASE_URL 未设置")
+	}
+	if err := db.Migrate(dbURL); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Connect(context.Background(), dbURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
+	require.NoError(t, err)
+	st := store.NewPg(pool)
+
+	fakeScript := filepath.Join(t.TempDir(), "fake-agent.sh")
+	require.NoError(t, os.WriteFile(fakeScript, []byte(`#!/bin/sh
+case "$INFERA_ROLE" in
+  spec) F=$(printf '\140\140\140'); printf '# 规格\n\n%sinfera-complexity\nlarge\n%s\n' "$F" "$F" ;;
+  design) echo "# 设计正文（不拆分）" ;;
+  tasks) echo "任务清单" ;;
+  test_gen) echo "tests" ;;
+  code_gen) echo big > "$INFERA_WORKDIR/big.txt"; echo "实现：big.txt" ;;
+  code_review) echo "LGTM" ;;
+esac
+`), 0o755))
+
+	ws := workspace.New(t.TempDir(), git.New(), time.Hour)
+	ar := agent.NewLocal([]string{"sh", fakeScript})
+	tr := &testrunner.Local{Script: "test -f big.txt"}
+	srv := api.NewServer(st, "e2e-pass", nil)
+	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(git.New(), ""))
+	srv.SetEngine(eng)
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	r, err2 := client.Post(ts.URL+"/api/login", "application/json", bytes.NewBufferString(`{"password":"e2e-pass"}`))
+	require.NoError(t, err2)
+	require.Equal(t, 200, r.StatusCode)
+	_ = r.Body.Close()
+
+	var proj store.Project
+	post(t, client, ts.URL+"/api/projects",
+		fmt.Sprintf(`{"name":"large","repo_url":%q,"default_branch":"main"}`, newBare(t)), &proj)
+	var d store.Delivery
+	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries",
+		`{"title":"大需求","description":"写 big.txt"}`, &d)
+
+	// spec 门：建议 large；显式批准 large（人工可改判路径）→ 设计门
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "spec_approval"
+	}, "停在 spec 门")
+	var specGate gateJSON
+	get(t, client, ts.URL+"/api/deliveries/"+d.ID+"/gate", &specGate)
+	require.Equal(t, "large", specGate.ComplexitySuggestion)
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{"complexity":"large"}`, nil)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "design_approval"
+	}, "large 进设计门")
+
+	// 设计门：设计文档可审 + split_plan=null（不带拆分块）→ 普通批准 → 任务门
+	var designGate splitGateJSON
+	get(t, client, ts.URL+"/api/deliveries/"+d.ID+"/gate", &designGate)
+	require.Equal(t, "design_approval", designGate.Gate)
+	require.Contains(t, designGate.AgentOutput.Output, "设计正文")
+	require.Nil(t, designGate.SplitPlan, "无 infera-split 块 → split_plan=null")
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "tasks_approval"
+	}, "不拆分 → 任务门")
+
+	// 任务门：任务清单 artifact → 批准 → test_gen → … → code_review → completed
+	var tasksGate gateJSON
+	get(t, client, ts.URL+"/api/deliveries/"+d.ID+"/gate", &tasksGate)
+	require.Equal(t, "tasks_approval", tasksGate.Gate)
+	require.Contains(t, tasksGate.AgentOutput.Output, "任务清单")
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "code_review"
+	}, "任务门放行 → code_review")
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	det := waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
+		return det.Delivery.Status == "completed"
+	}, "应完成")
+
+	// 产物与事件：design/tasks 齐全、complexity=large、complexity_set 落事件
+	require.Equal(t, "large", det.Delivery.Complexity)
+	kinds := map[string]int{}
+	eventNames := map[string]bool{}
+	for _, a := range det.Artifacts {
+		kinds[a.Kind]++
+	}
+	for _, e := range det.Timeline {
+		eventNames[e.EventType] = true
+	}
+	require.GreaterOrEqual(t, kinds["design"], 1)
+	require.GreaterOrEqual(t, kinds["tasks"], 1)
+	require.GreaterOrEqual(t, kinds["tests"], 1)
+	require.True(t, eventNames["complexity_set"])
 }
 
 // TestSplitConflictResumeE2E 冲突路径全链路：两个 wave1 子需求写同一文件（内容不同）→
@@ -616,15 +752,19 @@ func TestSplitConflictResumeE2E(t *testing.T) {
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 
+	// 根 spec 带 complexity 建议块（large）；design 产拆分建议块；
 	// code_gen 写 same.txt，内容 = workdir 名（即 delivery id）——两个子需求必然冲突。
 	fakeScript := filepath.Join(t.TempDir(), "fake-agent.sh")
 	require.NoError(t, os.WriteFile(fakeScript, []byte(`#!/bin/sh
 case "$INFERA_ROLE" in
   spec)
     case "$INFERA_PROMPT" in
-      *ROOT-SPEC*) F=$(printf '\140\140\140'); printf '# 规格总览\n\n%sinfera-split\n[{"title":"子A","description":"写 same.txt 与 a.txt","wave":1},{"title":"子B","description":"写 same.txt 与 b.txt","wave":1},{"title":"子C","description":"写入 c.txt","wave":2}]\n%s\n' "$F" "$F" ;;
+      *ROOT-SPEC*) F=$(printf '\140\140\140'); printf '# 规格总览\n\n%sinfera-complexity\nlarge\n%s\n' "$F" "$F" ;;
       *) echo "# 子规格" ;;
     esac ;;
+  design)
+    F=$(printf '\140\140\140'); printf '# 设计正文\n\n%sinfera-split\n[{"title":"子A","description":"写 same.txt 与 a.txt","wave":1},{"title":"子B","description":"写 same.txt 与 b.txt","wave":1},{"title":"子C","description":"写入 c.txt","wave":2}]\n%s\n' "$F" "$F" ;;
+  tasks) echo "任务清单" ;;
   test_gen) echo "tests" ;;
   code_gen)
     case "$INFERA_PROMPT" in
@@ -668,8 +808,15 @@ esac
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "父停在 spec 门")
 
+	// spec 门按建议 large → 设计门拿拆分建议
+	post(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/approve", `{}`, nil)
+	waitFor(t, client, ts.URL, parent.ID, func(det detailJSON) bool {
+		return det.Delivery.PendingGate == "design_approval"
+	}, "进设计门")
+
 	var gate splitGateJSON
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/gate", &gate)
+	require.Equal(t, "design_approval", gate.Gate)
 	require.NotNil(t, gate.SplitPlan)
 	splitBody, err := json.Marshal(map[string]any{"split": *gate.SplitPlan})
 	require.NoError(t, err)

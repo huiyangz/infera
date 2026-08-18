@@ -45,6 +45,14 @@ func TestPgProjectAndDelivery(t *testing.T) {
 	gotD, err := p.GetDelivery(ctx, d.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, gotD.FailCount)
+	require.Empty(t, gotD.Complexity, "complexity 列默认 ''（老数据按 small 走）")
+
+	// complexity roundtrip（spec 门裁定后）。
+	d.Complexity = "large"
+	require.NoError(t, p.UpdateDelivery(ctx, d))
+	gotD, err = p.GetDelivery(ctx, d.ID)
+	require.NoError(t, err)
+	require.Equal(t, "large", gotD.Complexity)
 
 	ev := &Event{DeliveryID: d.ID, Stage: "spec", EventType: "stage_started", Payload: []byte(`{}`)}
 	require.NoError(t, p.AppendEvent(ctx, ev))
