@@ -108,6 +108,7 @@ type fakeEngine struct {
 	approved            []string
 	approveSplits       map[string][]store.ChildSpec
 	approveComplexities map[string]string
+	approveTasks        map[string][]store.TaskSpec
 	rejected            []string
 	resumeMerges        []string
 	droveParents        []string
@@ -147,6 +148,12 @@ func (f *fakeEngine) Approve(_ context.Context, id string, opts store.ApproveOpt
 			f.approveComplexities = map[string]string{}
 		}
 		f.approveComplexities[id] = opts.Complexity
+	}
+	if len(opts.Tasks) > 0 {
+		if f.approveTasks == nil {
+			f.approveTasks = map[string][]store.TaskSpec{}
+		}
+		f.approveTasks[id] = opts.Tasks
 	}
 	return nil, nil
 }
@@ -227,6 +234,12 @@ func (f *fakeEngine) complexityFor(id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.approveComplexities[id]
+}
+
+func (f *fakeEngine) tasksFor(id string) []store.TaskSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.approveTasks[id]
 }
 
 func newServerWithEngine(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine) {
@@ -487,8 +500,19 @@ func TestApprovePassesBodyThrough(t *testing.T) {
 	require.Equal(t, "子A", split[0].Title)
 	require.Equal(t, 2, split[1].Wave)
 
+	// tasks 门：任务清单覆盖透传（门禁校验在引擎，handler 只透传）。
+	d3 := seedGate(t, st, p.ID, "tasks_approval", "tasks", `[{"title":"任务A","detail":"做 A"}]`)
+	tasksBody := `{"tasks":[{"title":"人工一","detail":"x"},{"title":"人工二","detail":"y"}]}`
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d3.ID+"/approve", "application/json", bytes.NewBufferString(tasksBody))
+	require.Equal(t, 200, r.StatusCode)
+	tasks := fe.tasksFor(d3.ID)
+	require.NotNil(t, tasks, "tasks 应透传给引擎")
+	require.Len(t, tasks, 2)
+	require.Equal(t, "人工一", tasks[0].Title)
+	require.Equal(t, "y", tasks[1].Detail)
+
 	// 坏 JSON → 400
-	r, _ = c.Post(ts.URL+"/api/deliveries/"+d2.ID+"/approve", "application/json", bytes.NewBufferString("{bad"))
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d3.ID+"/approve", "application/json", bytes.NewBufferString("{bad"))
 	require.Equal(t, 400, r.StatusCode)
 }
 
@@ -560,6 +584,49 @@ func TestGateReturnsSplitPlan(t *testing.T) {
 		require.Equal(t, 200, r.StatusCode)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&g2))
 		require.Nil(t, g2.SplitPlan)
+	}
+}
+
+// TestGateReturnsTasks：任务审批门响应带 tasks 清单（tasks artifact 为引擎
+// 解析后的 JSON；坏内容 → null，前端按空清单渲染可人工覆盖）。
+func TestGateReturnsTasks(t *testing.T) {
+	ts, st, _ := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	d := seedGate(t, st, p.ID, "tasks_approval", "tasks",
+		`[{"title":"任务A","detail":"做 A"},{"title":"任务B","detail":"做 B"}]`)
+	var gate struct {
+		Gate  string            `json:"gate"`
+		Tasks *[]store.TaskSpec `json:"tasks"`
+	}
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
+	require.Equal(t, "tasks_approval", gate.Gate)
+	require.NotNil(t, gate.Tasks)
+	require.Len(t, *gate.Tasks, 2)
+	require.Equal(t, "任务A", (*gate.Tasks)[0].Title)
+	require.Equal(t, "做 B", (*gate.Tasks)[1].Detail)
+
+	// 空清单 / 坏内容 → tasks=null（畸形块容错后的空清单用 [] 表示，
+	// 非法历史数据则不渲染清单）。
+	for _, s := range []string{"[]", "任务清单（旧格式原始输出）"} {
+		d2 := seedGate(t, st, p.ID, "tasks_approval", "tasks", s)
+		var g2 struct {
+			Tasks *[]store.TaskSpec `json:"tasks"`
+		}
+		r, _ = c.Get(ts.URL + "/api/deliveries/" + d2.ID + "/gate")
+		require.Equal(t, 200, r.StatusCode)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&g2))
+		if s == "[]" {
+			require.NotNil(t, g2.Tasks)
+			require.Empty(t, *g2.Tasks)
+		} else {
+			require.Nil(t, g2.Tasks)
+		}
 	}
 }
 

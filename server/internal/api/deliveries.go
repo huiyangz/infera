@@ -192,6 +192,9 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	case "design_approval":
 		// 设计审批门附 AI 拆分建议（design 末尾的 infera-split fenced block；无/坏 = nil）。
 		resp["split_plan"] = parseSplitPlan(output)
+	case "tasks_approval":
+		// 任务审批门附可编辑清单（tasks artifact 为引擎解析后的清单 JSON；坏内容 = nil）。
+		resp["tasks"] = parseTasksList(output)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -227,9 +230,19 @@ func parseSplitPlan(spec string) []store.ChildSpec {
 	return plan
 }
 
+// parseTasksList 从 tasks artifact（清单 JSON）解析任务清单；坏内容返回 nil。
+func parseTasksList(content string) []store.TaskSpec {
+	var tasks []store.TaskSpec
+	if err := json.Unmarshal([]byte(content), &tasks); err != nil {
+		return nil
+	}
+	return tasks
+}
+
 // handleApprove 通过当前门禁（引擎 Approve 单入口透传）。body 可选：
 // `{"complexity":"small"|"large"}`（spec_approval 裁定复杂度，缺省取 AI 建议）；
-// `{"split":[{title,description,wave}]}`（design_approval = 「批准并拆分」）。
+// `{"split":[{title,description,wave}]}`（design_approval = 「批准并拆分」）；
+// `{"tasks":[{title,detail}]}`（tasks_approval = 批准并覆盖任务清单）。
 // 空/缺 body = 普通批准。wave-1 子需求的点火由 engine 的 OnStartDelivery 回调完成。
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -239,6 +252,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Complexity string            `json:"complexity"`
 		Split      []store.ChildSpec `json:"split"`
+		Tasks      []store.TaskSpec  `json:"tasks"`
 	}
 	if raw, err := io.ReadAll(r.Body); err == nil && len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &body); err != nil {
@@ -247,7 +261,11 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.withGateAction(w, r, func(ctx context.Context) error {
-		_, err := s.engine.Approve(ctx, id, store.ApproveOpts{Complexity: body.Complexity, Split: body.Split})
+		_, err := s.engine.Approve(ctx, id, store.ApproveOpts{
+			Complexity: body.Complexity,
+			Split:      body.Split,
+			Tasks:      body.Tasks,
+		})
 		return err
 	})
 }

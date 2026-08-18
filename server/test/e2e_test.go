@@ -415,6 +415,12 @@ type splitGateJSON struct {
 	SplitPlan *[]store.ChildSpec `json:"split_plan"`
 }
 
+// tasksGateJSON 在 gateJSON 上加 tasks 字段（任务审批门的可编辑清单）。
+type tasksGateJSON struct {
+	gateJSON
+	Tasks *[]store.TaskSpec `json:"tasks"`
+}
+
 // driveChildren 轮询项目交付列表，给所有停在门禁的子需求放行；
 // 子需求全部完成后给父放行 code_review。父 completed 时返回。
 func driveChildren(t *testing.T, c *http.Client, base, projectID, parentID string) {
@@ -625,8 +631,10 @@ esac
 }
 
 // TestLargeNoSplitFlow 大需求不拆分链路：spec 带 complexity 块 → 显式批准 large →
-// design（不带 split 块，gate split_plan=null）→ 普通批准 → tasks → tasks_approval →
-// test_gen → code_gen → unit_test → code_review → completed。
+// design（不带 split 块，gate split_plan=null）→ 普通批准 → tasks（infera-tasks 块）→
+// tasks_approval（gate 返回清单）→ 批准并覆盖清单（tasks_overridden）→ test_gen →
+// code_gen 逐任务实现（每任务写一个文件，task_done 逐条落盘）→ unit_test（校验全部
+// 任务产物）→ code_review → completed。
 func TestLargeNoSplitFlow(t *testing.T) {
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -644,21 +652,29 @@ func TestLargeNoSplitFlow(t *testing.T) {
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 
+	// fake agent：tasks 产 infera-tasks 块（2 任务）；code_gen 按 prompt 里出现的
+	// 任务文件名写文件（逐任务调用时每次 prompt 只含一个任务）。
 	fakeScript := filepath.Join(t.TempDir(), "fake-agent.sh")
 	require.NoError(t, os.WriteFile(fakeScript, []byte(`#!/bin/sh
 case "$INFERA_ROLE" in
   spec) F=$(printf '\140\140\140'); printf '# 规格\n\n%sinfera-complexity\nlarge\n%s\n' "$F" "$F" ;;
   design) echo "# 设计正文（不拆分）" ;;
-  tasks) echo "任务清单" ;;
+  tasks) F=$(printf '\140\140\140'); printf '任务清单\n\n%sinfera-tasks\n[{"title":"写 big1.txt","detail":"写入 big1.txt"},{"title":"写 big2.txt","detail":"写入 big2.txt"}]\n%s\n' "$F" "$F" ;;
   test_gen) echo "tests" ;;
-  code_gen) echo big > "$INFERA_WORKDIR/big.txt"; echo "实现：big.txt" ;;
+  code_gen)
+    for f in big1.txt big2.txt big3.txt; do
+      case "$INFERA_PROMPT" in
+        *$f*) echo "$f" > "$INFERA_WORKDIR/$f" ;;
+      esac
+    done
+    echo "code_gen done" ;;
   code_review) echo "LGTM" ;;
 esac
 `), 0o755))
 
 	ws := workspace.New(t.TempDir(), git.New(), time.Hour)
 	ar := agent.NewLocal([]string{"sh", fakeScript})
-	tr := &testrunner.Local{Script: "test -f big.txt"}
+	tr := &testrunner.Local{Script: "test -f big1.txt -a -f big2.txt -a -f big3.txt"}
 	srv := api.NewServer(st, "e2e-pass", nil)
 	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(git.New(), ""))
 	srv.SetEngine(eng)
@@ -677,7 +693,7 @@ esac
 		fmt.Sprintf(`{"name":"large","repo_url":%q,"default_branch":"main"}`, newBare(t)), &proj)
 	var d store.Delivery
 	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries",
-		`{"title":"大需求","description":"写 big.txt"}`, &d)
+		`{"title":"大需求","description":"写多个文件"}`, &d)
 
 	// spec 门：建议 large；显式批准 large（人工可改判路径）→ 设计门
 	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
@@ -702,34 +718,57 @@ esac
 		return det.Delivery.PendingGate == "tasks_approval"
 	}, "不拆分 → 任务门")
 
-	// 任务门：任务清单 artifact → 批准 → test_gen → … → code_review → completed
-	var tasksGate gateJSON
+	// 任务门：gate 返回解析后的清单（2 项，tasks artifact 为 JSON）
+	var tasksGate tasksGateJSON
 	get(t, client, ts.URL+"/api/deliveries/"+d.ID+"/gate", &tasksGate)
 	require.Equal(t, "tasks_approval", tasksGate.Gate)
-	require.Contains(t, tasksGate.AgentOutput.Output, "任务清单")
-	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
+	require.NotNil(t, tasksGate.Tasks, "infera-tasks 块应解析出清单")
+	require.Len(t, *tasksGate.Tasks, 2)
+	require.Equal(t, "写 big1.txt", (*tasksGate.Tasks)[0].Title)
+
+	// 批准并覆盖清单（编辑器模式）：改 detail + 增补第三个任务
+	override := append(*tasksGate.Tasks, store.TaskSpec{Title: "写 big3.txt", Detail: "写入 big3.txt"})
+	override[1].Detail = "写入 big2.txt（人工修订）"
+	tasksBody, err := json.Marshal(map[string]any{"tasks": override})
+	require.NoError(t, err)
+	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", string(tasksBody), nil)
 	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "code_review"
-	}, "任务门放行 → code_review")
+	}, "任务门放行 → 逐任务实现 → code_review")
+
 	post(t, client, ts.URL+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
 	det := waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
 		return det.Delivery.Status == "completed"
 	}, "应完成")
 
-	// 产物与事件：design/tasks 齐全、complexity=large、complexity_set 落事件
+	// 产物与事件：覆盖后清单为最新 tasks artifact、每任务一条 task_done、合成 summary、
+	// unit_test 通过说明三个文件都写了（逐任务实现真的跑了）。
 	require.Equal(t, "large", det.Delivery.Complexity)
 	kinds := map[string]int{}
-	eventNames := map[string]bool{}
+	eventCount := map[string]int{}
+	var summary, latestTasks string
 	for _, a := range det.Artifacts {
 		kinds[a.Kind]++
+		switch a.Kind {
+		case "summary":
+			summary = a.Content
+		case "tasks":
+			latestTasks = a.Content
+		}
 	}
 	for _, e := range det.Timeline {
-		eventNames[e.EventType] = true
+		eventCount[e.EventType]++
 	}
+	require.Equal(t, 2, kinds["tasks"], "AI 原始清单 + 人工覆盖清单")
+	require.Equal(t, `[{"title":"写 big1.txt","detail":"写入 big1.txt"},{"title":"写 big2.txt","detail":"写入 big2.txt（人工修订）"},{"title":"写 big3.txt","detail":"写入 big3.txt"}]`, latestTasks)
+	require.Equal(t, 3, kinds["task_done"], "三个任务各一条完成标记")
+	require.Equal(t, 3, eventCount["task_done"])
+	require.Equal(t, "按任务清单完成 3 项实现：写 big1.txt、写 big2.txt、写 big3.txt", summary)
+	require.Equal(t, 1, eventCount["tasks_overridden"])
+	require.True(t, eventCount["complexity_set"] > 0)
 	require.GreaterOrEqual(t, kinds["design"], 1)
-	require.GreaterOrEqual(t, kinds["tasks"], 1)
 	require.GreaterOrEqual(t, kinds["tests"], 1)
-	require.True(t, eventNames["complexity_set"])
+	require.GreaterOrEqual(t, kinds["diff"], 1)
 }
 
 // TestSplitConflictResumeE2E 冲突路径全链路：两个 wave1 子需求写同一文件（内容不同）→
