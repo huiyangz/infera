@@ -144,7 +144,7 @@ func TestHandleBadRequests(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f2 := &fakeMCP{token: "sekret", toolText: sampleContext}
 			d, cmds, _ := newTestDaemon(t, f2)
-			w := post(d, "/handle", "", c.body)
+			w := post(d, "/handle", "http://localhost:5173", c.body)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("应 400，得到 %d", w.Code)
 			}
@@ -162,7 +162,7 @@ func TestHandleNoTokenConfigured(t *testing.T) {
 	f := &fakeMCP{token: "sekret", toolText: sampleContext}
 	d, cmds, _ := newTestDaemon(t, f)
 	d.cfg.Token = ""
-	w := post(d, "/handle", "", `{"delivery_id":"d-1"}`)
+	w := post(d, "/handle", "http://localhost:5173", `{"delivery_id":"d-1"}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INFERA_MCP_TOKEN") {
 		t.Fatalf("缺 token 应 400 且提示设置 token，得到 %d: %s", w.Code, w.Body.String())
 	}
@@ -174,7 +174,7 @@ func TestHandleNoTokenConfigured(t *testing.T) {
 func TestHandleMCPErrorPropagates(t *testing.T) {
 	f := &fakeMCP{token: "sekret", toolErr: "交付不存在"}
 	d, cmds, _ := newTestDaemon(t, f)
-	w := post(d, "/handle", "", `{"delivery_id":"d-nope"}`)
+	w := post(d, "/handle", "http://localhost:5173", `{"delivery_id":"d-nope"}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "交付不存在") {
 		t.Fatalf("MCP 工具错误应透传，得到 %d: %s", w.Code, w.Body.String())
 	}
@@ -190,7 +190,7 @@ func TestHandleTerminalNoneLogsCommand(t *testing.T) {
 	d.Launch = nil // 走真实默认拉起路径（none 分支）
 	var logged strings.Builder
 	d.log = log.New(&logged, "", 0)
-	w := post(d, "/handle", "", `{"delivery_id":"d-1"}`)
+	w := post(d, "/handle", "http://localhost:5173", `{"delivery_id":"d-1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("none 模式应 200，得到 %d: %s", w.Code, w.Body.String())
 	}
@@ -210,3 +210,48 @@ func TestDefaultStageDir(t *testing.T) {
 }
 
 var _ = context.Background
+
+// TestHandleRejectsForeignOrigin：/handle 会驱动守护进程拉终端跑 CLI——
+// 恶意网页可用 no-cors text/plain 简单请求直打本机（CORS 头只挡读响应、
+// 不挡发请求）。非本机 Origin 必须 403 且不触达 MCP/拉起。
+func TestHandleRejectsForeignOrigin(t *testing.T) {
+	f := &fakeMCP{token: "sekret", toolText: sampleContext}
+	d, cmds, _ := newTestDaemon(t, f)
+	w := post(d, "/handle", "http://evil.example.com", `{"delivery_id":"d-1"}`)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("恶意网页 Origin 必须 403，得到 %d: %s", w.Code, w.Body.String())
+	}
+	if len(*cmds) != 0 || len(f.methods) != 0 {
+		t.Errorf("403 不得触达 MCP/拉起")
+	}
+}
+
+// TestHandleRequiresOrigin：/handle 只服务网页按钮（浏览器必带 Origin），
+// 空 Origin（no-cors 工具/裸脚本）一律 403；非浏览器自动化走 MCP 直连。
+func TestHandleRequiresOrigin(t *testing.T) {
+	f := &fakeMCP{token: "sekret", toolText: sampleContext}
+	d, cmds, _ := newTestDaemon(t, f)
+	w := post(d, "/handle", "", `{"delivery_id":"d-1"}`) // 不带 Origin 头
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("无 Origin 必须 403，得到 %d: %s", w.Code, w.Body.String())
+	}
+	if len(*cmds) != 0 || len(f.methods) != 0 {
+		t.Errorf("403 不得触达 MCP/拉起")
+	}
+}
+
+// TestHandleRejectsUnsafeDeliveryID：delivery_id 会拼进暂存目录路径
+// （~/.infera/link/<id>）——路径穿越/怪值必须在触达 MCP 前被 400 拒绝。
+func TestHandleRejectsUnsafeDeliveryID(t *testing.T) {
+	f := &fakeMCP{token: "sekret", toolText: sampleContext}
+	d, cmds, _ := newTestDaemon(t, f)
+	for _, id := range []string{"../../.ssh", "a/b", "..", "d 1", strings.Repeat("x", 200)} {
+		w := post(d, "/handle", "http://localhost:5173", `{"delivery_id":"`+id+`"}`)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("delivery_id %q 应 400，得到 %d: %s", id, w.Code, w.Body.String())
+		}
+	}
+	if len(*cmds) != 0 || len(f.methods) != 0 {
+		t.Errorf("畸形 delivery_id 不得触达 MCP/拉起")
+	}
+}

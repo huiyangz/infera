@@ -56,6 +56,30 @@ func TestReleaseDelayedAfterRestart(t *testing.T) {
 	t.Fatal("延迟清理到期后 workdir 仍未删除（泄漏）")
 }
 
+// TestReleaseReacquireWithinRetention：retention 窗口内同 ID re-Acquire
+// （重启恢复/重试路径）会重新注册新目录——睡醒的延迟清理 goroutine 不得
+// 不查注册表就 RemoveAll 活 workdir。
+func TestReleaseReacquireWithinRetention(t *testing.T) {
+	root := t.TempDir()
+	ctx := context.Background()
+	retention := 50 * time.Millisecond
+	ws := New(root, git.New(), retention)
+
+	dir1, _, err := ws.Acquire(ctx, "d-reacquire", "", "")
+	require.NoError(t, err)
+	ws.Release("d-reacquire")
+
+	// 窗口内同 ID 重新获取：新目录重新注册（磁盘上还是同一路径）。
+	dir2, _, err := ws.Acquire(ctx, "d-reacquire", "", "")
+	require.NoError(t, err)
+	require.Equal(t, dir1, dir2)
+	require.DirExists(t, dir2)
+
+	// 越过 retention（旧计时器已醒）并留缓冲：重新注册的活 workdir 必须仍在。
+	time.Sleep(retention + 300*time.Millisecond)
+	require.DirExists(t, dir2, "窗口内 re-Acquire 的 workdir 不得被旧清理计时器删掉")
+}
+
 // TestSweepOrphans：清扫孤儿 workdir——进程重启丢注册表后，上次遗留的
 // 超过保留期且无人认领的目录回收；在途（注册表内）、keep 认领、保留期内
 // 的目录绝不动。

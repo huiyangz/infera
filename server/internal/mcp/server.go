@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/tokfinity/infera/internal/deliverylock"
 	"github.com/tokfinity/infera/internal/store"
 )
 
@@ -47,17 +48,26 @@ type Server struct {
 	token   string                         // 空串 = 禁用
 	drive   func(deliveryID string)        // 簿记后的后台推进（main 注入 api 的 RunDelivery）
 
-	// locks per-delivery 锁：串行化本 MCP 通道发起的簿记（与 api 层同款纪律；
-	// 引擎自身无并发保护，跨通道冲突由引擎状态校验兜底报错）。
-	locks sync.Map
+	// locks per-delivery 锁：与 api 面共享同一份（main 经 SetLocks 注入）——
+	// 两条驾驶面（MCP 簿记 / api 后台 driver）并发进无并发保护的引擎会
+	// 双写 UpdateDelivery / 双 advance / 事件乱序，必须经同一把锁串行化。
+	locks *deliverylock.Locks
 }
 
 func New(st store.Store, eng EngineAPI, workdir func(string) string, token string) *Server {
-	return &Server{st: st, eng: eng, workdir: workdir, token: token}
+	return &Server{st: st, eng: eng, workdir: workdir, token: token, locks: deliverylock.New()}
 }
 
 // SetDrive 注入后台推进回调（api.Server.RunDelivery：拿 per-delivery 锁驱动到下一个停车点）。
 func (s *Server) SetDrive(fn func(deliveryID string)) { s.drive = fn }
+
+// SetLocks 接入与 api 面共享的 per-delivery 锁注册表（main 注入
+// api.Server.DeliveryLocks()）。不调用则自持一份（仅测试面单打时够用）。
+func (s *Server) SetLocks(l *deliverylock.Locks) {
+	if l != nil {
+		s.locks = l
+	}
+}
 
 // JSON-RPC 2.0 错误码（协议层错误走 error 对象；工具执行错误走 isError 结果）。
 const (
@@ -242,12 +252,15 @@ func originLocal(r *http.Request) bool {
 // --- 簿记与推进（与 api.withGateAction 同款锁纪律） ---
 
 func (s *Server) lockFor(deliveryID string) *sync.Mutex {
-	v, _ := s.locks.LoadOrStore(deliveryID, &sync.Mutex{})
-	return v.(*sync.Mutex)
+	return s.locks.For(deliveryID)
 }
 
-// act 持 per-delivery 锁执行簿记；成功后把锁移交后台推进 goroutine
-// （推进可能跑 agent，不能挡响应），失败立即放锁并返回错误。
+// act 持 per-delivery 锁执行簿记；成功后放锁并把推进交给后台 goroutine
+// （推进可能跑 agent，不能挡响应）。注意推进不是锁移交：drive（RunDelivery）
+// 自己拿同一把锁——共享锁下 act 若持锁调用 drive 会在同 goroutine 里重复
+// Lock 死锁（sync.Mutex 不可重入）。放锁到 drive 拿锁之间的窗口里另一驾驶面
+// 可先拿锁，安全：所有引擎入口各自做状态校验，锁只保证不并发进引擎。
+// 失败立即放锁并返回错误。
 func (s *Server) act(deliveryID string, bookkeep func() error) error {
 	mu := s.lockFor(deliveryID)
 	mu.Lock()
@@ -255,14 +268,10 @@ func (s *Server) act(deliveryID string, bookkeep func() error) error {
 		mu.Unlock()
 		return err
 	}
-	if s.drive == nil {
-		mu.Unlock()
-		return nil
+	mu.Unlock()
+	if s.drive != nil {
+		go s.drive(deliveryID)
 	}
-	go func() {
-		defer mu.Unlock()
-		s.drive(deliveryID)
-	}()
 	return nil
 }
 

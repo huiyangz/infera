@@ -66,8 +66,9 @@ export function useLocalNodes(projectId: string | undefined) {
   return data ?? null
 }
 
-/** 流水线 agent 节点里可绑 local runner 的停车点（server BindableNodes 的 agent 子集） */
-const LOCAL_STAGE_NODES = new Set(['spec', 'test_gen', 'code_gen'])
+/** 流水线 agent 节点里可绑 local runner 的停车点（server BindableNodes 的 agent
+ * 子集；engine local 停车（submitLocalStage）与 helper stageContract 都覆盖这五个） */
+const LOCAL_STAGE_NODES = new Set(['spec', 'design', 'tasks', 'test_gen', 'code_gen'])
 
 /** code_review 门禁可由本机承担的角色（门禁前置预审 + R10 双道审查） */
 const LOCAL_REVIEW_NODES = ['code_review', 'spec_conformance', 'code_quality']
