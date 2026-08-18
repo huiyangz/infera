@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -66,10 +67,15 @@ func main() {
 		log.Printf("seed orchestration: %v（引擎回退单 runner 模式）", err)
 	}
 
+	// 启动期清扫孤儿 workdir（须在 ResumeActive 前：恢复点火会重新 Acquire 在途交付）。
+	sweepOrphanWorkdirs(context.Background(), st, ws)
+
 	// 固化：code_review 门禁到达时 commit（绿地）/ push + PR（绑库，github.com），
 	// 复用带 token 的 git 实例；PR 创建用同一 token。
 	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(g, cfg.GitHubToken))
-	// 节点执行器按项目编排绑定解析（项目覆盖 ?? 全局默认）；解析失败按绑定缺失 blocked。
+	// 节点执行器按项目编排绑定解析（项目覆盖 ?? 全局默认）；基准节点解析失败按
+	// 绑定缺失 blocked；可选节点（design/tasks，旧默认绑定不覆盖）缺绑定回退
+	// 构造时的 ar 兜底（R11：真 agent 可绑定，旧配置不 blocked）。
 	eng.ResolveRunner = func(ctx context.Context, projectID, node string) (agent.Runner, error) {
 		agents, _, err := orchestration.Resolve(ctx, st, projectID)
 		if err != nil {
@@ -77,7 +83,10 @@ func main() {
 		}
 		a, ok := agents[node]
 		if !ok {
-			return nil, &orchestration.ErrIncompleteBindings{Missing: []string{node}}
+			if slices.Contains(orchestration.RequiredNodes, node) {
+				return nil, &orchestration.ErrIncompleteBindings{Missing: []string{node}}
+			}
+			return nil, nil // 可选节点未绑定：引擎回退构造时的 ar
 		}
 		return orchestration.RunnerFor(a)
 	}
@@ -157,4 +166,39 @@ func seedDefaultOrchestration(ctx context.Context, st store.Store, agentCmd stri
 	}
 	log.Printf("seed: 默认编排就绪（spec→%s，test_gen/code_gen/code_review/双道审查→default-cli）", specName)
 	return nil
+}
+
+// sweepOrphanWorkdirs 启动期回收孤儿 workdir：workspace 注册表只在内存，
+// 上次进程的延迟清理计时器随进程消失。keep = 全部未完成交付（active/queued/
+// blocked——blocked 可能是 persist 失败保留的救援现场，绝不能扫掉）。
+// 读库失败只记日志不阻断启动。
+func sweepOrphanWorkdirs(ctx context.Context, st store.Store, ws *workspace.Manager) {
+	keep := map[string]bool{}
+	keepAll := func(ds []store.Delivery) {
+		for _, d := range ds {
+			if d.Status != "completed" {
+				keep[d.ID] = true
+			}
+		}
+	}
+	active, err := st.ListActiveDeliveries(ctx)
+	if err != nil {
+		log.Printf("workspace sweep: %v（跳过，不影响启动）", err)
+		return
+	}
+	keepAll(active)
+	projs, err := st.ListProjects(ctx)
+	if err != nil {
+		log.Printf("workspace sweep: %v（跳过，不影响启动）", err)
+		return
+	}
+	for _, p := range projs {
+		ds, err := st.ListProjectDeliveries(ctx, p.ID)
+		if err != nil {
+			log.Printf("workspace sweep: %v（跳过，不影响启动）", err)
+			return
+		}
+		keepAll(ds)
+	}
+	ws.Sweep(func(id string) bool { return keep[id] })
 }

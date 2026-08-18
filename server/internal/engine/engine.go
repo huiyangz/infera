@@ -666,9 +666,15 @@ func (e *Engine) blockOpt(ctx context.Context, d *store.Delivery, cause error, r
 // --- 记录与事件 ---
 
 // startStageRun 记录一次阶段执行（attempt 递增）并广播 stage_started。
+// LatestStageRun 只有 NotFound（首次运行）允许按 attempt=1 走；其它错误上抛——
+// 吞掉会把 DB 故障伪装成首轮运行、attempt 编号回退（R13）。
 func (e *Engine) startStageRun(ctx context.Context, d *store.Delivery, stage string) (*store.StageRun, error) {
 	attempt := 1
-	if prev, err := e.st.LatestStageRun(ctx, d.ID, stage); err == nil {
+	prev, err := e.st.LatestStageRun(ctx, d.ID, stage)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, fmt.Errorf("stage %s: latest run: %w", stage, err)
+	}
+	if err == nil {
 		attempt = prev.Attempt + 1
 	}
 	r := &store.StageRun{DeliveryID: d.ID, Stage: stage, Attempt: attempt, Status: "running"}

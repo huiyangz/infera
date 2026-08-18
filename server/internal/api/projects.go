@@ -11,9 +11,15 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-func decode(r *http.Request, v any) error {
+// maxBodyBytes 请求体上限：所有 decode 的 JSON body 不得超过 1MiB——
+// 超限在读入时即截断报错（内存放大防护），不整包进内存再解析。
+const maxBodyBytes = 1 << 20
+
+// decode 统一 JSON 解码入口：http.MaxBytesReader 限长后解码。
+// 超限/畸形 body 返回 error，调用方统一 400。
+func decode(w http.ResponseWriter, r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(v)
+	return json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(v)
 }
 
 // validRepoURL repo_url 白名单：https、ssh（含 git@ scp 形态）与本地绝对路径
@@ -64,7 +70,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		RepoURL       string `json:"repo_url"`
 		DefaultBranch string `json:"default_branch"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
@@ -124,7 +130,7 @@ func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Pinned bool `json:"pinned"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}

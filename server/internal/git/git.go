@@ -22,6 +22,11 @@ import (
 // 调用方用 errors.Is 识别后走人工解冲突流程。
 var ErrMergeConflict = errors.New("git merge: conflict")
 
+// ErrRefNotFound fetch 的远端 ref 不存在（输出含 "couldn't find remote ref"）。
+// 输出字符串匹配只在本包做一次，调用方用 errors.Is 识别——
+// 引擎据此区分「子需求无分支可合并」与真正的 fetch 故障。
+var ErrRefNotFound = errors.New("git fetch: remote ref not found")
+
 type Git struct{ Token string }
 
 func New() *Git { return &Git{} }
@@ -168,9 +173,12 @@ func (g *Git) Push(ctx context.Context, dir, pushURL, ref string, force bool) er
 }
 
 // Fetch 从 repoURL 拉取单个 ref 到 FETCH_HEAD（不合并；token 注入同 Clone）。
-// ref 形如 "infera/abcd1234"。
+// ref 形如 "infera/abcd1234"。ref 在远端不存在时返回 ErrRefNotFound。
 func (g *Git) Fetch(ctx context.Context, dir, rawURL, ref string) error {
 	_, err := g.run(ctx, dir, "fetch", injectToken(rawURL, g.Token), ref)
+	if err != nil && strings.Contains(err.Error(), "couldn't find remote ref") {
+		return fmt.Errorf("%w: %s", ErrRefNotFound, g.redact(err.Error()))
+	}
 	return err
 }
 

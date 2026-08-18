@@ -181,11 +181,17 @@ func (m *Memory) ListChildDeliveries(ctx context.Context, parentID string) ([]De
 	return out, nil
 }
 
+// UpdateDelivery 按读到的 UpdatedAt 条件更新（乐观锁，同 UpdateAgent）：
+// 并发读-改-写的后写者版本已过期 → ErrConflict，不静默覆盖（全行覆盖曾无版本校验）。
 func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.deliveries[d.ID]; !ok {
+	ex, ok := m.deliveries[d.ID]
+	if !ok {
 		return ErrNotFound
+	}
+	if !ex.UpdatedAt.Equal(d.UpdatedAt) {
+		return ErrConflict // 读-改-写窗口内被并发更新
 	}
 	d.UpdatedAt = time.Now().UTC()
 	cp := *d

@@ -14,10 +14,14 @@ import (
 )
 
 // BindableNodes 当前图上可绑定 agent 的节点（单一事实来源）：流水线 agent 节点 +
-// code_review 门禁前置审查（Reviewer 预审与 R10 双道结构化审查）。
-// Resolve / 默认编排 PUT 都要求全覆盖——升级加节点后旧默认绑定需重 PUT pipeline
-// （缺绑定的交付按既有约定在 agent 阶段 blocked，stage_failed 写明缺哪些）。
-var BindableNodes = []string{"spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
+// code_review 门禁前置审查（Reviewer 预审与 R10 双道结构化审查）+
+// 11 阶段链路的 design/tasks（large 复杂度经过；R11 冒烟阻塞点）。
+var BindableNodes = []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
+
+// RequiredNodes 基准节点：缺绑定即 ErrIncompleteBindings（blocked）的核心集合。
+// design/tasks 是可选节点——历史默认绑定不覆盖它们，缺绑定时引擎回退构造
+// runner 兜底（不阻断交付），因此 Resolve/默认 PUT 只强校验本集合。
+var RequiredNodes = []string{"spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
 
 // ErrLocalRunner runner=local 的哨兵：本机交互通道（批 B 实装），本批语义 = 交付停在该阶段。
 var ErrLocalRunner = errors.New("orchestration: local runner（本机交互，批 B 实装；本批停在该阶段等待）")
@@ -37,7 +41,9 @@ type Effective struct {
 }
 
 // Resolve 解析某项目的有效编排：agents 按节点给生效的 agent，eff 给来源。
-// 任一可绑定节点缺绑定（或指向不存在的 agent）→ *ErrIncompleteBindings。
+// 基准节点（RequiredNodes）缺绑定（或指向不存在的 agent）→ *ErrIncompleteBindings；
+// 可选节点（design/tasks）缺绑定 → 不出现在 agents（引擎回退兜底 runner，
+// 旧默认绑定免重 PUT 升级）。
 func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]store.Agent, map[string]Effective, error) {
 	defaults, err := st.ListBindings(ctx, "")
 	if err != nil {
@@ -75,7 +81,9 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 		}
 		a, ok := byID[b.AgentID]
 		if !ok {
-			missing = append(missing, node)
+			if slices.Contains(RequiredNodes, node) {
+				missing = append(missing, node)
+			} // 可选节点缺失：跳过，引擎走兜底
 			continue
 		}
 		agents[node] = a
@@ -87,10 +95,10 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 	return agents, eff, nil
 }
 
-// ValidateComplete 校验有效绑定覆盖全部可绑定节点（缺 → *ErrIncompleteBindings）。
+// ValidateComplete 校验有效绑定覆盖全部基准节点（缺 → *ErrIncompleteBindings）。
 func ValidateComplete(effective map[string]Effective) error {
 	var missing []string
-	for _, node := range BindableNodes {
+	for _, node := range RequiredNodes {
 		if _, ok := effective[node]; !ok {
 			missing = append(missing, node)
 		}

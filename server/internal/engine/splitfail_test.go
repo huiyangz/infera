@@ -15,7 +15,15 @@ type failStore struct {
 	store.Store
 	failUpdateTitle map[string]int // title -> 剩余失败次数（UpdateDelivery）
 	failCreateAfter int            // 第 N 次 CreateDelivery 起失败（1-based；0=不失败）
+	failLatestRun   bool           // LatestStageRun 一律失败（非 NotFound）
 	creates         int
+}
+
+func (f *failStore) LatestStageRun(ctx context.Context, deliveryID, stage string) (*store.StageRun, error) {
+	if f.failLatestRun {
+		return nil, errors.New("db: latest stage run failed")
+	}
+	return f.Store.LatestStageRun(ctx, deliveryID, stage)
 }
 
 func (f *failStore) UpdateDelivery(ctx context.Context, d *store.Delivery) error {
@@ -95,6 +103,19 @@ func TestApproveSplitCreateFailureStillStartsWave1(t *testing.T) {
 
 	// 留痕：拆分子需求创建失败事件（父时间线可排查）。
 	require.Contains(t, eventTypes(t, inner, d.ID), "split_child_create_failed")
+}
+
+// TestStartStageRunPropagatesLatestRunError：LatestStageRun 的非 NotFound 错误
+// 不得被吞（吞掉会 attempt 回退 1、把 DB 故障伪装成首轮运行）——必须上抛失败。
+func TestStartStageRunPropagatesLatestRunError(t *testing.T) {
+	inner := store.NewMemory()
+	fst := &failStore{Store: inner, failLatestRun: true}
+	e := New(fst, &fakeRunner{}, &FakeWS{}, passTR{})
+	d := seed(t, inner)
+
+	err := e.Start(context.Background(), d.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "latest stage run failed")
 }
 
 // childByTitle 按标题取父的子需求。

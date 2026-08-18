@@ -58,7 +58,7 @@ func (s *Server) handleCreateDelivery(w http.ResponseWriter, r *http.Request) {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
@@ -360,7 +360,7 @@ func (s *Server) handleReject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Reason string `json:"reason"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}

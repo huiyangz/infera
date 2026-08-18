@@ -34,7 +34,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		Runner string         `json:"runner"`
 		Config map[string]any `json:"config"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
@@ -76,7 +76,7 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 		Runner *string        `json:"runner"`
 		Config map[string]any `json:"config"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
@@ -199,13 +199,14 @@ func (s *Server) putPipeline(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Bindings map[string]string `json:"bindings"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}
-	// 全量替换默认：必须覆盖全部可绑定节点
+	// 全量替换默认：必须覆盖全部基准节点。design/tasks 等可选节点按需提供
+	// （缺绑定交付走引擎兜底 runner——旧 6 节点配置免重 PUT，R11 兼容）。
 	var missing []string
-	for _, n := range orchestration.BindableNodes {
+	for _, n := range orchestration.RequiredNodes {
 		if body.Bindings[n] == "" {
 			missing = append(missing, n)
 		}
@@ -280,7 +281,7 @@ func (s *Server) putProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Bindings map[string]string `json:"bindings"`
 	}
-	if err := decode(r, &body); err != nil {
+	if err := decode(w, r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体不合法")
 		return
 	}

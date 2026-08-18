@@ -224,7 +224,7 @@ func (e *Engine) mergeLoop(ctx context.Context, parent *store.Delivery) error {
 		child := children[nextIdx]
 		err = e.g.Fetch(ctx, dir, proj.RepoURL, childBranch(child.ID))
 		if err != nil {
-			if strings.Contains(err.Error(), "couldn't find remote ref") {
+			if errors.Is(err, git.ErrRefNotFound) {
 				// 子需求完成但没推分支（无变更，persist 跳过 push）：无可合并，记标记继续。
 				if serr := e.saveMergedChild(ctx, parent.ID, &child); serr != nil {
 					return serr

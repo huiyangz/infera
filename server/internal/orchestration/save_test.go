@@ -50,11 +50,11 @@ func TestSaveBindings(t *testing.T) {
 	ctx := context.Background()
 	seeded := bindingsSnapshot(t, st, "")
 
-	// 未知节点 → 校验失败，不写库
-	err := SaveBindings(ctx, st, "", map[string]string{"design": a1.ID})
+	// 未知节点 → 校验失败，不写库（design/tasks 现已是可绑定节点，取真不存在的名字）
+	err := SaveBindings(ctx, st, "", map[string]string{"nonexistent_stage": a1.ID})
 	var invalid *ErrInvalidBinding
 	require.ErrorAs(t, err, &invalid)
-	require.Contains(t, err.Error(), "design")
+	require.Contains(t, err.Error(), "nonexistent_stage")
 	require.Equal(t, seeded, bindingsSnapshot(t, st, ""), "校验失败不得写入")
 
 	// 不存在的 agent → 校验失败，不写库
