@@ -35,8 +35,9 @@ type Delivery struct {
 	WorkspaceReady bool      `json:"workspace_ready"` // workspace 已就绪（幂等防重 clone/重建）
 	ParentID       string    `json:"parent_id"`       // 拆分子需求指向父 delivery（父/普通需求为空）
 	Wave           int       `json:"wave"`            // 拆分批次号 1..N（父/普通需求=0）
-	SplitMode      bool      `json:"split_mode"`      // 父在规格审批选择了拆分
+	SplitMode      bool      `json:"split_mode"`      // 父在设计审批选择了拆分
 	MergeState     string    `json:"merge_state"`     // 父合并状态：'' | 'conflict'
+	Complexity     string    `json:"complexity"`      // 需求复杂度：''（老数据，按 small 走）| small | large（spec_approval 门裁定）
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
@@ -59,11 +60,21 @@ type Artifact struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// ChildSpec 拆分子需求规格（spec 审批时的拆分方案行；api/engine 共用，放 store 避免反向依赖）。
+// ChildSpec 拆分子需求规格（设计审批时的拆分方案行；api/engine 共用，放 store 避免反向依赖）。
 type ChildSpec struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Wave        int    `json:"wave"`
+}
+
+// ApproveOpts 门禁批准选项（api/engine 共用，放 store 避免反向依赖）。
+// 单入口按当前门分发：spec_approval 用 Complexity；design_approval 用 Split。
+type ApproveOpts struct {
+	// Complexity 需求复杂度裁定（spec_approval 门）：small|large；
+	// 空 = 取 spec 末尾 infera-complexity 块的建议，再无建议 = small。
+	Complexity string `json:"complexity"`
+	// Split 非空 = 「批准并拆分」（design_approval 门专用）。
+	Split []ChildSpec `json:"split"`
 }
 
 // Agent 注册的执行者：runner 决定 config 语义（cli=command / http=url / docker=image+command / local=空）。

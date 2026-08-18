@@ -134,10 +134,16 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// gateArtifactKind 门禁 → 待展示产物 kind：spec 门禁看 spec 全文，其余看 agent 产物。
+// gateArtifactKind 门禁 → 待展示产物 kind：spec/design/tasks 门禁看各自文档全文，
+// 其余（code_review）看门禁前置 agent 的预审产物。
 func gateArtifactKind(gate string) string {
-	if gate == "spec_approval" {
+	switch gate {
+	case "spec_approval":
 		return "spec"
+	case "design_approval":
+		return "design"
+	case "tasks_approval":
+		return "tasks"
 	}
 	return "agent_output"
 }
@@ -179,11 +185,30 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		"agent_output": map[string]string{"agent": agent, "output": output},
 		"pr_url":       prURL,
 	}
-	// spec 审批门附 AI 拆分建议（spec 末尾的 infera-split fenced block；无/坏 = nil）。
-	if d.PendingGate == "spec_approval" {
+	switch d.PendingGate {
+	case "spec_approval":
+		// spec 审批门附 AI 复杂度建议（spec 末尾的 infera-complexity fenced block；无/坏 = 空串，前端按 small 预选）。
+		resp["complexity_suggestion"] = parseComplexitySuggestion(output)
+	case "design_approval":
+		// 设计审批门附 AI 拆分建议（design 末尾的 infera-split fenced block；无/坏 = nil）。
 		resp["split_plan"] = parseSplitPlan(output)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// complexityRe 从 spec 全文里提取 ```infera-complexity fenced block（AI 的复杂度建议）。
+var complexityRe = regexp.MustCompile("```infera-complexity\\n([\\s\\S]*?)\\n```")
+
+// parseComplexitySuggestion 解析 spec 文本里的复杂度建议（small|large）；无/坏块返回空串。
+func parseComplexitySuggestion(spec string) string {
+	m := complexityRe.FindStringSubmatch(spec)
+	if m == nil {
+		return ""
+	}
+	if c := strings.TrimSpace(m[1]); c == "small" || c == "large" {
+		return c
+	}
+	return ""
 }
 
 // splitPlanRe 从 spec 全文里提取 ```infera-split fenced block（AI 的拆分建议）。
@@ -202,16 +227,18 @@ func parseSplitPlan(spec string) []store.ChildSpec {
 	return plan
 }
 
-// handleApprove 通过当前门禁。body 可选 `{"split":[{title,description,wave}]}`：
-// 带 split 且停在 spec_approval = 「批准并拆分」；空/缺 body = 普通批准。
-// wave-1 子需求的点火由 engine 的 OnStartDelivery 回调完成（main 组装时注入 RunDelivery）。
+// handleApprove 通过当前门禁（引擎 Approve 单入口透传）。body 可选：
+// `{"complexity":"small"|"large"}`（spec_approval 裁定复杂度，缺省取 AI 建议）；
+// `{"split":[{title,description,wave}]}`（design_approval = 「批准并拆分」）。
+// 空/缺 body = 普通批准。wave-1 子需求的点火由 engine 的 OnStartDelivery 回调完成。
 func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !validID(w, id) {
 		return
 	}
 	var body struct {
-		Split []store.ChildSpec `json:"split"`
+		Complexity string            `json:"complexity"`
+		Split      []store.ChildSpec `json:"split"`
 	}
 	if raw, err := io.ReadAll(r.Body); err == nil && len(bytes.TrimSpace(raw)) > 0 {
 		if err := json.Unmarshal(raw, &body); err != nil {
@@ -220,7 +247,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.withGateAction(w, r, func(ctx context.Context) error {
-		_, err := s.engine.ApproveWithSplit(ctx, id, body.Split)
+		_, err := s.engine.Approve(ctx, id, store.ApproveOpts{Complexity: body.Complexity, Split: body.Split})
 		return err
 	})
 }

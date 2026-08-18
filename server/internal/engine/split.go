@@ -27,26 +27,13 @@ const (
 	mergedChildKind = "merged_child"
 )
 
-// ApproveWithSplit 通过门禁；split 非空 = 「批准并拆分」（仅 spec_approval）：
-// 父置 split_mode、直接停在 code_gen（跳过 test_gen——父的实现就是子需求分支的合并），
-// 为每条规格建子 delivery（全部 queued），wave 1 立即启动。返回创建的子需求。
-func (e *Engine) ApproveWithSplit(ctx context.Context, deliveryID string, split []store.ChildSpec) ([]store.Delivery, error) {
-	d, err := e.st.GetDelivery(ctx, deliveryID)
-	if err != nil {
-		return nil, err
-	}
-	if d.PendingGate == "" {
-		return nil, fmt.Errorf("engine: delivery %s has no pending gate", d.ID)
-	}
-	node, ok := Graph[d.PendingGate]
-	if !ok {
-		return nil, fmt.Errorf("engine: unknown gate stage %q", d.PendingGate)
-	}
-	if len(split) == 0 {
-		return nil, e.approvePlain(ctx, d, node)
-	}
-	if d.PendingGate != "spec_approval" {
-		return nil, fmt.Errorf("engine: split is only allowed at spec_approval, not %q", d.PendingGate)
+// approveSplit 「批准并拆分」（Approve 单入口在 opts.Split 非空时路由到此；仅 design_approval）：
+// 父置 split_mode、直接停在 code_gen（跳过 tasks/tasks_approval/test_gen——父的实现就是
+// 子需求分支的合并），为每条规格建子 delivery（全部 queued，各自完整流水线、复杂度各自判定），
+// wave 1 立即启动。返回创建的子需求。
+func (e *Engine) approveSplit(ctx context.Context, d *store.Delivery, split []store.ChildSpec) ([]store.Delivery, error) {
+	if d.PendingGate != "design_approval" {
+		return nil, fmt.Errorf("engine: split is only allowed at design_approval, not %q", d.PendingGate)
 	}
 	specs, maxWave, err := normalizeSplit(split)
 	if err != nil {
@@ -93,8 +80,9 @@ func (e *Engine) ApproveWithSplit(ctx context.Context, deliveryID string, split 
 	return children, nil
 }
 
-// approvePlain 普通批准：原 Approve 主体（清 gate、簿记、推进 node.Next）。
-func (e *Engine) approvePlain(ctx context.Context, d *store.Delivery, node Node) error {
+// approveGate 普通批准（Approve 单入口的默认路径）：清 gate、簿记、推进到 next。
+// next 由调用方给：spec_approval 按复杂度分岔（nextAfterGate），其余门为静态 node.Next。
+func (e *Engine) approveGate(ctx context.Context, d *store.Delivery, next string) error {
 	gate := d.PendingGate
 	d.PendingGate = ""
 	if err := e.st.UpdateDelivery(ctx, d); err != nil {
@@ -102,7 +90,7 @@ func (e *Engine) approvePlain(ctx context.Context, d *store.Delivery, node Node)
 	}
 	e.finishLatestRun(ctx, d.ID, gate, "done")
 	e.emit(ctx, d, gate, "gate_approved", nil)
-	return e.advance(ctx, d, node.Next)
+	return e.advance(ctx, d, next)
 }
 
 // normalizeSplit 校验并规范化拆分方案：标题非空；wave <1 归一为 1。返回最大批次号。

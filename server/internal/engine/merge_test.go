@@ -131,9 +131,11 @@ func TestSplitIncrementalMergeWavesAndFinalize(t *testing.T) {
 	parent := &store.Delivery{ProjectID: proj.ID, Title: "父需求", Status: StatusActive, CurrentStage: "intake"}
 	require.NoError(t, st.CreateDelivery(ctx, parent))
 	require.NoError(t, e.Start(ctx, parent.ID))
-	_, err := e.ApproveWithSplit(ctx, parent.ID, []store.ChildSpec{
+	require.NoError(t, approve(ctx, e, parent.ID, store.ApproveOpts{Complexity: ComplexityLarge}))
+	require.NoError(t, e.Continue(ctx, parent.ID)) // → design_approval
+	_, err := e.Approve(ctx, parent.ID, store.ApproveOpts{Split: []store.ChildSpec{
 		{Title: "子A", Wave: 1}, {Title: "子B", Wave: 1}, {Title: "子C", Wave: 2},
-	})
+	}})
 	require.NoError(t, err)
 	children, err := st.ListChildDeliveries(ctx, parent.ID)
 	require.NoError(t, err)
@@ -187,9 +189,11 @@ func TestSplitMergeConflictAndResume(t *testing.T) {
 	parent := &store.Delivery{ProjectID: proj.ID, Title: "父需求", Status: StatusActive, CurrentStage: "intake"}
 	require.NoError(t, st.CreateDelivery(ctx, parent))
 	require.NoError(t, e.Start(ctx, parent.ID))
-	_, err := e.ApproveWithSplit(ctx, parent.ID, []store.ChildSpec{
+	require.NoError(t, approve(ctx, e, parent.ID, store.ApproveOpts{Complexity: ComplexityLarge}))
+	require.NoError(t, e.Continue(ctx, parent.ID)) // → design_approval
+	_, err := e.Approve(ctx, parent.ID, store.ApproveOpts{Split: []store.ChildSpec{
 		{Title: "子A", Wave: 1}, {Title: "子B", Wave: 1}, {Title: "子C", Wave: 2},
-	})
+	}})
 	require.NoError(t, err)
 	children, err := st.ListChildDeliveries(ctx, parent.ID)
 	require.NoError(t, err)
@@ -279,10 +283,10 @@ func TestChildCompletionDrivesParentAsync(t *testing.T) {
 
 	// 子需求跑完整流水线（fake agent 不改文件，persist 推不出分支）。
 	require.NoError(t, e.Start(ctx, child.ID))
-	require.NoError(t, e.Approve(ctx, child.ID))
+	require.NoError(t, approve(ctx, e, child.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, child.ID))
 	require.Equal(t, "code_review", get(t, st, child.ID).PendingGate)
-	require.NoError(t, e.Approve(ctx, child.ID))
+	require.NoError(t, approve(ctx, e, child.ID, store.ApproveOpts{}))
 	require.Equal(t, StatusCompleted, get(t, st, child.ID).Status)
 
 	// 异步钩子驱动父：无分支 → merge_skipped 仍记 durable 标记 → 收尾推进。

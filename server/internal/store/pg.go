@@ -41,7 +41,7 @@ func isFKViolation(err error) bool {
 
 const (
 	projectCols  = "id,name,repo_url,default_branch,pinned,created_at,updated_at"
-	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,created_at,updated_at"
+	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,created_at,updated_at"
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
@@ -58,7 +58,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 func scanDelivery(row pgx.Row) (*Delivery, error) {
 	d := &Delivery{}
 	var parentID sql.NullString
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.Complexity, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	d.ParentID = parentID.String
@@ -166,9 +166,9 @@ func (pg *Pg) CreateDelivery(ctx context.Context, d *Delivery) error {
 		d.ID = uuid.NewString()
 	}
 	_, err := pg.pool.Exec(ctx,
-		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState)
+		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity)
 	if err != nil {
 		return err
 	}
@@ -221,9 +221,9 @@ func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
-		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,updated_at=now()
+		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,complexity=$15,updated_at=now()
 		 WHERE id=$1 RETURNING updated_at`,
-		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState).
+		d.ID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity).
 		Scan(&d.UpdatedAt)
 	return mapErr(err)
 }

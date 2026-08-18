@@ -27,26 +27,62 @@ func driveToSpecApproval(t *testing.T, e *Engine, st *store.Memory) *store.Deliv
 	return d
 }
 
-func TestApproveWithSplitCreatesChildren(t *testing.T) {
-	e, st, started := splitEnv(t)
+// driveToDesignApproval 按大需求驱动到 design_approval 门禁
+// （spec 门裁定 large → design agent 产设计文档 → 停设计门）。
+func driveToDesignApproval(t *testing.T, e *Engine, st *store.Memory) *store.Delivery {
+	t.Helper()
+	ctx := context.Background()
 	d := driveToSpecApproval(t, e, st)
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{Complexity: ComplexityLarge}))
+	require.NoError(t, e.Continue(ctx, d.ID))
+	got := get(t, st, d.ID)
+	require.Equal(t, "design_approval", got.CurrentStage)
+	require.Equal(t, "design_approval", got.PendingGate)
+	require.Equal(t, "# 设计正文", artifactByKind(t, st, d.ID, "design").Content)
+	return d
+}
+
+// driveToTasksApproval 大需求全门推进到 tasks_approval（设计门不拆分）。
+func driveToTasksApproval(t *testing.T, e *Engine, st *store.Memory) *store.Delivery {
+	t.Helper()
+	ctx := context.Background()
+	d := driveToDesignApproval(t, e, st)
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → tasks
+	require.NoError(t, e.Continue(ctx, d.ID))
+	got := get(t, st, d.ID)
+	require.Equal(t, "tasks_approval", got.CurrentStage)
+	require.Equal(t, "tasks_approval", got.PendingGate)
+	require.NotNil(t, artifactByKind(t, st, d.ID, "tasks"))
+	return d
+}
+
+// TestApproveSplitAtDesignApproval：设计门「批准并拆分」——父跳过
+// tasks/tasks_approval/test_gen 停 code_gen（不执行这三个阶段），建子需求并点火 wave 1。
+func TestApproveSplitAtDesignApproval(t *testing.T) {
+	e, st, started := splitEnv(t)
+	d := driveToDesignApproval(t, e, st)
 	ctx := context.Background()
 
-	children, err := e.ApproveWithSplit(ctx, d.ID, []store.ChildSpec{
+	children, err := e.Approve(ctx, d.ID, store.ApproveOpts{Split: []store.ChildSpec{
 		{Title: "登录接口", Description: "实现 /login", Wave: 1},
 		{Title: "会话存储", Description: "redis session"}, // wave 归一为 1
 		{Title: "登出接口", Description: "实现 /logout", Wave: 2},
-	})
+	}})
 	require.NoError(t, err)
 	require.Len(t, children, 3)
 
-	// 父：split_mode、跳过 test_gen 停在 code_gen、门禁清空。
+	// 父：split_mode、跳过 tasks/tasks_approval/test_gen 停在 code_gen、门禁清空。
 	parent := get(t, st, d.ID)
 	require.True(t, parent.SplitMode)
 	require.Equal(t, "code_gen", parent.CurrentStage)
 	require.Empty(t, parent.PendingGate)
 	require.Equal(t, StatusActive, parent.Status)
 	require.Contains(t, eventTypes(t, st, d.ID), "split")
+	// 跳过三阶段的证据：无对应 StageRun（拆分父停 code_gen 走合并语义，也不会有 code_gen StageRun）。
+	for _, stage := range []string{"tasks", "tasks_approval", "test_gen", "code_gen"} {
+		_, err := st.LatestStageRun(ctx, d.ID, stage)
+		require.Error(t, err, "拆分父不应执行阶段 %s", stage)
+	}
 
 	// 子需求：指向父、批次正确；wave 1 已启动（active），wave 2 仍 queued。
 	gotChildren, err := st.ListChildDeliveries(ctx, d.ID)
@@ -79,16 +115,23 @@ func TestApproveWithSplitCreatesChildren(t *testing.T) {
 	require.Contains(t, ids, w1a.ID)
 }
 
-func TestApproveWithSplitInvalid(t *testing.T) {
+// TestApproveSplitInvalid：拆分只认 design_approval——空标题 / 绿地项目 /
+// spec 门与其它门带 split 都报错，且失败不消费门禁。
+func TestApproveSplitInvalid(t *testing.T) {
 	e, st, _ := splitEnv(t)
-	d := driveToSpecApproval(t, e, st)
 	ctx := context.Background()
 
-	// 空标题报错。
-	_, err := e.ApproveWithSplit(ctx, d.ID, []store.ChildSpec{{Title: " ", Description: "x"}})
-	require.ErrorContains(t, err, "empty title")
-	// 校验失败不消费门禁。
+	// spec_approval 门带 split：拆分已迁设计门，报错且不消费门禁。
+	d := driveToSpecApproval(t, e, st)
+	_, err := e.Approve(ctx, d.ID, store.ApproveOpts{Split: []store.ChildSpec{{Title: "子A", Wave: 1}}})
+	require.ErrorContains(t, err, "only allowed at design_approval")
 	require.Equal(t, "spec_approval", get(t, st, d.ID).PendingGate)
+
+	// design 门：空标题报错（校验失败不消费门禁）。
+	d2 := driveToDesignApproval(t, e, st)
+	_, err = e.Approve(ctx, d2.ID, store.ApproveOpts{Split: []store.ChildSpec{{Title: " ", Description: "x"}}})
+	require.ErrorContains(t, err, "empty title")
+	require.Equal(t, "design_approval", get(t, st, d2.ID).PendingGate)
 
 	// 绿地项目（无仓库）不支持拆分。
 	p := &store.Project{Name: "greenfield", RepoURL: "", DefaultBranch: "main"}
@@ -96,31 +139,33 @@ func TestApproveWithSplitInvalid(t *testing.T) {
 	gd := &store.Delivery{ProjectID: p.ID, Title: "绿地", Status: StatusActive, CurrentStage: "intake"}
 	require.NoError(t, st.CreateDelivery(ctx, gd))
 	require.NoError(t, e.Start(ctx, gd.ID))
-	_, err = e.ApproveWithSplit(ctx, gd.ID, []store.ChildSpec{{Title: "子"}})
+	require.NoError(t, approve(ctx, e, gd.ID, store.ApproveOpts{Complexity: ComplexityLarge}))
+	require.NoError(t, e.Continue(ctx, gd.ID))
+	_, err = e.Approve(ctx, gd.ID, store.ApproveOpts{Split: []store.ChildSpec{{Title: "子"}}})
 	require.ErrorContains(t, err, "requires a project repo")
 
-	// 非 spec_approval 门禁不允许拆分：驱动到 code_review 再试。
-	d2 := driveToSpecApproval(t, e, st)
-	require.NoError(t, e.Approve(ctx, d2.ID))
-	require.NoError(t, e.Continue(ctx, d2.ID))
-	require.Equal(t, "code_review", get(t, st, d2.ID).PendingGate)
-	_, err = e.ApproveWithSplit(ctx, d2.ID, []store.ChildSpec{{Title: "子"}})
-	require.ErrorContains(t, err, "only allowed at spec_approval")
-	require.Equal(t, "code_review", get(t, st, d2.ID).PendingGate, "失败不消费门禁")
+	// 其它门禁（code_review）带 split 同样拒绝。
+	d3 := driveToTasksApproval(t, e, st)
+	require.NoError(t, approve(ctx, e, d3.ID, store.ApproveOpts{})) // → test_gen
+	require.NoError(t, e.Continue(ctx, d3.ID))                      // → code_review
+	require.Equal(t, "code_review", get(t, st, d3.ID).PendingGate)
+	_, err = e.Approve(ctx, d3.ID, store.ApproveOpts{Split: []store.ChildSpec{{Title: "子"}}})
+	require.ErrorContains(t, err, "only allowed at design_approval")
+	require.Equal(t, "code_review", get(t, st, d3.ID).PendingGate, "失败不消费门禁")
 }
 
-func TestApproveWithoutSplitUnchanged(t *testing.T) {
+// TestApproveDesignGateWithoutSplit：设计门普通批准 → tasks（不拆分照走任务门）。
+func TestApproveDesignGateWithoutSplit(t *testing.T) {
 	e, st, started := splitEnv(t)
-	d := driveToSpecApproval(t, e, st)
-	ctx := context.Background()
+	d := driveToDesignApproval(t, e, st)
 
-	children, err := e.ApproveWithSplit(ctx, d.ID, nil)
+	children, err := e.Approve(context.Background(), d.ID, store.ApproveOpts{})
 	require.NoError(t, err)
 	require.Empty(t, children)
 
 	got := get(t, st, d.ID)
 	require.False(t, got.SplitMode)
-	require.Equal(t, "test_gen", got.CurrentStage, "普通批准照走 test_gen")
+	require.Equal(t, "tasks", got.CurrentStage, "设计门普通批准 → tasks")
 	require.Empty(t, got.PendingGate)
 	require.Empty(t, *started)
 }

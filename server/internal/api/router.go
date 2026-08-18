@@ -19,8 +19,9 @@ import (
 type EngineAPI interface {
 	Start(ctx context.Context, deliveryID string) error
 	Continue(ctx context.Context, deliveryID string) error
-	// ApproveWithSplit 普通批准（split=nil）或「批准并拆分」（spec_approval 专用）。
-	ApproveWithSplit(ctx context.Context, deliveryID string, split []store.ChildSpec) ([]store.Delivery, error)
+	// Approve 门禁批准唯一入口：opts 按当前门校验——spec_approval 裁定 Complexity、
+	// design_approval 非空 Split=「批准并拆分」（返回创建的子需求）。
+	Approve(ctx context.Context, deliveryID string, opts store.ApproveOpts) ([]store.Delivery, error)
 	Reject(ctx context.Context, deliveryID string, reason string) error
 	// ResumeMerge 拆分父冲突恢复（fetch 人工分支 reset 后重跑合并队列）。
 	ResumeMerge(ctx context.Context, deliveryID string) error

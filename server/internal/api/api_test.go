@@ -102,16 +102,17 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 // fakeEngine 记录调用但不改 store（真实引擎会推进状态），
 // 因此断言只依赖 handler 自身行为；内部加锁避免异步 driver 的数据竞争。
 type fakeEngine struct {
-	mu              sync.Mutex
-	started         []string
-	continued       []string
-	approved        []string
-	approveSplits   map[string][]store.ChildSpec
-	rejected        []string
-	resumeMerges    []string
-	droveParents    []string
-	failStart       bool
-	failResumeMerge bool
+	mu                  sync.Mutex
+	started             []string
+	continued           []string
+	approved            []string
+	approveSplits       map[string][]store.ChildSpec
+	approveComplexities map[string]string
+	rejected            []string
+	resumeMerges        []string
+	droveParents        []string
+	failStart           bool
+	failResumeMerge     bool
 }
 
 func (f *fakeEngine) Start(_ context.Context, id string) error {
@@ -131,15 +132,21 @@ func (f *fakeEngine) Continue(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeEngine) ApproveWithSplit(_ context.Context, id string, split []store.ChildSpec) ([]store.Delivery, error) {
+func (f *fakeEngine) Approve(_ context.Context, id string, opts store.ApproveOpts) ([]store.Delivery, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.approved = append(f.approved, id)
-	if len(split) > 0 {
+	if len(opts.Split) > 0 {
 		if f.approveSplits == nil {
 			f.approveSplits = map[string][]store.ChildSpec{}
 		}
-		f.approveSplits[id] = split
+		f.approveSplits[id] = opts.Split
+	}
+	if opts.Complexity != "" {
+		if f.approveComplexities == nil {
+			f.approveComplexities = map[string]string{}
+		}
+		f.approveComplexities[id] = opts.Complexity
 	}
 	return nil, nil
 }
@@ -214,6 +221,12 @@ func (f *fakeEngine) splitFor(id string) []store.ChildSpec {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.approveSplits[id]
+}
+
+func (f *fakeEngine) complexityFor(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.approveComplexities[id]
 }
 
 func newServerWithEngine(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine) {
@@ -422,44 +435,97 @@ func TestResumeActive(t *testing.T) {
 	}, 200*time.Millisecond, 20*time.Millisecond)
 }
 
-// --- split deliveries：approve 带拆分 / gate 返回 split_plan / merge resume / children ---
+// --- split deliveries：approve 带选项 / gate 返回建议 / merge resume / children ---
 
-// seedSpecGate 建一个停在 spec_approval 门禁、spec artifact 已就位的交付。
-func seedSpecGate(t *testing.T, st *store.Memory, projID, spec string) *store.Delivery {
+// seedGate 建一个停在指定门禁、对应 artifact 已就位的交付
+// （走到 design/tasks 门的交付按语义置 complexity=large）。
+func seedGate(t *testing.T, st *store.Memory, projID, gate, kind, content string) *store.Delivery {
 	t.Helper()
 	ctx := context.Background()
+	complexity := ""
+	if gate == "design_approval" || gate == "tasks_approval" {
+		complexity = "large"
+	}
 	d := &store.Delivery{ProjectID: projID, Title: "父", Status: "active",
-		CurrentStage: "spec_approval", PendingGate: "spec_approval"}
+		CurrentStage: gate, PendingGate: gate, Complexity: complexity}
 	require.NoError(t, st.CreateDelivery(ctx, d))
 	require.NoError(t, st.SaveArtifact(ctx, &store.Artifact{
-		DeliveryID: d.ID, Stage: "spec", Kind: "spec", Content: spec,
+		DeliveryID: d.ID, Stage: kind, Kind: kind, Content: content,
 	}))
 	return d
 }
 
-func TestApproveWithSplitPassesBodyThrough(t *testing.T) {
+// seedSpecGate 停在 spec_approval 门禁、spec artifact 已就位。
+func seedSpecGate(t *testing.T, st *store.Memory, projID, spec string) *store.Delivery {
+	t.Helper()
+	return seedGate(t, st, projID, "spec_approval", "spec", spec)
+}
+
+func TestApprovePassesBodyThrough(t *testing.T) {
 	ts, st, fe := newServerWithEngine(t)
 	c := login(t, ts.URL)
 	ctx := context.Background()
 	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
-	d := seedSpecGate(t, st, p.ID, "# spec")
 
+	// spec 门：complexity 透传。
+	d := seedSpecGate(t, st, p.ID, "# spec")
+	r, _ := c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "application/json",
+		bytes.NewBufferString(`{"complexity":"large"}`))
+	require.Equal(t, 200, r.StatusCode)
+	require.Equal(t, "large", fe.complexityFor(d.ID))
+
+	// design 门：split 透传（门禁校验在引擎，handler 只透传）。
+	d2 := seedGate(t, st, p.ID, "design_approval", "design", "# 设计")
 	body := `{"split":[{"title":"子A","description":"写入 a.txt","wave":1},{"title":"子B","description":"写入 b.txt","wave":2}]}`
-	r, _ := c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "application/json", bytes.NewBufferString(body))
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d2.ID+"/approve", "application/json", bytes.NewBufferString(body))
 	require.Equal(t, 200, r.StatusCode)
 
-	split := fe.splitFor(d.ID)
+	split := fe.splitFor(d2.ID)
 	require.NotNil(t, split, "split 应透传给引擎")
 	require.Len(t, split, 2)
 	require.Equal(t, "子A", split[0].Title)
 	require.Equal(t, 2, split[1].Wave)
 
 	// 坏 JSON → 400
-	r, _ = c.Post(ts.URL+"/api/deliveries/"+d.ID+"/approve", "application/json", bytes.NewBufferString("{bad"))
+	r, _ = c.Post(ts.URL+"/api/deliveries/"+d2.ID+"/approve", "application/json", bytes.NewBufferString("{bad"))
 	require.Equal(t, 400, r.StatusCode)
 }
 
+// TestGateComplexitySuggestion：spec 门响应带 complexity_suggestion
+// （spec 末尾 infera-complexity 块；无/坏块 = 空串）。
+func TestGateComplexitySuggestion(t *testing.T) {
+	ts, st, _ := newServerWithEngine(t)
+	c := login(t, ts.URL)
+	ctx := context.Background()
+	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	withBlock := seedSpecGate(t, st, p.ID, "# 规格\n\n```infera-complexity\nlarge\n```\n")
+	var gate struct {
+		Gate                 string `json:"gate"`
+		ComplexitySuggestion string `json:"complexity_suggestion"`
+	}
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + withBlock.ID + "/gate")
+	require.Equal(t, 200, r.StatusCode)
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
+	require.Equal(t, "spec_approval", gate.Gate)
+	require.Equal(t, "large", gate.ComplexitySuggestion)
+
+	// 无 block / 坏值块 → 空串（前端按 small 预选）。
+	for _, s := range []string{"# 普通 spec", "# s\n\n```infera-complexity\nhuge\n```"} {
+		d2 := seedSpecGate(t, st, p.ID, s)
+		var g2 struct {
+			ComplexitySuggestion string `json:"complexity_suggestion"`
+		}
+		r, _ = c.Get(ts.URL + "/api/deliveries/" + d2.ID + "/gate")
+		require.Equal(t, 200, r.StatusCode)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&g2))
+		require.Empty(t, g2.ComplexitySuggestion)
+	}
+}
+
+// TestGateReturnsSplitPlan：design 门响应带 split_plan（design 末尾 infera-split 块）。
 func TestGateReturnsSplitPlan(t *testing.T) {
 	ts, st, _ := newServerWithEngine(t)
 	c := login(t, ts.URL)
@@ -467,8 +533,8 @@ func TestGateReturnsSplitPlan(t *testing.T) {
 	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
-	spec := "# 规格\n\n```infera-split\n[{\"title\":\"子A\",\"description\":\"写入 a.txt\",\"wave\":1},{\"title\":\"子C\",\"description\":\"写入 c.txt\",\"wave\":2}]\n```\n"
-	d := seedSpecGate(t, st, p.ID, spec)
+	design := "# 设计\n\n```infera-split\n[{\"title\":\"子A\",\"description\":\"写入 a.txt\",\"wave\":1},{\"title\":\"子C\",\"description\":\"写入 c.txt\",\"wave\":2}]\n```\n"
+	d := seedGate(t, st, p.ID, "design_approval", "design", design)
 
 	var gate struct {
 		Gate      string             `json:"gate"`
@@ -477,7 +543,7 @@ func TestGateReturnsSplitPlan(t *testing.T) {
 	r, _ := c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
 	require.Equal(t, 200, r.StatusCode)
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&gate))
-	require.Equal(t, "spec_approval", gate.Gate)
+	require.Equal(t, "design_approval", gate.Gate)
 	require.NotNil(t, gate.SplitPlan)
 	require.Len(t, *gate.SplitPlan, 2)
 	require.Equal(t, "子A", (*gate.SplitPlan)[0].Title)
@@ -485,8 +551,8 @@ func TestGateReturnsSplitPlan(t *testing.T) {
 	require.Equal(t, 2, (*gate.SplitPlan)[1].Wave)
 
 	// 无 block → split_plan 为 null；坏 JSON 块同样按无建议处理。
-	for _, s := range []string{"# 普通 spec", "# s\n\n```infera-split\n{not json}\n```"} {
-		d2 := seedSpecGate(t, st, p.ID, s)
+	for _, s := range []string{"# 普通设计", "# d\n\n```infera-split\n{not json}\n```"} {
+		d2 := seedGate(t, st, p.ID, "design_approval", "design", s)
 		var g2 struct {
 			SplitPlan *[]store.ChildSpec `json:"split_plan"`
 		}

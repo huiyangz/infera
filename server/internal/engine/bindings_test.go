@@ -38,7 +38,7 @@ func TestResolveRunnerPerNode(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
 
 	// spec/code_gen/code_review 走 fallback；test_gen 走 special。
@@ -94,7 +94,7 @@ func TestResolveErrorBlocks(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID)) // → test_gen
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{})) // → test_gen
 	err := e.Continue(ctx, d.ID)
 	require.Error(t, err)
 	var incomplete *orchestration.ErrIncompleteBindings
@@ -124,7 +124,7 @@ func TestLocalRunnerGateReviewSkipsPreview(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, e.Start(ctx, d.ID))
-	require.NoError(t, e.Approve(ctx, d.ID))
+	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
 
 	got := get(t, st, d.ID)
