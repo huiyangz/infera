@@ -359,13 +359,14 @@ type gateJSON struct {
 	ComplexitySuggestion string `json:"complexity_suggestion"`
 }
 
-// post 发 JSON POST，断言 200；out 非 nil 时解码响应体。
+// post 发 JSON POST，断言 2xx（创建类端点 201、其余 200）；out 非 nil 时解码响应体。
 func post(t *testing.T, c *http.Client, url, body string, out any) {
 	t.Helper()
 	r, err := c.Post(url, "application/json", bytes.NewBufferString(body))
 	require.NoError(t, err)
 	defer r.Body.Close()
-	require.Equal(t, http.StatusOK, r.StatusCode, "POST %s -> %d", url, r.StatusCode)
+	require.Less(t, r.StatusCode, 300, "POST %s -> %d", url, r.StatusCode)
+	require.GreaterOrEqual(t, r.StatusCode, 200, "POST %s -> %d", url, r.StatusCode)
 	if out != nil {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(out))
 	}

@@ -172,6 +172,9 @@ type Store interface {
 	UpsertBinding(ctx context.Context, b *PipelineBinding) error
 	DeleteBinding(ctx context.Context, projectID, node string) error
 	ListBindings(ctx context.Context, projectID string) ([]PipelineBinding, error)
+	// ListAllBindings 一次查询带回全部绑定（全局默认 + 所有项目覆盖；
+	// 全局默认行 ProjectID 为空串）——全量扫描场景替代逐项目 N+1。
+	ListAllBindings(ctx context.Context) ([]PipelineBinding, error)
 	// ReplaceBindings 原子替换某项目的全部绑定（byNode: node→agentID；空=清空）：
 	// 任一步失败整体回滚，不留半写。agent/项目不存在 → ErrNotFound。
 	ReplaceBindings(ctx context.Context, projectID string, byNode map[string]string) error

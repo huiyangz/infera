@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -59,6 +60,7 @@ func (e *Engine) approveSplit(ctx context.Context, d *store.Delivery, split []st
 	e.emit(ctx, d, gate, "split", map[string]int{"count": len(specs), "waves": maxWave})
 
 	children := make([]store.Delivery, 0, len(specs))
+	var createErr error
 	for _, spec := range specs {
 		child := &store.Delivery{
 			ProjectID:    d.ProjectID,
@@ -70,14 +72,19 @@ func (e *Engine) approveSplit(ctx context.Context, d *store.Delivery, split []st
 			Wave:         spec.Wave,
 		}
 		if err := e.st.CreateDelivery(ctx, child); err != nil {
-			return nil, err
+			// 半写恢复：父已落 split_mode（不可逆），已建子需求照常调度——
+			// 中途返回会让 wave 1 子需求永远 queued。错误上抛给调用方记日志；
+			// DB 层失败大概率持续，剩余子需求不再尝试。
+			createErr = err
+			e.emit(ctx, d, gate, "split_child_create_failed", map[string]string{"title": spec.Title, "error": err.Error()})
+			break
 		}
 		e.emit(ctx, child, "intake", "delivery_created", nil)
 		children = append(children, *child)
 	}
 	merged := map[string]bool{}
 	e.startDueWaves(ctx, children, merged)
-	return children, nil
+	return children, createErr
 }
 
 // approveGate 普通批准（Approve 单入口的默认路径）：清 gate、簿记、推进到 next。
@@ -204,10 +211,10 @@ func (e *Engine) mergeLoop(ctx context.Context, parent *store.Delivery) error {
 			return nil // 等待未完成的子需求
 		}
 		if parent.MergeState == MergeStateConflict {
-			// 冲突暂停：只记排队事件（每轮每子需求一条，简单可见）。
+			// 冲突暂停：只记排队事件（幂等——每个子需求至多一条，重驱动不刷屏）。
 			for i := range children {
 				c := &children[i]
-				if c.Status == StatusCompleted && !merged[c.ID] {
+				if c.Status == StatusCompleted && !merged[c.ID] && !e.mergeQueuedAnnounced(ctx, parent.ID, c.ID) {
 					e.emit(ctx, parent, "code_gen", "merge_queued", map[string]string{"child_id": c.ID, "child_title": c.Title})
 				}
 			}
@@ -308,6 +315,9 @@ func (e *Engine) startDueWaves(ctx context.Context, children []store.Delivery, m
 		if c.Wave == nextWave && c.Status == StatusQueued {
 			c.Status = StatusActive
 			if err := e.st.UpdateDelivery(ctx, c); err != nil {
+				// 更新失败不静默：留事件供排查。子需求仍 queued，
+				// 下一轮 mergeLoop 调度会重试（暂态失败自愈）。
+				e.emit(ctx, c, "intake", "wave_start_failed", map[string]string{"error": err.Error()})
 				continue
 			}
 			e.emit(ctx, c, "intake", "wave_started", map[string]int{"wave": c.Wave})
@@ -326,6 +336,29 @@ func (e *Engine) saveMergedChild(ctx context.Context, parentID string, child *st
 		Kind:       mergedChildKind,
 		Content:    child.ID,
 	})
+}
+
+// mergeQueuedAnnounced 该子需求是否已记过排队事件（幂等去重）：merge_queued 只提示
+// "已完成但因冲突待合并"，排队期间子需求状态不变，重发无信息量——整个生命周期
+// 至多一条（合并前若再进冲突暂停，状态与首条事件一致，不重发）。
+// 事件读失败按未广播处理（可见性优先）。
+func (e *Engine) mergeQueuedAnnounced(ctx context.Context, parentID, childID string) bool {
+	evs, err := e.st.ListEvents(ctx, parentID)
+	if err != nil {
+		return false
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].EventType != "merge_queued" {
+			continue
+		}
+		var p struct {
+			ChildID string `json:"child_id"`
+		}
+		if err := json.Unmarshal(evs[i].Payload, &p); err == nil && p.ChildID == childID {
+			return true
+		}
+	}
+	return false
 }
 
 // mergedChildren 从 artifact 恢复已合并子需求集合（kind=merged_child，content=childID）。

@@ -13,14 +13,14 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// createAgentViaAPI POST /api/agents，返回 agent id。
+// createAgentViaAPI POST /api/agents（创建返回 201），返回 agent id。
 func createAgentViaAPI(t *testing.T, c *http.Client, base, name, runner string) string {
 	t.Helper()
 	r, err := c.Post(base+"/api/agents", "application/json",
 		bytes.NewBufferString(`{"name":"`+name+`","runner":"`+runner+`","config":{"command":["echo","hi"]}}`))
 	require.NoError(t, err)
 	defer r.Body.Close()
-	require.Equal(t, http.StatusOK, r.StatusCode)
+	require.Equal(t, http.StatusCreated, r.StatusCode)
 	var a store.Agent
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&a))
 	require.NotEmpty(t, a.ID)

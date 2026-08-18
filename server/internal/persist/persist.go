@@ -59,6 +59,15 @@ func NewLocal(g *git.Git, token string) *Local {
 
 // Persist 固化流程：确保是 git 仓库（绿地 init）→ commit → diff → push（绑库）
 // → PR（仅 github.com + token）。驳回重做会再次调用：force 推同一分支。
+//
+// push/PR 的跳过规则（防存储与 422 噪音）：
+//   - HEAD == 基线且本轮无新 commit（克隆后零产出）：不推——分支缺失正是
+//     父合并循环「无变更子需求」的跳过信号；
+//   - 远端分支已是 HEAD 内容（驳回重做但 agent 没改东西）：跳过 push/PR——
+//     内容一致，PR 必然 422。
+//
+// 注意"workdir 干净"不等于"无变更"：合并循环的父在 persist 前已有合并 commit
+// （HEAD 领先基线但 add -A 无新增），必须照常推。
 func (l *Local) Persist(ctx context.Context, in Input) (Result, error) {
 	res := Result{Branch: "main"} // 绿地产出落在本地 main
 	if _, err := os.Stat(filepath.Join(in.Workdir, ".git")); os.IsNotExist(err) {
@@ -67,11 +76,11 @@ func (l *Local) Persist(ctx context.Context, in Input) (Result, error) {
 			return res, fmt.Errorf("git init: %w", err)
 		}
 	}
-	if _, err := l.Git.Commit(ctx, in.Workdir, commitMsg(in.Title, idPrefix(in.DeliveryID))); err != nil {
+	committed, err := l.Git.Commit(ctx, in.Workdir, commitMsg(in.Title, idPrefix(in.DeliveryID)))
+	if err != nil {
 		return res, fmt.Errorf("git commit: %w", err)
 	}
 
-	var err error
 	if in.BaseCommit != "" {
 		res.Diff, err = l.Git.DiffRange(ctx, in.Workdir, in.BaseCommit)
 	} else {
@@ -85,6 +94,16 @@ func (l *Local) Persist(ctx context.Context, in Input) (Result, error) {
 		return res, nil // 绿地：本地 commit 即固化（diff 走 artifact 落库）
 	}
 	res.Branch = "infera/" + idPrefix(in.DeliveryID)
+	head, err := l.Git.Head(ctx, in.Workdir)
+	if err != nil {
+		return res, fmt.Errorf("git head: %w", err)
+	}
+	if !committed && head == in.BaseCommit {
+		return res, nil // 零产出：不推分支（合并循环按"分支缺失"跳过）
+	}
+	if remoteTip, err := l.Git.RemoteRef(ctx, in.RepoURL, "refs/heads/"+res.Branch); err == nil && remoteTip == head {
+		return res, nil // 远端已是该内容：无变更轮次，跳过 push/PR
+	}
 	if err := l.Git.Push(ctx, in.Workdir, in.RepoURL, "refs/heads/"+res.Branch, true); err != nil {
 		return res, fmt.Errorf("git push: %w", err)
 	}

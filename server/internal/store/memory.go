@@ -283,6 +283,8 @@ func (m *Memory) FinishStageRun(ctx context.Context, id string, status string) e
 	return ErrNotFound
 }
 
+// LatestStageRun 取该阶段最近一次运行。同 started_at 并列时取后插入者
+// （slice 即插入序）——latest 用于 attempt 递增与收尾定位，取错旧行会让 attempt 回退。
 func (m *Memory) LatestStageRun(ctx context.Context, deliveryID, stage string) (*StageRun, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -291,8 +293,8 @@ func (m *Memory) LatestStageRun(ctx context.Context, deliveryID, stage string) (
 		if r.Stage != stage {
 			continue
 		}
-		if latest == nil || r.StartedAt.After(latest.StartedAt) {
-			latest = r
+		if latest == nil || !r.StartedAt.Before(latest.StartedAt) {
+			latest = r // 含并列（!Before）：后插入者胜出
 		}
 	}
 	if latest == nil {
@@ -351,6 +353,8 @@ func (m *Memory) GetAgent(_ context.Context, id string) (*Agent, error) {
 	return &cp, nil
 }
 
+// UpdateAgent 按读到的 UpdatedAt 条件更新（乐观锁）：并发读-改-写的后写者
+// 版本已过期 → ErrConflict，不静默覆盖。写前先过 name 唯一校验（同 Create 语义）。
 func (m *Memory) UpdateAgent(_ context.Context, a *Agent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -362,6 +366,9 @@ func (m *Memory) UpdateAgent(_ context.Context, a *Agent) error {
 		if id != a.ID && other.Name == a.Name {
 			return ErrConflict
 		}
+	}
+	if !ex.UpdatedAt.Equal(a.UpdatedAt) {
+		return ErrConflict // 读-改-写窗口内被并发更新
 	}
 	if a.Config == nil {
 		a.Config = map[string]any{}
@@ -466,6 +473,18 @@ func (m *Memory) ListBindings(_ context.Context, projectID string) ([]PipelineBi
 		if b.ProjectID == projectID {
 			out = append(out, *b)
 		}
+	}
+	slices.SortFunc(out, func(a, b PipelineBinding) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return out, nil
+}
+
+// ListAllBindings 全部绑定（默认 + 所有项目覆盖），按创建时间升序。
+func (m *Memory) ListAllBindings(_ context.Context) ([]PipelineBinding, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PipelineBinding, 0, len(m.bindings))
+	for _, b := range m.bindings {
+		out = append(out, *b)
 	}
 	slices.SortFunc(out, func(a, b PipelineBinding) int { return a.CreatedAt.Compare(b.CreatedAt) })
 	return out, nil

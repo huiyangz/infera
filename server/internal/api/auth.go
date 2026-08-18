@@ -72,23 +72,27 @@ func (m *sessionManager) revoke(token string) {
 	m.mu.Unlock()
 }
 
-func setSessionCookie(w http.ResponseWriter, token string) {
+// setSessionCookie / clearSessionCookie 是 Server 方法：Secure 属性按
+// cookieSecure 配置（HTTPS 终端开启，本地 http 开发关闭）。
+func (s *Server) setSessionCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
 }
 
-func clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.cookieSecure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -120,7 +124,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "无法创建会话")
 		return
 	}
-	setSessionCookie(w, token)
+	s.setSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, map[string]bool{"logged_in": true})
 }
 
@@ -128,7 +132,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if token := s.sessionToken(r); token != "" {
 		s.auth.revoke(token)
 	}
-	clearSessionCookie(w)
+	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]bool{"logged_in": false})
 }
 

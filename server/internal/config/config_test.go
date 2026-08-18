@@ -1,14 +1,22 @@
 package config
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestLoadMCPToken(t *testing.T) {
 	t.Setenv("INFERA_MCP_TOKEN", "")
-	if got := Load().MCPToken; got != "" {
+	cfg, err := Load()
+	require.NoError(t, err)
+	if got := cfg.MCPToken; got != "" {
 		t.Fatalf("未设置时 MCPToken 应为空（/mcp 禁用），got %q", got)
 	}
 	t.Setenv("INFERA_MCP_TOKEN", "secret-token")
-	if got := Load().MCPToken; got != "secret-token" {
+	cfg, err = Load()
+	require.NoError(t, err)
+	if got := cfg.MCPToken; got != "secret-token" {
 		t.Fatalf("MCPToken = %q, want %q", got, "secret-token")
 	}
 }
@@ -25,14 +33,43 @@ func TestLoadAddrPortFootgun(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.port == "" {
-				t.Setenv("PORT", "")
-			} else {
-				t.Setenv("PORT", tc.port)
-			}
-			if got := Load().Addr; got != tc.want {
+			t.Setenv("PORT", tc.port)
+			cfg, err := Load()
+			require.NoError(t, err)
+			if got := cfg.Addr; got != tc.want {
 				t.Fatalf("Addr = %q, want %q", got, tc.want)
 			}
 		})
 	}
+}
+
+// TestLoadDatabaseURL：开发模式缺省回落内置连接串；生产模式（INFERA_ENV=production）
+// 必须显式设置——内置默认串连上错误的库比启动失败更危险。
+func TestLoadDatabaseURL(t *testing.T) {
+	t.Run("dev 默认回落", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "")
+		t.Setenv("INFERA_ENV", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotEmpty(t, cfg.DatabaseURL)
+	})
+
+	t.Run("显式设置优先", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/db")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "postgres://u:p@h:5432/db", cfg.DatabaseURL)
+	})
+
+	t.Run("生产模式强制显式", func(t *testing.T) {
+		t.Setenv("DATABASE_URL", "")
+		t.Setenv("INFERA_ENV", "production")
+		_, err := Load()
+		require.ErrorContains(t, err, "DATABASE_URL")
+
+		t.Setenv("DATABASE_URL", "postgres://u:p@h:5432/prod")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "postgres://u:p@h:5432/prod", cfg.DatabaseURL)
+	})
 }

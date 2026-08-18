@@ -3,11 +3,13 @@ services:
     image: postgres:16-alpine
     container_name: infera-postgres
     environment:
+      # 弱口令仅限本机开发：端口只绑 127.0.0.1，不对局域网暴露。
+      # 生产部署请改用强口令/secret，并保持只绑回环或内网。
       POSTGRES_USER: infera
       POSTGRES_PASSWORD: infera
       POSTGRES_DB: infera
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - infera-pgdata:/var/lib/postgresql/data
       # 首次启动（数据卷为空）时自动建 infera_v2；已有数据卷不会重复执行。

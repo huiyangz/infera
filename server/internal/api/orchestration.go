@@ -63,7 +63,7 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "创建 agent 失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, a)
+	writeJSON(w, http.StatusCreated, a)
 }
 
 func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,8 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.st.UpdateAgent(r.Context(), a); err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "同名 agent 已存在")
+			// 同名冲突或读-改-写窗口内被并发修改（乐观锁）——都要求刷新后重试。
+			writeError(w, http.StatusConflict, "同名 agent 已存在，或已被并发修改——请刷新后重试")
 			return
 		}
 		writeStoreErr(w, err, "agent 不存在", "更新 agent 失败")
@@ -137,6 +138,7 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // bindingNodesFor 扫出引用某 agent 的绑定位置（"默认/test_gen"、"项目名/code_gen"）。
+// 绑定用 ListAllBindings 一次全量带回（项目逐个查是 N+1）。
 func (s *Server) bindingNodesFor(r *http.Request, agentID string) ([]string, error) {
 	ctx := r.Context()
 	projs, err := s.st.ListProjects(ctx)
@@ -147,34 +149,21 @@ func (s *Server) bindingNodesFor(r *http.Request, agentID string) ([]string, err
 	for _, p := range projs {
 		names[p.ID] = p.Name
 	}
-	var out []string
-	seen := map[string]bool{}
-	appendRefs := func(bs []store.PipelineBinding) {
-		for _, b := range bs {
-			if b.AgentID != agentID {
-				continue
-			}
-			loc := names[b.ProjectID] + "/" + b.Node
-			if !seen[loc] {
-				seen[loc] = true
-				out = append(out, loc)
-			}
-		}
-	}
-	defs, err := s.st.ListBindings(ctx, "")
+	all, err := s.st.ListAllBindings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	appendRefs(defs)
-	for _, p := range projs {
-		ovs, err := s.st.ListBindings(ctx, p.ID)
-		if err != nil {
-			return nil, err
+	out := []string{}
+	seen := map[string]bool{}
+	for _, b := range all {
+		if b.AgentID != agentID {
+			continue
 		}
-		appendRefs(ovs)
-	}
-	if out == nil {
-		out = []string{}
+		loc := names[b.ProjectID] + "/" + b.Node
+		if !seen[loc] {
+			seen[loc] = true
+			out = append(out, loc)
+		}
 	}
 	return out, nil
 }

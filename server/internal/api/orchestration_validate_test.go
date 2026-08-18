@@ -56,13 +56,13 @@ func TestAgentConfigValidation(t *testing.T) {
 	// docker 缺 image → 400 config.image
 	requireFieldErr(t, postAgent(t, c, ts.URL, `{"name":"x3","runner":"docker","config":{"command":["claude"]}}`), "config.image")
 
-	// local 无额外要求 → 200
+	// local 无额外要求 → 201
 	resp := postAgent(t, c, ts.URL, `{"name":"x4","runner":"local"}`)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	_ = resp.Body.Close()
-	// 合法 cli → 200
+	// 合法 cli → 201
 	resp = postAgent(t, c, ts.URL, `{"name":"x5","runner":"cli","config":{"command":["echo","hi"]}}`)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var a store.Agent
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&a))
 
