@@ -3,7 +3,8 @@
 R3：把流水线的驾驶面暴露为 MCP（Model Context Protocol）服务，任何 MCP 客户端
 （claude / codex / 其他 agent）都能驾驶 infera 流水线——查上下文、在 workdir 完成本机
 绑定阶段的工作后交回产出、查看与裁定人工门禁。这是「本机交互通道」的服务端
-（local 绑定节点的交回通道；本机 helper 是后续任务）。
+（local 绑定节点的交回通道；本机 helper 已落地：网页按钮 → 拉起本机 CLI 的完整闭环
+见 [../helper/README.md](../helper/README.md)）。
 
 ## 启用与鉴权
 

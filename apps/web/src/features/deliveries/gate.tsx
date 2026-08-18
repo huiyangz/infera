@@ -13,11 +13,17 @@ import {
 import { toast } from 'sonner'
 import {
   approveGate,
+  getDelivery,
   getGate,
   rejectGate,
   type ApproveOptions,
 } from '@/lib/infera-api'
-import type { ChildSpec, Finding, GateReview, TaskSpec } from '@/lib/infera-types'
+import type {
+  ChildSpec,
+  Finding,
+  GateReview,
+  TaskSpec,
+} from '@/lib/infera-types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -30,6 +36,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
+import { LocalHandleButton } from '@/features/deliveries/local-handle-button'
+import {
+  gateHasLocalRole,
+  useLocalNodes,
+} from '@/features/deliveries/local-link'
 
 /** 门禁类型 → 展示配置；未知门禁回退通用文案，不崩。 */
 const GATE_META: Record<
@@ -73,10 +84,7 @@ const REVIEW_META: Record<string, { title: string; emptyHint: string }> = {
 }
 
 /** 严重度 → 中文标签 + 单色分级（DESIGN.md 无信号色：用 tonal step 而非红黄） */
-const SEVERITY_META: Record<
-  string,
-  { label: string; className: string }
-> = {
+const SEVERITY_META: Record<string, { label: string; className: string }> = {
   critical: {
     label: '严重',
     className: 'border-transparent bg-primary text-primary-foreground',
@@ -143,7 +151,9 @@ function ReviewCard({ review, prUrl }: { review: GateReview; prUrl?: string }) {
             未产出（本机交互占位）
           </span>
         ) : findings.length === 0 ? (
-          <span className='text-xs text-muted-foreground'>{meta.emptyHint}</span>
+          <span className='text-xs text-muted-foreground'>
+            {meta.emptyHint}
+          </span>
         ) : (
           <span className='text-xs text-muted-foreground'>
             {findings.length} 条意见
@@ -151,9 +161,7 @@ function ReviewCard({ review, prUrl }: { review: GateReview; prUrl?: string }) {
         )}
       </div>
       {review.present && review.task_based && (
-        <p className='mb-2 text-xs text-muted-foreground'>
-          按任务清单逐项核验
-        </p>
+        <p className='mb-2 text-xs text-muted-foreground'>按任务清单逐项核验</p>
       )}
       {review.present && findings.length > 0 && (
         <ul className='space-y-3'>
@@ -230,6 +238,12 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
     queryKey: ['gate', deliveryId],
     queryFn: () => getGate(deliveryId),
   })
+  // 本机交互通道（R4）：code_review 门禁有 local 绑定审查角色时给本机预审入口
+  const { data: detail } = useQuery({
+    queryKey: ['delivery', deliveryId],
+    queryFn: () => getDelivery(deliveryId),
+  })
+  const localNodes = useLocalNodes(detail?.delivery.project_id)
   const [reason, setReason] = useState('')
   // spec_approval：交付模式（AI 建议预选，可改判）
   const [complexity, setComplexity] = useState<'small' | 'large' | null>(null)
@@ -287,6 +301,8 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
   const isDesign = data.gate === 'design_approval'
   const isTasks = data.gate === 'tasks_approval'
   const isReview = data.gate === 'code_review'
+  // code_review 且审查角色（预审/双道）有 local 绑定：本机预审入口
+  const localReview = gateHasLocalRole(data.gate, localNodes)
   // AI 复杂度建议：'' = 无建议，按 small 预选
   const suggestion = data.complexity_suggestion === 'large' ? 'large' : 'small'
   const picked = complexity ?? suggestion
@@ -585,6 +601,19 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                 >
                   <Plus /> 添加任务
                 </Button>
+              </div>
+            )}
+
+            {/* 本机预审入口：审查角色 local 绑定时拉起本机 CLI 产出预审意见 */}
+            {localReview && (
+              <div className='flex flex-wrap items-center justify-between gap-4 rounded-lg border p-4'>
+                <div className='text-sm'>
+                  <span className='font-medium'>本机预审</span>
+                  <span className='ml-2 text-muted-foreground'>
+                    审查角色绑定本机——拉起本机 CLI 产出意见并交回后，再在此裁定
+                  </span>
+                </div>
+                <LocalHandleButton deliveryId={deliveryId} />
               </div>
             )}
 

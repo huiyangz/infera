@@ -43,6 +43,11 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
 import { StatusBadge } from '@/components/status-badge'
+import { LocalHandleButton } from '@/features/deliveries/local-handle-button'
+import {
+  parkedAtLocalNode,
+  useLocalNodes,
+} from '@/features/deliveries/local-link'
 
 type StageState =
   | 'done'
@@ -199,6 +204,8 @@ export function DeliveryDetail({
     queryKey: ['delivery', deliveryId],
     queryFn: () => getDelivery(deliveryId),
   })
+  // 本机交互通道（R4）：编排里 local 绑定的节点集合（加载中为 null）
+  const localNodes = useLocalNodes(data?.delivery.project_id)
   const resume = useMutation({
     mutationFn: () => mergeResume(deliveryId),
     onSuccess: () => {
@@ -224,6 +231,8 @@ export function DeliveryDetail({
 
   const { delivery, timeline, artifacts } = data
   const children = data.children ?? []
+  // 停在本机绑定节点（local 停车）：展示「在本地处理此阶段」入口
+  const parkedAtLocal = parkedAtLocalNode(delivery, localNodes)
   // 拆分父停在 code_gen：语义是「等子需求跑完再合并」，不是真的在写代码
   const splitWaiting =
     delivery.split_mode &&
@@ -458,6 +467,24 @@ export function DeliveryDetail({
                   >
                     去审批
                   </Link>
+                </div>
+              </>
+            )}
+
+            {/* 本机交互停车（local 绑定）：拉起本机 CLI 处理该阶段 */}
+            {parkedAtLocal && (
+              <>
+                <Separator className='my-5' />
+                <div className='flex items-center justify-between gap-4'>
+                  <div className='text-sm'>
+                    <span className='font-medium'>
+                      {stageLabel(delivery.current_stage)}
+                    </span>
+                    <span className='ml-2 text-muted-foreground'>
+                      停在本机交互（local 绑定）——在本地完成该阶段后经 MCP 交回
+                    </span>
+                  </div>
+                  <LocalHandleButton deliveryId={deliveryId} />
                 </div>
               </>
             )}

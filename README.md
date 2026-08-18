@@ -56,3 +56,11 @@ AGENT_CMD=pi
 ## MCP 服务（外部 agent 驾驶流水线）
 
 设置 `INFERA_MCP_TOKEN` 后，`/mcp` 暴露 MCP 服务（无状态 Streamable HTTP，Bearer 鉴权），claude / codex 等任意 MCP 客户端可驾驶流水线：`get_context` 查交付上下文、`submit_stage_output` 交回本机绑定节点（local 绑定）的阶段产出、`get_gate` / `approve_gate` / `reject_gate` 查看与裁定人工门禁（走引擎 Approve/Reject 单入口）。配置示例与冒烟记录见 [docs/mcp.md](docs/mcp.md)。
+
+## 本机交互通道（网页按钮拉起本机 CLI）
+
+local 绑定节点的完整闭环：网页「在本地处理此阶段」按钮 → 本机 `infera-link` 守护进程
+（[helper/](helper/)）→ 在交付 workdir 拉起带 MCP 配置与初始提示的 claude/codex →
+产出经 MCP `submit_stage_output` 交回 → 流水线自动推进。安装与使用见
+[helper/README.md](helper/README.md)。
+
