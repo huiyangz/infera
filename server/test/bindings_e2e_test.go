@@ -92,10 +92,13 @@ esac
 	require.Equal(t, 200, r.StatusCode)
 	_ = r.Body.Close()
 
-	// 注册两个 cli agent + 默认编排（全部 → A）。
+	// 注册两个 cli agent + 默认编排（全部 → A，含 R10 双道审查节点）。
 	idA := createAgentE2E(t, client, base, "default-cli", scriptA)
 	idB := createAgentE2E(t, client, base, "agent-b", scriptB)
-	bindings := map[string]string{"spec": idA, "test_gen": idA, "code_gen": idA, "code_review": idA}
+	bindings := map[string]string{
+		"spec": idA, "test_gen": idA, "code_gen": idA, "code_review": idA,
+		"spec_conformance": idA, "code_quality": idA,
+	}
 	putDefaultBindings(t, client, base, bindings)
 
 	// --- 1. 默认编排：项目 A 交付跑通 ---

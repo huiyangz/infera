@@ -145,7 +145,7 @@ func seedDefaultOrchestration(ctx context.Context, st store.Store, agentCmd stri
 			return err
 		}
 	}
-	log.Printf("seed: 默认编排就绪（spec→%s，test_gen/code_gen/code_review→default-cli）", specName)
+	log.Printf("seed: 默认编排就绪（spec→%s，test_gen/code_gen/code_review/双道审查→default-cli）", specName)
 	return nil
 }
 

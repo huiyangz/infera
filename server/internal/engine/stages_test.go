@@ -100,7 +100,8 @@ func TestLargePipelineThroughTasksGate(t *testing.T) {
 	require.Equal(t, "code_review", got.PendingGate)
 
 	// 全序角色：spec → design → tasks → test_gen → code_gen ×2（逐任务）→ code_review。
-	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_gen", "code_review"}, ar.roles())
+	// 全序角色：spec → design → tasks → test_gen → code_gen ×2（逐任务）→ code_review → 双道审查。
+	require.Equal(t, []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}, ar.roles())
 	// 产物：design/tests 逐门落盘；tasks 为解析后的清单 JSON；summary 为任务完成合成摘要。
 	require.Equal(t, "# 设计正文", artifactByKind(t, st, d.ID, "design").Content)
 	require.Equal(t, `[{"title":"任务A","detail":"做 A"},{"title":"任务B","detail":"做 B"}]`, artifactByKind(t, st, d.ID, "tasks").Content)

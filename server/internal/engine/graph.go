@@ -21,6 +21,9 @@ type Node struct {
 	OnFail string // 失败下一跳（unit_test 回环用）
 	// ReviewRole 门禁前置 agent：挂门禁前先跑（code_review 需要审查员预审产出 artifact）。
 	ReviewRole string
+	// FindingsReviews 门禁前置的结构化审查道（R10，code_review）：每道独立绑定 agent、
+	// 产出 findings artifact；全部产出后门禁才挂起（缺绑定/失败 → blocked，见 reviews.go）。
+	FindingsReviews []string
 	// RejectTo 驳回目标（门禁打回后回退重跑的阶段）。
 	RejectTo string
 	// ArtifactKind agent 产出的 artifact kind。
@@ -55,7 +58,7 @@ var Graph = map[string]Node{
 	// code_gen 的改动摘要 kind=summary；真正的 diff 由 Persist 在 code_review 门禁产出。
 	"code_gen":    {Stage: "code_gen", Kind: KindAgent, Next: "unit_test", ArtifactKind: "summary"},
 	"unit_test":   {Stage: "unit_test", Kind: KindCommand, Next: "code_review", OnFail: "code_gen"},
-	"code_review": {Stage: "code_review", Kind: KindGate, Next: "DONE", ReviewRole: "code_review", RejectTo: "code_gen", Persist: true},
+	"code_review": {Stage: "code_review", Kind: KindGate, Next: "DONE", ReviewRole: "code_review", RejectTo: "code_gen", Persist: true, FindingsReviews: []string{"spec_conformance", "code_quality"}},
 }
 
 // StageOrder 阶段全序（11 阶段；前端阶段条与外部消费方的展示基准。

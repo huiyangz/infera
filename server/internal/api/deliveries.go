@@ -163,7 +163,7 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := gateArtifactKind(d.PendingGate)
-	agent, output, prURL := d.PendingGate, "", ""
+	agent, output, prURL, diff := d.PendingGate, "", "", ""
 	arts, err := s.st.ListArtifacts(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取产物失败")
@@ -177,6 +177,9 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 		}
 		if prURL == "" && arts[i].Kind == "pr" {
 			prURL = arts[i].Content
+		}
+		if diff == "" && arts[i].Kind == "diff" {
+			diff = arts[i].Content
 		}
 	}
 	resp := map[string]any{
@@ -195,8 +198,49 @@ func (s *Server) handleGate(w http.ResponseWriter, r *http.Request) {
 	case "tasks_approval":
 		// 任务审批门附可编辑清单（tasks artifact 为引擎解析后的清单 JSON；坏内容 = nil）。
 		resp["tasks"] = parseTasksList(output)
+	case "code_review":
+		// R10 双道审查：findings 报告（引用 + 内容）与真 diff（Persist 已落盘）一起给门禁页。
+		resp["diff"] = diff
+		resp["reviews"] = gateReviews(arts)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// gateReview 门禁响应里的单道审查：findings 引用（artifact_id）+ 解析后内容。
+type gateReview struct {
+	Review     string          `json:"review"`
+	Present    bool            `json:"present"` // 该道是否已产出（local 占位跳过时 false）
+	TaskBased  bool            `json:"task_based"`
+	ArtifactID string          `json:"artifact_id,omitempty"`
+	Findings   []store.Finding `json:"findings"`
+	Raw        string          `json:"raw,omitempty"`
+}
+
+// gateReviews 从产物里取两道审查的最新 findings 报告（kind=<道名>_findings，
+// 与 engine 图 FindingsReviews / store.Kind*Findings 常量对齐）。无产物 → present=false；
+// 坏 JSON 容错为原文（findings=null），不崩。
+func gateReviews(arts []store.Artifact) []gateReview {
+	reviews := []gateReview{{Review: "spec_conformance"}, {Review: "code_quality"}}
+	for i := range reviews {
+		kind := reviews[i].Review + "_findings"
+		for j := len(arts) - 1; j >= 0; j-- { // 从最新往旧找
+			if arts[j].Kind != kind {
+				continue
+			}
+			reviews[i].Present = true
+			reviews[i].ArtifactID = arts[j].ID
+			var rep store.FindingsReport
+			if err := json.Unmarshal([]byte(arts[j].Content), &rep); err == nil {
+				reviews[i].TaskBased = rep.TaskBased
+				reviews[i].Findings = rep.Findings
+				reviews[i].Raw = rep.Raw
+			} else {
+				reviews[i].Raw = arts[j].Content // 历史脏数据：原文兜底展示
+			}
+			break
+		}
+	}
+	return reviews
 }
 
 // complexityRe 从 spec 全文里提取 ```infera-complexity fenced block（AI 的复杂度建议）。

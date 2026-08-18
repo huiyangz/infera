@@ -70,6 +70,7 @@ const EVENT_LABEL: Record<string, string> = {
   delivery_completed: '交付完成',
   delivery_blocked: '流水线阻塞',
   persist_done: '产出已推送',
+  review_findings: '门禁前置审查产出意见',
   pr_failed: 'PR 开具失败',
   persist_failed: '产出持久化失败',
   split: '需求拆分',

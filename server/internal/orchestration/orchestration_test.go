@@ -63,8 +63,19 @@ func TestResolveIncompleteBindings(t *testing.T) {
 	require.Equal(t, []string{"test_gen", "code_review"}, incomplete.Missing)
 	require.Contains(t, err.Error(), "test_gen")
 
-	require.Error(t, ValidateComplete(map[string]Effective{"spec": {}, "test_gen": {}, "code_gen": {}}))
-	require.NoError(t, ValidateComplete(map[string]Effective{"spec": {}, "test_gen": {}, "code_gen": {}, "code_review": {}}))
+	// ValidateComplete 跟随 BindableNodes：缺任一节点即失败，全节点通过。
+	partial := map[string]Effective{}
+	for i, n := range BindableNodes {
+		if i < len(BindableNodes)-1 {
+			partial[n] = Effective{}
+		}
+	}
+	require.Error(t, ValidateComplete(partial))
+	full := map[string]Effective{}
+	for _, n := range BindableNodes {
+		full[n] = Effective{}
+	}
+	require.NoError(t, ValidateComplete(full))
 }
 
 func TestRunnerFor(t *testing.T) {

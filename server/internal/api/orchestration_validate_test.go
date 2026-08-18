@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/store"
 )
 
@@ -104,17 +105,17 @@ func TestPipelinePutRejectsInvalidAgentConfig(t *testing.T) {
 		require.NoError(t, err)
 		return resp
 	}
-	fullGood := `{"bindings":{"spec":"` + good + `","test_gen":"` + good + `","code_gen":"` + good + `","code_review":"` + good + `"}}`
+	fullGood := fullBindings(good, nil)
 	resp := put("/api/pipeline", fullGood)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	_ = resp.Body.Close()
 
-	// 默认 PUT 引用 bad → 400 写明字段与节点，原绑定保持 4×good
-	resp = put("/api/pipeline", `{"bindings":{"spec":"`+bad.ID+`","test_gen":"`+good+`","code_gen":"`+good+`","code_review":"`+good+`"}}`)
+	// 默认 PUT 引用 bad → 400 写明字段与节点，原绑定保持全节点 ×good
+	resp = put("/api/pipeline", fullBindings(good, map[string]string{"spec": bad.ID}))
 	requireFieldErr(t, resp, "config.command")
 	defs, err := st.ListBindings(ctx, "")
 	require.NoError(t, err)
-	require.Len(t, defs, 4)
+	require.Len(t, defs, len(orchestration.BindableNodes))
 	for _, b := range defs {
 		require.Equal(t, good, b.AgentID, "失败的保存不得留下半写")
 	}

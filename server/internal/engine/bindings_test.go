@@ -41,8 +41,8 @@ func TestResolveRunnerPerNode(t *testing.T) {
 	require.NoError(t, approve(ctx, e, d.ID, store.ApproveOpts{}))
 	require.NoError(t, e.Continue(ctx, d.ID))
 
-	// spec/code_gen/code_review 走 fallback；test_gen 走 special。
-	require.Equal(t, []string{"spec", "code_gen", "code_review"}, rolesOf(fallback))
+	// spec/code_gen/code_review/双道审查 走 fallback；test_gen 走 special。
+	require.Equal(t, []string{"spec", "code_gen", "code_review", "spec_conformance", "code_quality"}, rolesOf(fallback))
 	require.Equal(t, []string{"test_gen"}, rolesOf(special))
 }
 
@@ -130,7 +130,7 @@ func TestLocalRunnerGateReviewSkipsPreview(t *testing.T) {
 	got := get(t, st, d.ID)
 	require.Equal(t, "code_review", got.PendingGate)
 	require.Equal(t, StatusActive, got.Status)
-	require.Equal(t, []string{"spec", "test_gen", "code_gen"}, rolesOf(ar), "预审角色绑定 local 时不跑预审")
+	require.Equal(t, []string{"spec", "test_gen", "code_gen", "spec_conformance", "code_quality"}, rolesOf(ar), "预审角色绑定 local 时不跑预审")
 	require.Contains(t, eventTypes(t, st, d.ID), "local_stage_pending")
 }
 
