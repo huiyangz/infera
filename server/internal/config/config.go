@@ -9,6 +9,7 @@ type Config struct {
 	Addr         string // HTTP 监听地址
 	DatabaseURL  string
 	Password     string // 单租户密码门
+	MCPToken     string // MCP 服务专用 token（空 = /mcp 端点禁用）
 	GitHubToken  string
 	AgentImage   string // agent 容器镜像
 	AgentCmd     string // agent 命令（可替换：claude / pi / ...）
@@ -25,6 +26,7 @@ func Load() Config {
 		Addr:         addr,
 		DatabaseURL:  getenv("DATABASE_URL", "postgres://infera:infera@localhost:5433/infera_v2?sslmode=disable"),
 		Password:     os.Getenv("INFERA_PASSWORD"),
+		MCPToken:     os.Getenv("INFERA_MCP_TOKEN"),
 		GitHubToken:  os.Getenv("GITHUB_TOKEN"),
 		AgentImage:   getenv("AGENT_IMAGE", "infera-agent"),
 		AgentCmd:     getenv("AGENT_CMD", "claude"),
