@@ -16,6 +16,13 @@ type Config struct {
 	AgentCmd     string // agent 命令（可替换：claude / pi / ...）
 	RepoWorkRoot string // workdir 根目录
 	TestCmd      string // unit_test 命令（本地模式）
+
+	// Multica 接入（空 = 未接入）。三项均不内置默认值：ServerURL 尤其不能回落
+	// 到云端 api.multica.ai（本机默认 profile 指向云端是已实证的坑）——缺失交给
+	// multica.New 显式报错，宁可不启不用错误地址。
+	MulticaServerURL   string
+	MulticaToken       string
+	MulticaWorkspaceID string
 }
 
 // devDatabaseURL 开发回落值：docker-compose 的本地 postgres（127.0.0.1:5433）。
@@ -47,6 +54,10 @@ func Load() (Config, error) {
 		AgentCmd:     getenv("AGENT_CMD", "claude"),
 		RepoWorkRoot: getenv("REPO_WORK_ROOT", "/tmp/infera-workdirs"),
 		TestCmd:      getenv("TEST_CMD", "true"),
+
+		MulticaServerURL:   os.Getenv("MULTICA_SERVER_URL"),
+		MulticaToken:       os.Getenv("MULTICA_TOKEN"),
+		MulticaWorkspaceID: os.Getenv("MULTICA_WORKSPACE_ID"),
 	}, nil
 }
 
