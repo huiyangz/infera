@@ -85,25 +85,29 @@ export function ProjectDetail({
   return (
     <>
       <Header fixed>
-        <div className='flex w-full items-center justify-between gap-4'>
-          <div className='flex flex-col gap-1'>
+        <div className='flex w-full min-w-0 items-center justify-between gap-4'>
+          <div className='flex min-w-0 flex-col gap-1'>
             <div className='flex items-center gap-2 text-sm text-muted-foreground'>
               <Link to='/' className='hover:text-foreground'>
                 项目
               </Link>
               <span>/</span>
-              <span className='font-medium text-foreground'>
+              <span className='truncate font-medium text-foreground'>
                 {proj?.name ?? <Skeleton className='h-4 w-24' />}
               </span>
             </div>
             <p className='flex items-center gap-1.5 font-mono text-xs text-muted-foreground'>
-              <GitBranch className='size-3.5' />
-              {proj?.repo_url || '（未绑仓库）'}
-              <span className='text-border'>·</span>
-              {proj?.default_branch}
+              <GitBranch className='size-3.5 shrink-0' />
+              <span className='truncate' title={proj?.repo_url || undefined}>
+                {proj?.repo_url || '（未绑仓库）'}
+              </span>
+              <span className='shrink-0 text-border'>·</span>
+              {proj?.default_branch && (
+                <span className='shrink-0'>{proj.default_branch}</span>
+              )}
             </p>
           </div>
-          <div className='flex items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-2'>
             {proj?.repo_url ? (
               <form
                 className='flex items-center gap-2'
