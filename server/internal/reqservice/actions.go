@@ -15,7 +15,7 @@ import (
 // Approve 批准审批卡：代发评论 approved → 卡片处理 + 审计落库（FR-4/FR-5）。
 // 代发失败则卡保持待处理、不留审计（失败动作不算动作）。
 func (s *Service) Approve(ctx context.Context, requirementID, cardID string) error {
-	return s.postAndResolve(ctx, requirementID, cardID, flow.GateApproval, "approved", "approve", "approved")
+	return s.postAndResolve(ctx, requirementID, cardID, flow.GateApproval, "approved", "approve", "approved", nil)
 }
 
 // Reject 驳回并反馈：用户输入文本原样代发。
@@ -23,7 +23,7 @@ func (s *Service) Reject(ctx context.Context, requirementID, cardID, feedback st
 	if strings.TrimSpace(feedback) == "" {
 		return fmt.Errorf("%w: 驳回反馈不能为空", ErrInvalid)
 	}
-	return s.postAndResolve(ctx, requirementID, cardID, flow.GateApproval, feedback, "reject", feedback)
+	return s.postAndResolve(ctx, requirementID, cardID, flow.GateApproval, feedback, "reject", feedback, nil)
 }
 
 // 决策卡的固定选项（请求体 choice 的取值，冻结）。
@@ -54,6 +54,17 @@ func decisionText(choice, custom string) (string, error) {
 }
 
 // Decide 处理决策卡：重试 / 跳过 / 中止（固定文本）/ 自定义回复（原样代发）。
+//
+// T08 出口接线：决策成功后代发评论、卡 resolved、审计与节点返回同一事务。
+// 返回语义（经 flow.CanTransition，只从 needs_decision 起跳）：
+//   - 重试 / 跳过 / 自定义是"继续执行"的决策 → 回活跃节点（执行中；
+//     决策打断的是执行，恢复即执行，节点与 Multica 执行态的偏差由后续
+//     轮询按父 issue 状态一轮内校正——单一状态源，不越权猜测执行态）；
+//   - 中止 → 直达已交付：flow 大节点集没有 cancelled，中止即不再执行，
+//     需求须退出在途，唯一出路是终态；CanTransition 冻结注释明确
+//     needs_decision"可回活跃或直达 delivered"，中止正取直达出口。
+//
+// 节点不在 needs_decision（T08 前存量卡）：只代发 + 收卡，不跃迁。
 func (s *Service) Decide(ctx context.Context, requirementID, cardID, choice, text string) error {
 	content, err := decisionText(choice, text)
 	if err != nil {
@@ -63,7 +74,21 @@ func (s *Service) Decide(ctx context.Context, requirementID, cardID, choice, tex
 	if choice == DecisionCustom {
 		detail = "custom: " + text
 	}
-	return s.postAndResolve(ctx, requirementID, cardID, flow.GateDecision, content, "decide", detail)
+	r, err := s.getRequirement(ctx, requirementID)
+	if err != nil {
+		return err
+	}
+	var advance *flow.Node
+	if r.Node == flow.NodeNeedsDecision {
+		target := flow.NodeInProgress
+		if choice == DecisionAbort {
+			target = flow.NodeDelivered
+		}
+		if flow.CanTransition(r.Node, target) {
+			advance = &target
+		}
+	}
+	return s.postAndResolve(ctx, requirementID, cardID, flow.GateDecision, content, "decide", detail, advance)
 }
 
 // Rework 拒绝合并并返工：返工反馈原样代发。
@@ -71,14 +96,15 @@ func (s *Service) Rework(ctx context.Context, requirementID, cardID, feedback st
 	if strings.TrimSpace(feedback) == "" {
 		return fmt.Errorf("%w: 返工反馈不能为空", ErrInvalid)
 	}
-	return s.postAndResolve(ctx, requirementID, cardID, flow.GateMerge, feedback, "rework", feedback)
+	return s.postAndResolve(ctx, requirementID, cardID, flow.GateMerge, feedback, "rework", feedback, nil)
 }
 
 // postAndResolve 是评论类代理动作的共享骨架：定位需求与卡 → 校验类型与
-// 待处理态 → 代发评论 → 单事务内（处理卡 + 写审计）。代发失败直接返回，
-// 不动 DB——卡保持待处理可重试。
+// 待处理态 → 代发评论 → 单事务内（处理卡 + 写审计 [+ 节点返回]）。
+// advance 非 nil 时（决策动作的 needs_decision 出口）节点返回与卡收口同
+// 事务；其余动作传 nil。代发失败直接返回，不动 DB——卡保持待处理可重试。
 func (s *Service) postAndResolve(ctx context.Context, requirementID, cardID string,
-	kind flow.GateKind, content, action, detail string) error {
+	kind flow.GateKind, content, action, detail string, advance *flow.Node) error {
 	r, err := s.getRequirement(ctx, requirementID)
 	if err != nil {
 		return err
@@ -89,7 +115,7 @@ func (s *Service) postAndResolve(ctx context.Context, requirementID, cardID stri
 	if _, err := s.mc.PostComment(ctx, r.MulticaIssueID, content); err != nil {
 		return fmt.Errorf("代发评论失败: %w", err)
 	}
-	return s.resolveCardWithAudit(ctx, requirementID, cardID, action, detail)
+	return s.resolveCardWithAudit(ctx, requirementID, cardID, action, detail, advance)
 }
 
 // checkCard 校验卡片存在、归属该需求、类型匹配且待处理。
@@ -110,9 +136,11 @@ func (s *Service) checkCard(ctx context.Context, requirementID, cardID string, w
 	return nil
 }
 
-// resolveCardWithAudit 单事务：卡置 resolved + 审计只增一行。行数为 0 说明
-// 并发下已被处理，按冲突回退。
-func (s *Service) resolveCardWithAudit(ctx context.Context, requirementID, cardID, action, detail string) error {
+// resolveCardWithAudit 单事务：卡置 resolved + 审计只增一行 [+ 节点返回]。
+// 卡行数为 0 说明并发下已被处理，按冲突回退。advance 非 nil 时再经
+// flow 状态机出口更新需求节点——以 node 仍是 needs_decision 为前提
+//（并发下节点已被移动则整体按冲突回退），任何一步失败全部回滚。
+func (s *Service) resolveCardWithAudit(ctx context.Context, requirementID, cardID, action, detail string, advance *flow.Node) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -133,6 +161,18 @@ func (s *Service) resolveCardWithAudit(ctx context.Context, requirementID, cardI
 		newID(), requirementID, ActorUser, action, detail)
 	if err != nil {
 		return err
+	}
+	if advance != nil {
+		ct, err := tx.Exec(ctx, `
+			UPDATE requirements SET node = $2, updated_at = now()
+			WHERE id = $1 AND node = $3`,
+			requirementID, string(*advance), string(flow.NodeNeedsDecision))
+		if err != nil {
+			return err
+		}
+		if ct.RowsAffected() == 0 {
+			return fmt.Errorf("%w: 需求节点已离开 needs_decision", ErrConflict)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -193,7 +233,7 @@ func (s *Service) Merge(ctx context.Context, requirementID, cardID string) (gith
 		return github.MergeResult{}, fmt.Errorf("GitHub 合并失败: %w", err)
 	}
 	if err := s.resolveCardWithAudit(ctx, requirementID, cardID, "merge",
-		fmt.Sprintf("%s#%d sha=%s", ref.Repo, ref.Number, res.SHA)); err != nil {
+		fmt.Sprintf("%s#%d sha=%s", ref.Repo, ref.Number, res.SHA), nil); err != nil {
 		return github.MergeResult{}, err
 	}
 	return res, nil

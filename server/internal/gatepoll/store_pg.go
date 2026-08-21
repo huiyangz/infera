@@ -97,6 +97,41 @@ func (s *PgStore) InsertCardIfNew(ctx context.Context, card flow.GateCard) (bool
 	return true, nil
 }
 
+// InsertCardIfNewAdvanceNode 落一张闸门卡并在同一事务内把需求节点推进到
+// node（决策闸门事件 T08 的原子接线：卡新建 ⇔ 节点推进同生同灭）。
+// 去重语义与 InsertCardIfNew 一致——重复评论返回 false 且不动节点。
+// 事务序：INSERT 卡在前、UPDATE 节点在后——节点写失败时卡一并回滚。
+func (s *PgStore) InsertCardIfNewAdvanceNode(ctx context.Context, card flow.GateCard, node flow.Node) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if card.CommentID != "" {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM gate_cards WHERE requirement_id=$1 AND comment_id=$2)`,
+			card.RequirementID, card.CommentID).Scan(&exists); err != nil {
+			return false, err
+		}
+		if exists {
+			return false, nil
+		}
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO gate_cards (id,requirement_id,kind,status,payload,comment_id)
+		 VALUES ($1,$2,$3,'pending',$4,$5)`,
+		uuid.NewString(), card.RequirementID, string(card.Kind), card.Payload, card.CommentID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE requirements SET node=$2, updated_at=now() WHERE id=$1`,
+		card.RequirementID, string(node)); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 // ListPendingMergeCards 列出需求的待处理合并卡（自动合并清扫的输入）。
 func (s *PgStore) ListPendingMergeCards(ctx context.Context, requirementID string) ([]flow.GateCard, error) {
 	rows, err := s.pool.Query(ctx,

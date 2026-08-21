@@ -637,9 +637,160 @@ func TestMergeOnWrongCardKind(t *testing.T) {
 	require.Empty(t, env.gh.merged)
 }
 
-// seedProject 落一行项目（project_settings 的 FK 目标）。
-func seedProject(t *testing.T, env *testEnv) string {
+// ---------------------------------------------------------------------------
+// needs_decision 出口接线（INFERA-40 T08）：决策动作 → 卡 resolved + 节点
+// 从 needs_decision 经 flow 状态机返回。
+// ---------------------------------------------------------------------------
+
+// setNode 直接写需求节点（模拟 gatepoll 决策事件推进后的状态）。
+func setNode(t *testing.T, env *testEnv, reqID string, node flow.Node) {
 	t.Helper()
+	_, err := envPool(env.svc).Exec(context.Background(),
+		`UPDATE requirements SET node = $1 WHERE id = $2`, string(node), reqID)
+	require.NoError(t, err)
+}
+
+// nodeOf 读需求当前节点（断言用）。
+func nodeOf(t *testing.T, env *testEnv, reqID string) string {
+	t.Helper()
+	var node string
+	require.NoError(t, envPool(env.svc).QueryRow(context.Background(),
+		`SELECT node FROM requirements WHERE id = $1`, reqID).Scan(&node))
+	return node
+}
+
+// TestDecideReturnsFromNeedsDecisionToActiveNode：重试/跳过/自定义都是
+// "继续执行"的决策——卡 resolved + 节点回活跃节点（执行中）。
+// 返回活跃节点的选择依据：决策打断的是执行，处理后恢复即执行；节点与
+// Multica 执行态的偏差由后续轮询按父 issue 状态自行校正（单一状态源，
+// 一轮内收敛），决策动作不越权猜测执行态。
+func TestDecideReturnsFromNeedsDecisionToActiveNode(t *testing.T) {
+	for _, choice := range []string{DecisionRetry, DecisionSkip, DecisionCustom} {
+		t.Run(choice, func(t *testing.T) {
+			env := newEnv(t)
+			ctx := context.Background()
+			created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+			require.NoError(t, err)
+			setNode(t, env, created.ID, flow.NodeNeedsDecision)
+			cardID := seedCard(t, env, created.ID, flow.GateDecision)
+
+			text := ""
+			if choice == DecisionCustom {
+				text = "改用 B 方案"
+			}
+			require.NoError(t, env.svc.Decide(ctx, created.ID, cardID, choice, text))
+
+			require.Equal(t, string(flow.NodeInProgress), nodeOf(t, env, created.ID), "决策后返回活跃节点")
+			var status string
+			require.NoError(t, envPool(env.svc).QueryRow(ctx,
+				`SELECT status FROM gate_cards WHERE id = $1`, cardID).Scan(&status))
+			require.Equal(t, "resolved", status)
+		})
+	}
+}
+
+// TestDecideAbortGoesDelivered：中止 → 直达已交付。
+// 选择依据：flow 大节点集没有 cancelled——中止即不再执行，需求必须退出
+// 在途清单，唯一出路是终态 delivered；flow.CanTransition 冻结注释明确
+// needs_decision"可回活跃或直达 delivered（决策后的去向由执行态决定）"，
+// 中止正是取直达出口的那类决策。
+func TestDecideAbortGoesDelivered(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+	setNode(t, env, created.ID, flow.NodeNeedsDecision)
+	cardID := seedCard(t, env, created.ID, flow.GateDecision)
+
+	require.NoError(t, env.svc.Decide(ctx, created.ID, cardID, DecisionAbort, ""))
+
+	require.Equal(t, string(flow.NodeDelivered), nodeOf(t, env, created.ID), "中止直达已交付")
+	var status string
+	require.NoError(t, envPool(env.svc).QueryRow(ctx,
+		`SELECT status FROM gate_cards WHERE id = $1`, cardID).Scan(&status))
+	require.Equal(t, "resolved", status)
+	var n int
+	require.NoError(t, envPool(env.svc).QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE requirement_id = $1`, created.ID).Scan(&n))
+	require.Equal(t, 1, n, "决策动作照常写审计")
+}
+
+// TestDecideOutsideNeedsDecisionKeepsNode：节点不在 needs_decision（如 T08
+// 接线前遗留的存量决策卡）——决策照常代发 + 收卡 + 审计，但不触发节点
+// 跃迁：needs_decision 的出口接线只从 needs_decision 起跳（经
+// flow.CanTransition），不从任意节点横跳。
+func TestDecideOutsideNeedsDecisionKeepsNode(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+	// Create 落库即 dispatched（未经 gatepoll 推进到 needs_decision）。
+	cardID := seedCard(t, env, created.ID, flow.GateDecision)
+
+	require.NoError(t, env.svc.Decide(ctx, created.ID, cardID, DecisionRetry, ""))
+
+	require.Equal(t, string(flow.NodeDispatched), nodeOf(t, env, created.ID), "非 needs_decision 不跃迁")
+	require.Len(t, env.mc.posted, 1, "决策照常代发")
+}
+
+// TestDecideAtomicRollbackOnNodeFailure：原子性——代发成功后节点写失败，
+// 卡收口与审计一并回滚（resolved + 审计 + 节点同事务，全有或全无）。
+func TestDecideAtomicRollbackOnNodeFailure(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+	setNode(t, env, created.ID, flow.NodeNeedsDecision) // 触发器建好后再不能 UPDATE
+	cardID := seedCard(t, env, created.ID, flow.GateDecision)
+
+	pool := envPool(env.svc)
+	_, err = pool.Exec(ctx,
+		`CREATE FUNCTION t08_boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$ LANGUAGE plpgsql`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`CREATE TRIGGER t08_boom BEFORE UPDATE ON requirements FOR EACH ROW EXECUTE FUNCTION t08_boom()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TRIGGER t08_boom ON requirements`)
+		_, _ = pool.Exec(context.Background(), `DROP FUNCTION t08_boom()`)
+	})
+
+	err = env.svc.Decide(ctx, created.ID, cardID, DecisionRetry, "")
+	require.Error(t, err, "节点写失败必须上抛")
+
+	var status string
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT status FROM gate_cards WHERE id = $1`, cardID).Scan(&status))
+	require.Equal(t, "pending", status, "卡收口随事务回滚")
+	var n int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM audit_log`).Scan(&n))
+	require.Zero(t, n, "审计随事务回滚")
+	require.Equal(t, string(flow.NodeNeedsDecision), nodeOf(t, env, created.ID))
+}
+
+// TestDecidePostFailureKeepsNeedsDecision：代发失败 → 卡保持 pending、节点
+// 保持 needs_decision（失败动作不算动作，人可重试）。
+func TestDecidePostFailureKeepsNeedsDecision(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+	setNode(t, env, created.ID, flow.NodeNeedsDecision)
+	cardID := seedCard(t, env, created.ID, flow.GateDecision)
+	env.mc.postErr = errors.New("post boom")
+
+	err = env.svc.Decide(ctx, created.ID, cardID, DecisionRetry, "")
+	require.ErrorContains(t, err, "代发评论失败")
+
+	var status string
+	require.NoError(t, envPool(env.svc).QueryRow(ctx,
+		`SELECT status FROM gate_cards WHERE id = $1`, cardID).Scan(&status))
+	require.Equal(t, "pending", status)
+	require.Equal(t, string(flow.NodeNeedsDecision), nodeOf(t, env, created.ID), "节点保持停驻")
+}
+
+// seedProject 落一行项目（project_settings 的 FK 目标）。
+func seedProject(t *testing.T, env *testEnv) string {	t.Helper()
 	var id string
 	err := envPool(env.svc).QueryRow(context.Background(),
 		`INSERT INTO projects (id, name) VALUES (gen_random_uuid(), 'demo') RETURNING id::text`).Scan(&id)

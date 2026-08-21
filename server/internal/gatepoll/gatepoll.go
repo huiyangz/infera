@@ -46,6 +46,7 @@ type InFlight struct {
 type Store interface {
 	ListInFlight(ctx context.Context) ([]InFlight, error)
 	InsertCardIfNew(ctx context.Context, card flow.GateCard) (bool, error)
+	InsertCardIfNewAdvanceNode(ctx context.Context, card flow.GateCard, node flow.Node) (bool, error)
 	ListPendingMergeCards(ctx context.Context, requirementID string) ([]flow.GateCard, error)
 	CompleteAutoMerge(ctx context.Context, cardID string, node flow.Node, prURL string, cur flow.PollCursor, audit flow.AuditEntry) error
 	SavePollState(ctx context.Context, requirementID string, node flow.Node, prURL string, cur flow.PollCursor) error
@@ -175,8 +176,9 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 //     服务端秒级截断会让锚点秒旧评论重发，按 multica.ListCommentsSince 的
 //     调用方契约以评论 id 幂等去重，见 InsertCardIfNew）；
 //  3. 每条评论经 flow 解析器 → 闸门卡落库（含兜底一）；PR URL 首条存引用；
+//     决策事件同时把节点推进 needs_decision（卡与推进同事务，T08）；
 //  4. 兜底规则二：跃入 in_review 未见 verdict → 中性"有新动态"卡；
-//  5. 状态经 flow 状态机推进大节点；
+//  5. 状态经 flow 状态机推进大节点（needs_decision 停驻期间挂起）；
 //  6. 合并策略档位清扫：PASS 合并卡在 auto_pass/threshold 档自动合并，
 //     节点直达已交付并写审计（actor=system）；
 //  7. 节点 + 游标落库（重启续读不重放的持久化根基）。
@@ -208,9 +210,24 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 		if ev.Kind == flow.GateMerge {
 			seenVerdict = true
 		}
-		if _, err := p.store.InsertCardIfNew(ctx, flow.GateCard{
+		card := flow.GateCard{
 			RequirementID: req.ID, Kind: ev.Kind, Payload: ev.Body, CommentID: ev.CommentID,
-		}); err != nil {
+		}
+		// 决策闸门事件（T08 接线）：卡新建与推进 needs_decision 同事务——
+		// 二者同生同灭。不重复推进的两道闸：重复评论经评论 id 去重
+		//（InsertCardIfNewAdvanceNode 返回 false）；已在 needs_decision 经
+		// CanTransition 拦下（自跃迁不是跃迁）。
+		if ev.Kind == flow.GateDecision && flow.CanTransition(req.Node, flow.NodeNeedsDecision) {
+			created, err := p.store.InsertCardIfNewAdvanceNode(ctx, card, flow.NodeNeedsDecision)
+			if err != nil {
+				return fmt.Errorf("落库决策卡并推进节点（评论 %s）: %w", c.ID, err)
+			}
+			if created {
+				req.Node = flow.NodeNeedsDecision
+			}
+			continue
+		}
+		if _, err := p.store.InsertCardIfNew(ctx, card); err != nil {
 			return fmt.Errorf("落库闸门卡（评论 %s）: %w", c.ID, err)
 		}
 	}
@@ -233,7 +250,12 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 		}
 	}
 
-	req.Node = flow.Advance(req.Node, issue.Status)
+	// needs_decision 停驻（T08 接线）：节点只经用户决策动作
+	//（reqservice.Decide 按 flow.CanTransition 返回活跃节点/直达已交付）离开，
+	// 决策期间 Multica 状态推进挂起——不越权解围（infera 是单一状态源）。
+	if req.Node != flow.NodeNeedsDecision {
+		req.Node = flow.Advance(req.Node, issue.Status)
+	}
 	req.PRURL = prURL
 
 	// 自动合并清扫（含本轮新建卡的首试与历史 pending 卡的重试）。
