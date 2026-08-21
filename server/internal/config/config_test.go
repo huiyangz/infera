@@ -100,3 +100,28 @@ func TestLoadDatabaseURL(t *testing.T) {
 		require.Equal(t, "postgres://u:p@h:5432/prod", cfg.DatabaseURL)
 	})
 }
+
+// TestLoadGitHub：token 走既有 GITHUB_TOKEN；API 入口可选经 GITHUB_API_URL 覆盖
+// （GitHub Enterprise 等），默认空 → github.New 用 api.github.com 官方默认。
+func TestLoadGitHub(t *testing.T) {
+	t.Run("GITHUB_TOKEN 透传", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "ghp_test_token")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "ghp_test_token", cfg.GitHubToken)
+	})
+
+	t.Run("未设置 GITHUB_API_URL 时为空不回落", func(t *testing.T) {
+		t.Setenv("GITHUB_API_URL", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Empty(t, cfg.GitHubAPIURL, "空 = github.New 官方默认，不内置值")
+	})
+
+	t.Run("GITHUB_API_URL 显式覆盖", func(t *testing.T) {
+		t.Setenv("GITHUB_API_URL", "https://github.example.com/api/v3")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "https://github.example.com/api/v3", cfg.GitHubAPIURL)
+	})
+}
