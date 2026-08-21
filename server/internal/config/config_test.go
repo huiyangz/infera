@@ -43,6 +43,33 @@ func TestLoadAddrPortFootgun(t *testing.T) {
 	}
 }
 
+// TestLoadMultica：multica 接入三项全走环境变量、完全挂在现有 Load 机制上。
+// ServerURL 绝不内置默认值（坑4：本机默认 profile 指向云端 api.multica.ai，
+// 误配必须可检出——空值交给 multica.New 显式报错，而不是回落到一个可能错误的地址）。
+func TestLoadMultica(t *testing.T) {
+	t.Run("未设置时全空不回落默认", func(t *testing.T) {
+		t.Setenv("MULTICA_SERVER_URL", "")
+		t.Setenv("MULTICA_TOKEN", "")
+		t.Setenv("MULTICA_WORKSPACE_ID", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Empty(t, cfg.MulticaServerURL)
+		require.Empty(t, cfg.MulticaToken)
+		require.Empty(t, cfg.MulticaWorkspaceID)
+	})
+
+	t.Run("设置后原样透传", func(t *testing.T) {
+		t.Setenv("MULTICA_SERVER_URL", "http://localhost:8088")
+		t.Setenv("MULTICA_TOKEN", "mul_test-token")
+		t.Setenv("MULTICA_WORKSPACE_ID", "ws-uuid-1")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "http://localhost:8088", cfg.MulticaServerURL)
+		require.Equal(t, "mul_test-token", cfg.MulticaToken)
+		require.Equal(t, "ws-uuid-1", cfg.MulticaWorkspaceID)
+	})
+}
+
 // TestLoadDatabaseURL：开发模式缺省回落内置连接串；生产模式（INFERA_ENV=production）
 // 必须显式设置——内置默认串连上错误的库比启动失败更危险。
 func TestLoadDatabaseURL(t *testing.T) {
