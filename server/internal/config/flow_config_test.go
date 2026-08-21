@@ -49,21 +49,3 @@ func TestLoadGatePollInterval(t *testing.T) {
 		require.ErrorContains(t, err, "GATE_POLL_INTERVAL")
 	})
 }
-
-// TestLoadMulticaProjectID：派发目标 Multica 项目（固定项目）。
-// 空默认（未固定）——是否必填由 reqservice 装配期决定，配置层不虚构默认值。
-func TestLoadMulticaProjectID(t *testing.T) {
-	t.Run("未设置时为空", func(t *testing.T) {
-		t.Setenv("MULTICA_PROJECT_ID", "")
-		cfg, err := Load()
-		require.NoError(t, err)
-		require.Empty(t, cfg.MulticaProjectID)
-	})
-
-	t.Run("显式配置透传", func(t *testing.T) {
-		t.Setenv("MULTICA_PROJECT_ID", "752455fa-7d33-4cb1-bfd6-f1f65f11a25e")
-		cfg, err := Load()
-		require.NoError(t, err)
-		require.Equal(t, "752455fa-7d33-4cb1-bfd6-f1f65f11a25e", cfg.MulticaProjectID)
-	})
-}

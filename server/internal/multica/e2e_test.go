@@ -89,3 +89,82 @@ func TestE2ELocalLoop(t *testing.T) {
 	require.NotEmpty(t, artifact, "未找到包含 e2e-ok 的 agent 评论，全部评论: %+v", comments)
 	t.Logf("产物评论: %s", artifact)
 }
+
+// TestE2ESmokeProxySurface 对本地 Multica 打新增面的真冒烟（不派发 agent，
+// 秒级完成）：自建测试 issue → 代发评论 → GetIssue 读状态（uuid 与 key 两条
+// 路径）→ ListCommentsSince 增量游标不漏不重。收尾 suppress_run 置 cancelled。
+//
+// 门禁与跳过语义同 TestE2ELocalLoop；绝不在真实业务 issue 上刷评论。
+func TestE2ESmokeProxySurface(t *testing.T) {
+	token := os.Getenv("MULTICA_TOKEN")
+	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
+	if token == "" || wsID == "" {
+		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过代发面冒烟",
+			token != "", wsID != "")
+	}
+	baseURL := os.Getenv("MULTICA_SERVER_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:8088"
+	}
+	probe, err := http.NewRequest(http.MethodGet, baseURL+"/api/issue-statuses", nil)
+	require.NoError(t, err)
+	probe.Header.Set("Authorization", "Bearer "+token)
+	probe.Header.Set("X-Workspace-Id", wsID)
+	hc := &http.Client{Timeout: 2 * time.Second}
+	resp, err := hc.Do(probe)
+	if err != nil {
+		t.Skipf("本地 Multica 不可达（%s）: %v — 跳过代发面冒烟", baseURL, err)
+	}
+	_ = resp.Body.Close()
+
+	c, err := New(baseURL, token, wsID)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 1. 自建测试 issue（backlog 不触发 run；收尾 cancelled）。
+	issue, err := c.CreateIssue(ctx, CreateIssueInput{
+		Title:       "[infera-e2e] 代发面冒烟 " + time.Now().Format("0102-150405"),
+		Description: "infera multica client 新增面（代发评论/状态读取/增量游标）的自动化冒烟，测试结束自动置 cancelled，请忽略。",
+		Status:      "backlog",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, issue.ID)
+	t.Cleanup(func() {
+		if err := c.SetStatus(context.Background(), issue.ID, "cancelled", true); err != nil {
+			t.Errorf("清理失败：置 cancelled（suppress_run）: %v", err)
+		}
+	})
+
+	// 2. 代发评论（服务身份）。
+	posted, err := c.PostComment(ctx, issue.ID, "[infera-e2e-smoke] 代发评论 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, posted.ID, "201 回显应带评论 id（增量游标字段面）")
+
+	// 3. 状态读取：uuid 与 key 同端点两条路径。
+	got, err := c.GetIssue(ctx, issue.ID)
+	require.NoError(t, err)
+	require.Equal(t, issue.ID, got.ID)
+	require.Equal(t, "backlog", got.Status, "大节点映射轮询至少要拿到 status")
+	byKey, err := c.GetIssue(ctx, issue.Identifier)
+	require.NoError(t, err)
+	require.Equal(t, issue.ID, byKey.ID, "key 解析同端点（spike 实证）")
+
+	// 4. 增量游标：零值全量 → 游标推进 → 空轮不重 → 新评论不漏（含同秒边界，
+	//    两评论大概率落在同一秒内，恰好实测该路径）。
+	first, cur, err := c.ListCommentsSince(ctx, issue.ID, CommentCursor{})
+	require.NoError(t, err)
+	require.Len(t, first, 1, "新 issue 首轮全量应恰有刚代发的 1 条: %+v", first)
+	require.Equal(t, posted.ID, first[0].ID)
+
+	empty, cur2, err := c.ListCommentsSince(ctx, issue.ID, cur)
+	require.NoError(t, err)
+	require.Empty(t, empty, "无新增时游标轮必须为空（不重）")
+	require.Equal(t, cur, cur2)
+
+	_, err = c.PostComment(ctx, issue.ID, "[infera-e2e-smoke] 代发评论 2")
+	require.NoError(t, err)
+	second, _, err := c.ListCommentsSince(ctx, issue.ID, cur)
+	require.NoError(t, err)
+	require.Len(t, second, 1, "新增 1 条后游标轮必须恰好命中它（不漏不重）: %+v", second)
+	require.Contains(t, second[0].Content, "代发评论 2")
+}

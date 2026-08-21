@@ -41,6 +41,70 @@ func TestCreateIssue(t *testing.T) {
 	require.Equal(t, "INFERA-9", issue.Identifier)
 }
 
+// TestCreateIssueProjectID：创建父 issue 需要固定 project（FR-2 项目固定）。
+// project_id 是 POST /api/issues 的可选字段（spike 实证）：设置时随请求发送，
+// 未设置时必须整个省略——空值序列化成 ""/null 会覆盖服务端默认。
+func TestCreateIssueProjectID(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decodeBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"i-1","identifier":"INFERA-20","status":"todo"}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	t.Run("设置时随请求发送", func(t *testing.T) {
+		gotBody = nil
+		_, err := c.CreateIssue(context.Background(), CreateIssueInput{
+			Title: "父需求", Description: "d", Status: "backlog", ProjectID: "proj-fixed-1",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "proj-fixed-1", gotBody["project_id"])
+	})
+
+	t.Run("未设置时整个省略", func(t *testing.T) {
+		gotBody = nil
+		_, err := c.CreateIssue(context.Background(), CreateIssueInput{
+			Title: "父需求", Description: "d", Status: "backlog",
+		})
+		require.NoError(t, err)
+		_, hasProject := gotBody["project_id"]
+		require.False(t, hasProject, "空 project_id 必须省略字段（可选字段语义，spike 实证）")
+	})
+}
+
+// TestGetIssue：issue 读取（GET /api/issues/{id 或 key}——key 解析本身就是这个
+// 端点，spike 实证）。大节点映射轮询至少消费 status；新端点同样必须走统一
+// 认证与 X-Workspace-Id 注入通道（坑1）。
+func TestGetIssue(t *testing.T) {
+	var gotMethod, gotPath, gotAuth, gotWS string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotWS = r.Header.Get("X-Workspace-Id")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"i-1","identifier":"INFERA-13","status":"in_progress"}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	issue, err := c.GetIssue(context.Background(), "INFERA-13")
+	require.NoError(t, err)
+	require.Equal(t, "GET", gotMethod)
+	require.Equal(t, "/api/issues/INFERA-13", gotPath, "key 与 uuid 同走此端点")
+	require.Equal(t, "Bearer mul_t", gotAuth)
+	require.Equal(t, "ws-1", gotWS, "X-Workspace-Id 头必须随新端点注入（坑1）")
+	require.Equal(t, "i-1", issue.ID)
+	require.Equal(t, "INFERA-13", issue.Identifier)
+	require.Equal(t, "in_progress", issue.Status, "大节点映射轮询至少要拿到 status")
+}
+
 func TestAssignAgent(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any
