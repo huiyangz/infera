@@ -44,7 +44,7 @@ func TestAgentBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents`)
+	_, err = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	require.NoError(t, err)
 	st := store.NewPg(pool)
 
