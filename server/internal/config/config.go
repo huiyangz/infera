@@ -22,7 +22,11 @@ type Config struct {
 
 	// 需求流转（flow 契约，INFERA-11 T01）：闸门轮询间隔与派发目标项目。
 	GatePollInterval time.Duration // 默认 30s，上限 60s（AC-3：状态变化 2 分钟内反映）
-	MulticaProjectID string        // 派发目标 Multica 项目；空 = 未固定（reqservice 装配期决定必填性）
+	MulticaProjectID string        // 派发目标 Multica 项目（reqservice 装配期必填）
+
+	// 装配期定位（T07）：reqservice.Options 的派发指派与深链段。
+	MulticaTechLeadAgentID string // 派发指派的 Tech Lead agent id（装配期必填）
+	MulticaWorkspaceSlug   string // 深链工作区段，如 infera（装配期必填）
 
 	// Multica 接入（空 = 未接入）。三项均不内置默认值：ServerURL 尤其不能回落
 	// 到云端 api.multica.ai（本机默认 profile 指向云端是已实证的坑）——缺失交给
@@ -73,6 +77,9 @@ func Load() (Config, error) {
 
 		GatePollInterval: gatePoll,
 		MulticaProjectID: os.Getenv("MULTICA_PROJECT_ID"),
+
+		MulticaTechLeadAgentID: os.Getenv("MULTICA_TECH_LEAD_AGENT_ID"),
+		MulticaWorkspaceSlug:   os.Getenv("MULTICA_WORKSPACE_SLUG"),
 	}, nil
 }
 
