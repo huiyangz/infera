@@ -262,6 +262,33 @@ func (m *memStore) InsertCardIfNew(_ context.Context, card flow.GateCard) (bool,
 	return true, nil
 }
 
+// InsertCardIfNewAdvanceNode 镜像 PgStore：评论 id 去重 + 新建卡与节点推进
+// 同生同灭（内存版无事务，语义上等价——写序列紧邻无插点）。
+func (m *memStore) InsertCardIfNewAdvanceNode(_ context.Context, card flow.GateCard, node flow.Node) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cardErr != nil {
+		return false, m.cardErr
+	}
+	if card.CommentID != "" {
+		for _, c := range m.cards {
+			if c.RequirementID == card.RequirementID && c.CommentID == card.CommentID {
+				return false, nil
+			}
+		}
+	}
+	m.seq++
+	card.ID = fmt.Sprintf("card-%d", m.seq)
+	card.Status = flow.CardPending
+	card.CreatedAt = time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	m.cards = append(m.cards, card)
+	if r, ok := m.reqs[card.RequirementID]; ok {
+		r.Node = node
+		m.reqs[card.RequirementID] = r
+	}
+	return true, nil
+}
+
 func (m *memStore) ListPendingMergeCards(_ context.Context, requirementID string) ([]flow.GateCard, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

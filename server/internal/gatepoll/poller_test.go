@@ -498,6 +498,131 @@ func TestVerdictWithoutPRURLNoMerge(t *testing.T) {
 	st.mu.Unlock()
 }
 
+// ---------------------------------------------------------------------------
+// needs_decision 接线（INFERA-40 T08）：决策事件推进 / 去重 / 停驻。
+// ---------------------------------------------------------------------------
+
+// TestDecisionEventAdvancesToNeedsDecision：决策评论 → 决策卡落库 + 同轮把
+// 需求推进到 needs_decision（FR-1 异常节点）。入口覆盖全部活跃节点——
+// CanTransition 允许自任意活跃节点进入 needs_decision。
+func TestDecisionEventAdvancesToNeedsDecision(t *testing.T) {
+	for _, node := range []flow.Node{flow.NodeDispatched, flow.NodeInProgress, flow.NodeInReview} {
+		t.Run(string(node), func(t *testing.T) {
+			st := newMemStore()
+			mc := newFakeMultica()
+			req := newTestReq("r1", "issue-1")
+			req.Node = node
+			st.addReq(req)
+			mc.addIssue("issue-1", "in_progress")
+			mc.addComment("issue-1", "c1", "需要决策：上游 API 不稳定，重试还是跳过？", testNow)
+
+			p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
+			require.NoError(t, err)
+			require.NoError(t, p.PollOnce(context.Background()))
+
+			cards := st.cardsOf("r1")
+			require.Len(t, cards, 1)
+			require.Equal(t, flow.GateDecision, cards[0].Kind)
+			st.mu.Lock()
+			require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node, "决策事件推进 needs_decision")
+			st.mu.Unlock()
+		})
+	}
+}
+
+// TestDecisionRedeliveryDoesNotReAdvance：服务端秒级截断重发同一决策评论——
+// 去重语义与 InsertCardIfNew 一致：评论 id 去重不重复建卡，也不重复推进。
+func TestDecisionRedeliveryDoesNotReAdvance(t *testing.T) {
+	st := newMemStore()
+	mc := newFakeMultica()
+	mc.redeliverAnchor = true
+	req := newTestReq("r1", "issue-1")
+	st.addReq(req)
+	mc.addIssue("issue-1", "in_progress")
+	mc.addComment("issue-1", "c1", "需要决策：A 还是 B", testNow)
+
+	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, p.PollOnce(ctx))
+	require.NoError(t, p.PollOnce(ctx), "重发的决策评论不重复建卡")
+
+	require.Equal(t, 1, st.cardCount())
+	st.mu.Lock()
+	require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node, "重复评论不重复推进")
+	st.mu.Unlock()
+}
+
+// TestSecondDecisionCommentWhileNeedsDecision：已在 needs_decision 时又来一条
+// 新决策评论（不同评论 id）——卡照建（人要看到新的待决内容），但节点不推进：
+// CanTransition 拒绝 needs_decision→needs_decision 的自跃迁。
+func TestSecondDecisionCommentWhileNeedsDecision(t *testing.T) {
+	st := newMemStore()
+	mc := newFakeMultica()
+	req := newTestReq("r1", "issue-1")
+	st.addReq(req)
+	mc.addIssue("issue-1", "in_progress")
+	mc.addComment("issue-1", "c1", "需要决策：A", testNow)
+	mc.addComment("issue-1", "c2", "需要决策：B", testNow.Add(1*time.Minute))
+
+	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
+	require.NoError(t, err)
+	require.NoError(t, p.PollOnce(context.Background()))
+
+	cards := st.cardsOf("r1")
+	require.Len(t, cards, 2, "第二条决策评论照建卡")
+	st.mu.Lock()
+	require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node, "已在 needs_decision 不再推进")
+	st.mu.Unlock()
+}
+
+// TestNeedsDecisionParksAcrossStatusChanges：停驻语义——needs_decision 期间
+// Multica 状态推进挂起。离开该节点的唯一路径是用户决策动作
+//（reqservice.Decide 经 flow.CanTransition 返回活跃节点/直达已交付）；
+// Multica 侧状态变化不越权解围（infera 是单一状态源）。
+func TestNeedsDecisionParksAcrossStatusChanges(t *testing.T) {
+	st := newMemStore()
+	mc := newFakeMultica()
+	req := newTestReq("r1", "issue-1")
+	st.addReq(req)
+	mc.addIssue("issue-1", "in_progress")
+	mc.addComment("issue-1", "c1", "需要决策：A", testNow)
+
+	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, p.PollOnce(ctx))
+	st.mu.Lock()
+	require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node)
+	st.mu.Unlock()
+
+	for _, status := range []string{"in_review", "done"} {
+		mc.setStatus("issue-1", status)
+		require.NoError(t, p.PollOnce(ctx))
+		st.mu.Lock()
+		require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node,
+			"Multica 状态 %s 不解围 needs_decision（停驻等待用户决策）", status)
+		st.mu.Unlock()
+	}
+}
+
+// TestDecisionAdvanceStoreErrorPropagates：决策卡落库失败上抛（错误隔离
+// 语义与其余轮询写路径一致）。
+func TestDecisionAdvanceStoreErrorPropagates(t *testing.T) {
+	st := newMemStore()
+	mc := newFakeMultica()
+	req := newTestReq("r1", "issue-1")
+	st.addReq(req)
+	mc.addIssue("issue-1", "in_progress")
+	mc.addComment("issue-1", "c1", "需要决策：A", testNow)
+	st.cardErr = errors.New("db down")
+
+	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
+	require.NoError(t, err)
+	err = p.PollOnce(context.Background())
+	require.Error(t, err, "决策事件写路径失败必须上抛")
+}
+
 func TestPollOnceIsolatesRequirementErrors(t *testing.T) {
 	st := newMemStore()
 	mc := newFakeMultica()

@@ -248,16 +248,80 @@ func TestCursorPersistenceAcrossRestart(t *testing.T) {
 	require.Equal(t, 1, updateCount, "兜底二恰触发一次")
 	require.True(t, seenComments["c3"], "重启后新评论不漏")
 
-	// 节点已推进、游标已落。
+	// 节点已推进、游标已落。c3 是决策评论（T08 接线）：节点推进
+	// needs_decision 并停驻（in_review 的状态推进在决策期间挂起），但游标
+	// 照常记录最新状态。
 	got, err := s.ListInFlight(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	require.Equal(t, flow.NodeInReview, got[0].Req.Node)
+	require.Equal(t, flow.NodeNeedsDecision, got[0].Req.Node)
 	require.Equal(t, "in_review", got[0].Cursor.LastStatus)
 }
 
-func cardCountDB(t *testing.T, s *PgStore, reqID string) int {
-	t.Helper()
+// TestPgStoreInsertCardIfNewAdvanceNode（T08）：决策卡新建与节点推进同事务
+// 落库；去重语义与 InsertCardIfNew 一致——重复评论不建卡也不动节点。
+func TestPgStoreInsertCardIfNewAdvanceNode(t *testing.T) {
+	s := testPgStore(t)
+	ctx := context.Background()
+	req := newTestReq("11111111-1111-1111-1111-111111111111", "issue-1")
+	req.Node = flow.NodeInProgress
+	insertRequirement(t, s, req)
+
+	created, err := s.InsertCardIfNewAdvanceNode(ctx, flow.GateCard{
+		RequirementID: req.ID, Kind: flow.GateDecision, Payload: "需要决策：A", CommentID: "c1",
+	}, flow.NodeNeedsDecision)
+	require.NoError(t, err)
+	require.True(t, created)
+	var node string
+	require.NoError(t, s.pool.QueryRow(ctx,
+		`SELECT node FROM requirements WHERE id=$1`, req.ID).Scan(&node))
+	require.Equal(t, "needs_decision", node, "卡新建同事务推进节点")
+
+	// 同一评论重复投递：不建卡，节点不动（即使传入的目标节点不同）。
+	created, err = s.InsertCardIfNewAdvanceNode(ctx, flow.GateCard{
+		RequirementID: req.ID, Kind: flow.GateDecision, Payload: "需要决策：A", CommentID: "c1",
+	}, flow.NodeDelivered)
+	require.NoError(t, err)
+	require.False(t, created)
+	require.NoError(t, s.pool.QueryRow(ctx,
+		`SELECT node FROM requirements WHERE id=$1`, req.ID).Scan(&node))
+	require.Equal(t, "needs_decision", node, "重复评论不重复推进")
+	require.Equal(t, 1, cardCountDB(t, s, req.ID))
+}
+
+// TestPgStoreDecisionAdvanceAtomicRollback（T08）：原子性——节点写失败时
+// 已插入的卡一并回滚。用触发器让 requirements 的 UPDATE 抛错模拟节点写失败，
+// 断言卡与节点推进"同生同灭"，不存在只落卡不推进或反之的中间态。
+func TestPgStoreDecisionAdvanceAtomicRollback(t *testing.T) {
+	s := testPgStore(t)
+	ctx := context.Background()
+	req := newTestReq("11111111-1111-1111-1111-111111111111", "issue-1")
+	insertRequirement(t, s, req)
+
+	_, err := s.pool.Exec(ctx,
+		`CREATE FUNCTION t08_boom() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$ LANGUAGE plpgsql`)
+	require.NoError(t, err)
+	_, err = s.pool.Exec(ctx,
+		`CREATE TRIGGER t08_boom BEFORE UPDATE ON requirements FOR EACH ROW EXECUTE FUNCTION t08_boom()`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), `DROP TRIGGER t08_boom ON requirements`)
+		_, _ = s.pool.Exec(context.Background(), `DROP FUNCTION t08_boom()`)
+	})
+
+	_, err = s.InsertCardIfNewAdvanceNode(ctx, flow.GateCard{
+		RequirementID: req.ID, Kind: flow.GateDecision, Payload: "需要决策：A", CommentID: "c1",
+	}, flow.NodeNeedsDecision)
+	require.Error(t, err, "节点写失败必须上抛")
+
+	require.Zero(t, cardCountDB(t, s, req.ID), "已插入的卡随事务回滚——同生同灭")
+	var node string
+	require.NoError(t, s.pool.QueryRow(ctx,
+		`SELECT node FROM requirements WHERE id=$1`, req.ID).Scan(&node))
+	require.Equal(t, "dispatched", node)
+}
+
+func cardCountDB(t *testing.T, s *PgStore, reqID string) int {	t.Helper()
 	var n int64
 	require.NoError(t, s.pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM gate_cards WHERE requirement_id=$1`, reqID).Scan(&n))
