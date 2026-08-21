@@ -113,6 +113,8 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/requirements/{id}/cards/{cardID}/merge", s.handleCardMerge)
 		r.Post("/api/requirements/{id}/cards/{cardID}/rework", s.handleCardRework)
 		r.Get("/api/requirements/{id}/audit", s.handleRequirementAudit)
+		// PR 评审只读面（T09 加法扩展）：行级评审评论 + diff 概要
+		r.Get("/api/requirements/{id}/pr-review", s.handleRequirementPRReview)
 		r.Get("/api/projects/{id}/merge-policy", s.handleGetMergePolicy)
 		r.Put("/api/projects/{id}/merge-policy", s.handleSetMergePolicy)
 	})

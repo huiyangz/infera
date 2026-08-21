@@ -8,6 +8,7 @@ import type {
   CreateRequirementInput,
   MergePolicy,
   MergeResult,
+  PRReview,
   Requirement,
   RequirementDetail,
   RequirementListItem,
@@ -107,6 +108,14 @@ export async function listRequirementAudit(
   requirementId: string
 ): Promise<AuditEntry[]> {
   return json(await fetch(`/api/requirements/${requirementId}/audit`))
+}
+
+// —— PR 评审只读面（T09 加法扩展，合并卡渲染数据源） ——
+
+export async function getRequirementPRReview(
+  requirementId: string
+): Promise<PRReview> {
+  return json(await fetch(`/api/requirements/${requirementId}/pr-review`))
 }
 
 // —— 项目合并策略（FR-6） ——

@@ -130,6 +130,17 @@ type fakeGithub struct {
 		repo   string
 		number int
 	}
+
+	reviewComments []github.ReviewComment // ListReviewComments 的返回
+	diffStats      github.DiffStats       // GetDiffStats 的返回
+	listRevErr     error
+	diffErr        error
+
+	listedReviews []struct {
+		owner  string
+		repo   string
+		number int
+	}
 }
 
 func (f *fakeGithub) MergePullRequest(ctx context.Context, owner, repo string, number int, in github.MergeInput) (github.MergeResult, error) {
@@ -147,6 +158,29 @@ func (f *fakeGithub) MergePullRequest(ctx context.Context, owner, repo string, n
 		return f.result, nil
 	}
 	return github.MergeResult{Merged: true, SHA: "abc123", Message: "Pull Request successfully merged"}, nil
+}
+
+func (f *fakeGithub) ListReviewComments(ctx context.Context, owner, repo string, number int) ([]github.ReviewComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listedReviews = append(f.listedReviews, struct {
+		owner  string
+		repo   string
+		number int
+	}{owner, repo, number})
+	if f.listRevErr != nil {
+		return nil, f.listRevErr
+	}
+	return f.reviewComments, nil
+}
+
+func (f *fakeGithub) GetDiffStats(ctx context.Context, owner, repo string, number int) (github.DiffStats, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.diffErr != nil {
+		return github.DiffStats{}, f.diffErr
+	}
+	return f.diffStats, nil
 }
 
 // seedCard 直接落一张闸门卡（绕过 gatepoll），构造待处理状态。
@@ -600,6 +634,76 @@ func TestMergeWithoutPRURL(t *testing.T) {
 	_, err = env.svc.Merge(ctx, created.ID, cardID)
 	require.ErrorIs(t, err, ErrConflict)
 	require.Empty(t, env.gh.merged)
+}
+
+// testReviewAt 是评审评论的固定时间戳（断言映射保真用）。
+var testReviewAt = time.Date(2026, 8, 21, 13, 0, 0, 0, time.UTC)
+
+// TestGetPRReviewReturnsCommentsAndDiff：合并卡渲染面（FR-4/FR-7）——经
+// gh API 拉取行级评审评论与 diff 概要，只读，不落卡不落审计。
+func TestGetPRReviewReturnsCommentsAndDiff(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+	setPRURL(t, env, created.ID, "https://github.com/huiyangz/infera/pull/7")
+	env.gh.reviewComments = []github.ReviewComment{
+		{ID: 11, Path: "server/main.go", Line: 42, Side: "RIGHT", Body: "这里缺超时控制",
+			User: github.User{Login: "reviewer-bot"}, CreatedAt: testReviewAt},
+		{ID: 12, Path: "apps/web/api.ts", Line: 0, OriginalLine: 8, Side: "LEFT", Body: "删除行评论",
+			User: github.User{Login: "reviewer-bot"}, CreatedAt: testReviewAt},
+	}
+	env.gh.diffStats = github.DiffStats{Files: 4, Additions: 120, Deletions: 8, Changes: 128}
+
+	rv, err := env.svc.GetPRReview(ctx, created.ID)
+	require.NoError(t, err)
+
+	require.Equal(t, "https://github.com/huiyangz/infera/pull/7", rv.PRURL)
+	require.Len(t, rv.Comments, 2)
+	c := rv.Comments[0]
+	require.Equal(t, int64(11), c.ID)
+	require.Equal(t, "server/main.go", c.Path)
+	require.Equal(t, 42, c.Line)
+	require.Equal(t, "RIGHT", c.Side)
+	require.Equal(t, "这里缺超时控制", c.Body)
+	require.Equal(t, "reviewer-bot", c.Author)
+	require.Equal(t, testReviewAt, c.CreatedAt)
+	// 删除行评论：line=0、行号在 original_line（GitHub original_* 语义）。
+	require.Equal(t, 0, rv.Comments[1].Line)
+	require.Equal(t, 8, rv.Comments[1].OriginalLine)
+	require.Equal(t, PRDiffStats{Files: 4, Additions: 120, Deletions: 8, Changes: 128}, rv.Diff)
+
+	// 消费的是需求关联的 PR（owner/repo/number 由 URL 解析）。
+	require.Len(t, env.gh.listedReviews, 1)
+	require.Equal(t, "huiyangz", env.gh.listedReviews[0].owner)
+	require.Equal(t, "infera", env.gh.listedReviews[0].repo)
+	require.Equal(t, 7, env.gh.listedReviews[0].number)
+
+	// 只读：不落审计。
+	var n int
+	require.NoError(t, envPool(env.svc).QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE requirement_id = $1`, created.ID).Scan(&n))
+	require.Zero(t, n)
+}
+
+// TestGetPRReviewWithoutPRURL：需求尚未关联 PR（轮询器还没从评论提取到）——
+// 状态冲突，与 Merge 的无 PR 语义一致。
+func TestGetPRReviewWithoutPRURL(t *testing.T) {
+	env := newEnv(t)
+	ctx := context.Background()
+	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
+	require.NoError(t, err)
+
+	_, err = env.svc.GetPRReview(ctx, created.ID)
+	require.ErrorIs(t, err, ErrConflict)
+	require.Empty(t, env.gh.listedReviews)
+}
+
+// TestGetPRReviewUnknownRequirement：需求不存在 → NotFound。
+func TestGetPRReviewUnknownRequirement(t *testing.T) {
+	env := newEnv(t)
+	_, err := env.svc.GetPRReview(context.Background(), "0b8c4b0e-0000-4000-8000-00000000dead")
+	require.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestMergeBlockedKeepsCardPending(t *testing.T) {

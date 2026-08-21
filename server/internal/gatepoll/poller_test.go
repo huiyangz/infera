@@ -459,14 +459,14 @@ func TestAutoMergeClosedPRConverges(t *testing.T) {
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_review")
 	mc.addComment("issue-1", "c1", "verdict: PASS https://github.com/acme/app/pull/42", testNow)
-	// PR 已 closed（合并成功后进程崩溃、收口丢失的场景）。
-	gh.addPR("acme", "app", 42, "closed")
+	// PR 已 closed 且 merged=true（合并成功后进程崩溃、收口丢失的场景）。
+	gh.addPRMerged("acme", "app", 42, "closed", true)
 
 	p, err := newTestPoller(st, mc, gh, StaticPolicy(flow.MergePolicy{Mode: flow.MergeAutoPass}))
 	require.NoError(t, err)
 	require.NoError(t, p.PollOnce(context.Background()))
 
-	require.Empty(t, gh.mergeCalls, "closed PR 不再发 merge 调用")
+	require.Empty(t, gh.mergeCalls, "closed 已合并 PR 不再发 merge 调用")
 	require.Equal(t, 1, st.auditCount(), "收敛收口仍写审计")
 	st.mu.Lock()
 	require.Equal(t, flow.NodeDelivered, st.reqs["r1"].Node)
@@ -474,6 +474,34 @@ func TestAutoMergeClosedPRConverges(t *testing.T) {
 	cards := st.cardsOf("r1")
 	require.Len(t, cards, 1)
 	require.Equal(t, flow.CardResolved, cards[0].Status)
+}
+
+// TestAutoMergeClosedUnmergedPRStaysPending：closed 但 merged=false（PR 被
+// 驳回后直接关闭）不是"已了结"——自动合并不得把它按合并成功收口：
+// 卡保持待处理转人工，不误置 delivered、不误记 merge 审计。
+func TestAutoMergeClosedUnmergedPRStaysPending(t *testing.T) {
+	st := newMemStore()
+	mc := newFakeMultica()
+	gh := newFakeGitHub()
+	req := newTestReq("r1", "issue-1")
+	st.addReq(req)
+	mc.addIssue("issue-1", "in_review")
+	mc.addComment("issue-1", "c1", "verdict: PASS https://github.com/acme/app/pull/42", testNow)
+	// PASS 结论到达，但 PR 已被驳回关闭（closed 且未合并）。
+	gh.addPRMerged("acme", "app", 42, "closed", false)
+
+	p, err := newTestPoller(st, mc, gh, StaticPolicy(flow.MergePolicy{Mode: flow.MergeAutoPass}))
+	require.NoError(t, err)
+	require.NoError(t, p.PollOnce(context.Background()))
+
+	require.Empty(t, gh.mergeCalls, "closed PR 不发 merge 调用")
+	require.Equal(t, 0, st.auditCount(), "被驳回的 PR 不是合并成功，不写 merge 审计")
+	st.mu.Lock()
+	require.Equal(t, flow.NodeInReview, st.reqs["r1"].Node, "被驳回的 PR 不误置已交付")
+	st.mu.Unlock()
+	cards := st.cardsOf("r1")
+	require.Len(t, cards, 1)
+	require.Equal(t, flow.CardPending, cards[0].Status, "卡保持待处理转人工")
 }
 
 func TestVerdictWithoutPRURLNoMerge(t *testing.T) {
@@ -695,30 +723,5 @@ func TestPollerLifecycle(t *testing.T) {
 	p.Stop() // 幂等
 }
 
-func TestParsePRRef(t *testing.T) {
-	cases := []struct {
-		url       string
-		wantOK    bool
-		wantOwner string
-		wantRepo  string
-		wantNum   int
-	}{
-		{"https://github.com/acme/app/pull/42", true, "acme", "app", 42},
-		{"https://github.com/huiyangz/infera/pull/7", true, "huiyangz", "infera", 7},
-		{"https://gitlab.com/acme/app/pull/42", false, "", "", 0},
-		{"https://github.com/acme/app/pulls/42", false, "", "", 0},
-		{"https://github.com/acme/app/pull/abc", false, "", "", 0},
-		{"https://github.com/acme/pull/42", false, "", "", 0},
-		{"", false, "", "", 0},
-		{"https://github.com/acme/app/pull/0", false, "", "", 0},
-	}
-	for _, tc := range cases {
-		owner, repo, num, ok := parsePRRef(tc.url)
-		require.Equal(t, tc.wantOK, ok, "url=%q", tc.url)
-		if tc.wantOK {
-			require.Equal(t, tc.wantOwner, owner, "url=%q", tc.url)
-			require.Equal(t, tc.wantRepo, repo, "url=%q", tc.url)
-			require.Equal(t, tc.wantNum, num, "url=%q", tc.url)
-		}
-	}
-}
+// TestParsePRRef 已随私有实现删除迁往 flow 包（flow.TestParsePRRef，
+// 用例为其超集）——PR URL 解析单源化（flow.ParsePRRef），本包只消费。

@@ -4,11 +4,12 @@ import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import {
   approveCard,
   decideCard,
+  getRequirementPRReview,
   mergeCard,
   rejectCard,
   reworkCard,
 } from './api'
-import type { GateCard, Requirement } from './types'
+import type { GateCard, PRReview, Requirement } from './types'
 import {
   ApprovalCard,
   DecisionCard,
@@ -22,6 +23,7 @@ vi.mock('./api', () => ({
   decideCard: vi.fn().mockResolvedValue({ ok: true }),
   mergeCard: vi.fn().mockResolvedValue({ merged: true, sha: 'abc', message: '' }),
   reworkCard: vi.fn().mockResolvedValue({ ok: true }),
+  getRequirementPRReview: vi.fn(),
 }))
 
 const REQ: Requirement = {
@@ -149,24 +151,95 @@ describe('DecisionCard 决策卡', () => {
 describe('MergeCard 合并卡', () => {
   const PAYLOAD = [
     'verdict: PASS',
-    '评审结论：整体符合规格。',
-    '- src/a.ts:12 命名建议调整',
-    'diff 概要：+120 -8，涉及 4 个文件',
+    '评审结论：整体符合规格，行级评论见下方。',
   ].join('\n')
 
-  it('渲染 verdict 结论与行级评论/diff 概要，深链指向 Multica issue 与 PR（新窗口）', async () => {
+  // 评审面 mock：字段值刻意区别于 payload 文本，断言的是真实渲染而非正文匹配。
+  const REVIEW: PRReview = {
+    pr_url: 'https://github.com/acme/repo/pull/7',
+    comments: [
+      {
+        id: 11,
+        path: 'server/internal/api/requirements.go',
+        line: 88,
+        original_line: 88,
+        side: 'RIGHT',
+        body: '建议补充鉴权校验的边界用例',
+        author: 'reviewer-ai',
+        in_reply_to_id: 0,
+        created_at: '2026-08-21T03:00:00Z',
+      },
+      {
+        id: 12,
+        path: 'apps/web/src/features/requirements/gate-cards.tsx',
+        line: 0,
+        original_line: 201,
+        side: 'LEFT',
+        body: '删除行上的评论，行号取 original_line',
+        author: 'reviewer-lead',
+        in_reply_to_id: 0,
+        created_at: '2026-08-21T03:01:00Z',
+      },
+    ],
+    diff: { files: 3, additions: 87, deletions: 15, changes: 102 },
+  }
+
+  it('渲染 verdict、行级评审评论（path:line/side/author/body）与 diff 概要（文件数与 +/- 行数），深链指向 Multica issue 与 PR（新窗口）', async () => {
+    vi.mocked(getRequirementPRReview).mockResolvedValue(REVIEW)
     const screen = await mount(
       <MergeCard card={card({ kind: 'merge', payload: PAYLOAD })} requirement={REQ} />
     )
     await expect.element(screen.getByText('PASS', { exact: true })).toBeInTheDocument()
+    // 真实渲染的行级评论（非 payload 正文）
     await expect
-      .element(screen.getByText(/src\/a\.ts:12/))
+      .element(screen.getByText(/server\/internal\/api\/requirements\.go/))
       .toBeInTheDocument()
+    await expect
+      .element(screen.getByText(/gate-cards\.tsx/))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('建议补充鉴权校验的边界用例'))
+      .toBeInTheDocument()
+    await expect.element(screen.getByText('reviewer-ai', { exact: true })).toBeInTheDocument()
+    // 删除行评论行号取 original_line（line=0）
+    await expect.element(screen.getByText(/:201/)).toBeInTheDocument()
+    // diff 概要：文件数与 +/- 行数
+    await expect
+      .element(screen.getByText(/3 个文件/))
+      .toBeInTheDocument()
+    await expect.element(screen.getByText(/\+87/)).toBeInTheDocument()
+    await expect.element(screen.getByText(/-15/)).toBeInTheDocument()
     const issue = screen.getByRole('link', { name: '查看完整时间线' })
     expect((await issue.element()).getAttribute('href')).toBe(REQ.multica_issue_url)
     expect((await issue.element()).getAttribute('target')).toBe('_blank')
     const pr = screen.getByRole('link', { name: /PR/ })
     expect((await pr.element()).getAttribute('href')).toBe(REQ.pr_url)
+    expect(getRequirementPRReview).toHaveBeenCalledWith('r1')
+  })
+
+  it('需求未关联 PR（pr_url 为空）时不请求评审面，verdict 与动作照常', async () => {
+    const screen = await mount(
+      <MergeCard
+        card={card({ kind: 'merge', payload: PAYLOAD })}
+        requirement={{ ...REQ, pr_url: '' }}
+      />
+    )
+    await expect.element(screen.getByText('PASS', { exact: true })).toBeInTheDocument()
+    expect(getRequirementPRReview).not.toHaveBeenCalled()
+  })
+
+  it('评审面加载失败不拖垮卡片：verdict 与动作照常，不渲染评审区', async () => {
+    vi.mocked(getRequirementPRReview).mockRejectedValue(new Error('上游服务暂时不可用'))
+    const screen = await mount(
+      <MergeCard card={card({ kind: 'merge', payload: PAYLOAD })} requirement={REQ} />
+    )
+    await expect.element(screen.getByText('PASS', { exact: true })).toBeInTheDocument()
+    await vi.waitFor(() => {
+      // 查询已失败（retry: false），评审区不出现
+      expect(getRequirementPRReview).toHaveBeenCalled()
+    })
+    expect(screen.container.querySelector('[data-pr-review]')).toBeNull()
+    await expect.element(screen.getByText(/评审结论/)).toBeInTheDocument()
   })
 
   it('FAIL verdict 呈现未通过；合并回调 mergeCard，返工需反馈后回调 reworkCard', async () => {

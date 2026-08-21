@@ -38,6 +38,14 @@ Multica 父 issue 状态推进；infera 是状态源，Multica 只承载执行�
 兜底规则二：父 issue 跃入 `in_review` 但从未见过 verdict 评论 → 弹中性
 「有新动态」卡（防漏合并闸门）。
 
+## 合并卡的评审渲染（GitHub 隐身，FR-4/FR-7）
+
+合并卡除 verdict 正文外，还渲染 PR 的行级评审评论（path/line/side/author/
+body）与 diff 概要（文件数与 +/- 行数），数据经只读端点
+`GET /api/requirements/{id}/pr-review` 由后端经 gh API 拉取（T09 加法扩展，
+不改既有路由形状）。端点为纯读：不落卡、不落审计、不动大节点；需求缺 PR
+关联返回 409，github 故障 502，未装配需求服务 503——均沿用既有错误码约定。
+
 ## 配置项
 
 `.env`（模板见 [.env.example](../.env.example)）。**六键全部留空 = 未接入**
@@ -94,7 +102,9 @@ GitHub PR 深链（`pr_url`）。默认不打扰，排查时一键直达完整�
   不悄悄抹掉轨迹）。
 - **重启恢复**：轮询游标（增量评论位置、上次状态、是否见过 verdict）持久化在
   `requirements` 行上，重启续读不重放；自动合并成功后的崩溃窗口由「pending
-  合并卡每轮清扫 + PR 已 closed 收敛」兜住。
+  合并卡每轮清扫 + PR 已 closed 且 merged=true 收敛」兜住。closed 但未合并
+  （被驳回关闭）不是已了结：卡保持待处理转人工，不误置已交付、不误记
+  merge 审计。
 - **数据表**：`requirements` / `gate_cards` / `project_settings`（migration
   0007）；`audit_log` 见上。
 

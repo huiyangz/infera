@@ -6,6 +6,7 @@ import {
   decideCard,
   getMergePolicy,
   getRequirement,
+  getRequirementPRReview,
   listRequirementAudit,
   listRequirements,
   mergeCard,
@@ -164,6 +165,34 @@ describe('requirements API client（契约冻结于 T05）', () => {
       diff_line_threshold: 0,
     })
     expect(put.mode).toBe('manual')
+  })
+
+  it('getRequirementPRReview GET /api/requirements/{id}/pr-review，直传行级评论与 diff 概要', async () => {
+    const { calls } = stubFetch({
+      body: {
+        pr_url: 'https://github.com/acme/repo/pull/7',
+        comments: [
+          {
+            id: 11,
+            path: 'server/main.go',
+            line: 42,
+            original_line: 42,
+            side: 'RIGHT',
+            body: '这里缺超时控制',
+            author: 'reviewer-bot',
+            in_reply_to_id: 0,
+            created_at: '2026-08-21T03:00:00Z',
+          },
+        ],
+        diff: { files: 4, additions: 120, deletions: 8, changes: 128 },
+      },
+    })
+    const out = await getRequirementPRReview('r1')
+    expect(calls[0]).toEqual({ url: '/api/requirements/r1/pr-review', init: undefined })
+    expect(out.pr_url).toBe('https://github.com/acme/repo/pull/7')
+    expect(out.comments[0]?.path).toBe('server/main.go')
+    expect(out.comments[0]?.author).toBe('reviewer-bot')
+    expect(out.diff).toEqual({ files: 4, additions: 120, deletions: 8, changes: 128 })
   })
 
   it('非 2xx 抛 ApiError 且透传后端 error 文案', async () => {

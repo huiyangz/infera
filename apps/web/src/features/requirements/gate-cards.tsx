@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ExternalLink, MessageSquareOff, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -13,8 +13,15 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
-import { approveCard, decideCard, mergeCard, rejectCard, reworkCard } from './api'
-import type { GateCard, Requirement } from './types'
+import {
+  approveCard,
+  decideCard,
+  getRequirementPRReview,
+  mergeCard,
+  rejectCard,
+  reworkCard,
+} from './api'
+import type { GateCard, PRReview, Requirement } from './types'
 
 /** 卡片动作成功后失效需求详情与列表（轮询外的一致性兜底） */
 function useInvalidateCards(requirementId: string) {
@@ -221,6 +228,45 @@ export function DecisionCard({
 /** verdict 结论词提取（与 flow.ExtractVerdict 同语义：全词、首个命中） */
 const VERDICT_RE = /\b(PASS|FAIL)\b/
 
+/**
+ * PR 评审区（FR-4/FR-7）：行级评审评论（path:line / side / author / body）
+ * 与 diff 概要（文件数与 +/- 行数），数据来自只读端点 pr-review——用户
+ * 不访问 GitHub 页面。删除行评论 line=0，行号取 original_line。
+ */
+function PRReviewSection({ review }: { review: PRReview }) {
+  return (
+    <div data-pr-review className='grid gap-2'>
+      <div className='text-xs tabular-nums text-muted-foreground'>
+        <span className='font-medium'>diff 概要</span>
+        <span className='ml-2'>
+          {review.diff.files} 个文件 · +{review.diff.additions} / -
+          {review.diff.deletions}
+        </span>
+      </div>
+      {review.comments.length === 0 ? (
+        <p className='text-xs text-muted-foreground'>无行级评审评论</p>
+      ) : (
+        <ul className='divide-y rounded-lg border'>
+          {review.comments.map((c) => (
+            <li key={c.id} className='grid gap-1 px-3 py-2.5'>
+              <div className='flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs text-muted-foreground'>
+                <span className='font-mono'>
+                  {c.path}:{c.line || c.original_line}
+                </span>
+                <span>{c.side === 'LEFT' ? '删除行' : '新增行'}</span>
+                <span>{c.author}</span>
+              </div>
+              <p className='text-sm leading-relaxed whitespace-pre-wrap'>
+                {c.body}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 /** 合并卡（FR-5）：verdict 结论 + 行级评审评论与 diff 概要 + 合并 / 拒绝并返工。 */
 export function MergeCard({
   card,
@@ -232,6 +278,13 @@ export function MergeCard({
   const invalidate = useInvalidateCards(requirement.id)
   const [feedback, setFeedback] = useState('')
   const verdict = card.payload.match(VERDICT_RE)?.[1]
+  // 评审面只读拉取：未关联 PR 时不请求；失败不拖垮卡片（verdict 照常呈现）。
+  const { data: review } = useQuery({
+    queryKey: ['requirement-pr-review', requirement.id],
+    queryFn: () => getRequirementPRReview(requirement.id),
+    enabled: requirement.pr_url !== '',
+    retry: false,
+  })
 
   const merge = useMutation({
     mutationFn: () => mergeCard(requirement.id, card.id),
@@ -302,6 +355,7 @@ export function MergeCard({
               : '结论：未识别（按正文人工裁定）'}
         </span>
       </div>
+      {review && <PRReviewSection review={review} />}
       <Textarea
         aria-label='返工反馈'
         placeholder='返工反馈：说明拒绝合并的原因…'

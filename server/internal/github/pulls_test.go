@@ -65,6 +65,36 @@ func TestGetPullRequest(t *testing.T) {
 	require.True(t, *pr.Mergeable)
 }
 
+// TestGetPullRequestDecodesMerged：merged 解码。GitHub 的 state 只有
+// open/closed 两值——"closed" 既可能是合并成功也可能是被驳回关闭，
+// 合并与否必须单看 merged。closed+merged=false 是驳回形态，调用方
+// （gatepoll 自动合并收口）据此区分"已了结"与"转人工"。
+func TestGetPullRequestDecodesMerged(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"closed 且已合并", `{"number":7,"state":"closed","merged":true}`, true},
+		{"closed 未合并（驳回）", `{"number":7,"state":"closed","merged":false}`, false},
+		{"open 时缺省为 false", `{"number":7,"state":"open"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer ts.Close()
+			c, err := New("ghp_t", WithBaseURL(ts.URL))
+			require.NoError(t, err)
+			pr, err := c.GetPullRequest(context.Background(), "o", "r", 7)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, pr.Merged)
+		})
+	}
+}
+
 // TestGetPullRequestMergeableNull（坑）：mergeable 是懒计算字段——PR 刚创建或
 // GitHub 尚未算完时返回 null，语义是"未知"，不是 false。必须用 *bool 保留
 // 三态，调用方（合并卡）据此决定重查而不是误判冲突。

@@ -17,6 +17,10 @@ type PullRequest struct {
 	Title   string `json:"title"`
 	Draft   bool   `json:"draft"`
 	HTMLURL string `json:"html_url"` // 深链逃生口（FR-8）
+	// Merged 报告 PR 是否已被合并进 base。state 只有 open/closed 两值——
+	// closed 既可能是合并成功也可能是被驳回关闭，收口判定必须单看本字段
+	//（closed+merged=false 是驳回形态）。
+	Merged bool `json:"merged"`
 
 	// Mergeable 是懒计算字段：GitHub 未算完时为 null（nil），语义是"未知"
 	// 而非"不可合并"——调用方应重查而不是误判冲突。
