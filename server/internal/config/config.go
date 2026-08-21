@@ -14,6 +14,7 @@ type Config struct {
 	Password     string // 单租户密码门
 	MCPToken     string // MCP 服务专用 token（空 = /mcp 端点禁用）
 	GitHubToken  string
+	GitHubAPIURL string // GitHub API 入口覆盖（空 = 官方 api.github.com；GH Enterprise 用）
 	AgentImage   string // agent 容器镜像
 	AgentCmd     string // agent 命令（可替换：claude / pi / ...）
 	RepoWorkRoot string // workdir 根目录
@@ -60,6 +61,7 @@ func Load() (Config, error) {
 		Password:     os.Getenv("INFERA_PASSWORD"),
 		MCPToken:     os.Getenv("INFERA_MCP_TOKEN"),
 		GitHubToken:  os.Getenv("GITHUB_TOKEN"),
+		GitHubAPIURL: os.Getenv("GITHUB_API_URL"),
 		AgentImage:   getenv("AGENT_IMAGE", "infera-agent"),
 		AgentCmd:     getenv("AGENT_CMD", "claude"),
 		RepoWorkRoot: getenv("REPO_WORK_ROOT", "/tmp/infera-workdirs"),
