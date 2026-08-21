@@ -2,6 +2,7 @@ package flow
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -110,6 +111,33 @@ func ExtractPRURL(body string) string {
 		return ""
 	}
 	return m[0]
+}
+
+// PRRef 是规范形 PR URL 解析出的 GitHub PR 定位（owner/repo/number）。
+type PRRef struct {
+	Owner  string
+	Repo   string
+	Number int
+}
+
+// prRefRe 是解析用的严格全串形（提取用的 prURLRe 不锚定，两者同字符集）。
+var prRefRe = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)$`)
+
+// ParsePRRef 把规范形 PR URL（ExtractPRURL 的产物形态）解析为 owner / repo /
+// number。严格全串匹配：尾随路径/锚点、非 https、非纯数字 PR 号一律不认
+// （PR 号 0 也不是合法 PR，GitHub 从 1 起）——数据来自本服务落库的规范提取，
+// 走歪说明状态异常，由调用方按各自语义处理（reqservice 报状态冲突，
+// gatepoll 防御性跳过）。这是 PR URL 解析的单一入口，下游禁止平行另造。
+func ParsePRRef(u string) (PRRef, bool) {
+	m := prRefRe.FindStringSubmatch(u)
+	if m == nil {
+		return PRRef{}, false
+	}
+	n, err := strconv.Atoi(m[3])
+	if err != nil || n <= 0 {
+		return PRRef{}, false
+	}
+	return PRRef{Owner: m[1], Repo: m[2], Number: n}, true
 }
 
 // InReviewWithoutVerdict 是兜底规则二：状态跃迁进入 in_review 但该需求

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +32,10 @@ type fakeReq struct {
 	gotAudit     string
 	gotPolicySet string
 	gotPolicyGet string
+	gotPRReview  string
 	policy       flow.MergePolicy
 	mergeRes     github.MergeResult
+	prReview     *reqservice.PRReview
 }
 
 type feedbackCall struct {
@@ -120,6 +123,14 @@ func (f *fakeReq) SetMergePolicy(ctx context.Context, projectID string, p flow.M
 	return p, nil
 }
 
+func (f *fakeReq) GetPRReview(ctx context.Context, requirementID string) (*reqservice.PRReview, error) {
+	f.gotPRReview = requirementID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.prReview, nil
+}
+
 // newReqServer 构造注入 fakeReq 的登录态测试服务器（沿用 newServer/login 模式）。
 func newReqServer(t *testing.T) (*httptest.Server, *fakeReq, *http.Client) {
 	st := store.NewMemory()
@@ -174,6 +185,7 @@ func TestRequirementsRoutesRequireAuth(t *testing.T) {
 		{http.MethodPost, "/api/requirements/" + testReqID + "/cards/" + testCardID + "/merge"},
 		{http.MethodPost, "/api/requirements/" + testReqID + "/cards/" + testCardID + "/rework"},
 		{http.MethodGet, "/api/requirements/" + testReqID + "/audit"},
+		{http.MethodGet, "/api/requirements/" + testReqID + "/pr-review"},
 		{http.MethodGet, "/api/projects/" + testProjID + "/merge-policy"},
 		{http.MethodPut, "/api/projects/" + testProjID + "/merge-policy"},
 	}
@@ -323,6 +335,41 @@ func TestAuditEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, "[]\n", bodyStr)
 	require.Equal(t, testReqID, fake.gotAudit)
+}
+
+// TestPRReviewEndpoint：PR 行级评审评论 + diff 概要只读端点（T09 加法
+// 扩展，合并卡渲染数据源）。沿用既有错误码约定：缺 PR 关联 → 409。
+func TestPRReviewEndpoint(t *testing.T) {
+	ts, fake, c := newReqServer(t)
+	fake.prReview = &reqservice.PRReview{
+		PRURL: "https://github.com/huiyangz/infera/pull/7",
+		Comments: []reqservice.PRReviewComment{
+			{ID: 11, Path: "server/main.go", Line: 42, Side: "RIGHT",
+				Body: "这里缺超时控制", Author: "reviewer-bot"},
+		},
+		Diff: reqservice.PRDiffStats{Files: 4, Additions: 120, Deletions: 8, Changes: 128},
+	}
+	path := ts.URL + "/api/requirements/" + testReqID + "/pr-review"
+
+	code, bodyStr := doJSON(t, c, http.MethodGet, path, "")
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, testReqID, fake.gotPRReview)
+	require.Contains(t, bodyStr, `"pr_url":"https://github.com/huiyangz/infera/pull/7"`)
+	require.Contains(t, bodyStr, "server/main.go")
+	require.Contains(t, bodyStr, "reviewer-bot")
+	require.Contains(t, bodyStr, `"files":4`)
+	require.Contains(t, bodyStr, `"additions":120`)
+	require.Contains(t, bodyStr, `"deletions":8`)
+
+	// 需求尚未关联 PR → 冲突（与 merge 端点的无 PR 语义一致）
+	fake.err = reqservice.ErrConflict
+	code, _ = doJSON(t, c, http.MethodGet, path, "")
+	require.Equal(t, http.StatusConflict, code)
+
+	// 上游 github 故障 → 502（沿用 writeReqErr 默认归因）
+	fake.err = errors.New("github: 502")
+	code, _ = doJSON(t, c, http.MethodGet, path, "")
+	require.Equal(t, http.StatusBadGateway, code)
 }
 
 func TestMergePolicyEndpoints(t *testing.T) {

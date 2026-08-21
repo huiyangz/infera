@@ -90,6 +90,36 @@ export interface MergeResult {
   message: string
 }
 
+/** PR 行级评审评论（GET pr-review 的元素；删除行评论 line=0、行号在 original_line） */
+export interface PRReviewComment {
+  id: number
+  path: string
+  line: number
+  original_line: number
+  /** RIGHT = 新增行，LEFT = 删除行 */
+  side: 'RIGHT' | 'LEFT'
+  body: string
+  author: string
+  /** 0 = 顶层评论，非 0 = 回复 */
+  in_reply_to_id: number
+  created_at: string
+}
+
+/** PR diff 概要（文件数与 +/- 行数） */
+export interface PRDiffStats {
+  files: number
+  additions: number
+  deletions: number
+  changes: number
+}
+
+/** PR 评审面（GET /api/requirements/{id}/pr-review，T09 加法扩展）：行级评论 + diff 概要 */
+export interface PRReview {
+  pr_url: string
+  comments: PRReviewComment[]
+  diff: PRDiffStats
+}
+
 /** 发起需求输入面（title 必填，服务端 400 校验） */
 export interface CreateRequirementInput {
   title: string

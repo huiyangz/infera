@@ -134,6 +134,38 @@ func TestExtractPRURL(t *testing.T) {
 	}
 }
 
+// TestParsePRRef：规范形 PR URL（ExtractPRURL 的产物形态）→ owner/repo/number。
+// 这是解析的单一入口（此前 reqservice 与 gatepoll 各持一份私有同构实现，
+// 违反本包"禁止平行另造入口"的冻结纪律）。
+// 冻结：严格全串匹配——尾随路径/锚点、非 https、非纯数字 PR 号一律不认；
+// PR 号 0 不是合法 PR（GitHub 从 1 起）。
+func TestParsePRRef(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want PRRef
+		ok   bool
+	}{
+		{"规范形", "https://github.com/huiyangz/infera/pull/7", PRRef{Owner: "huiyangz", Repo: "infera", Number: 7}, true},
+		{"owner/repo 含点划线", "https://github.com/foo.bar/baz-qux/pull/128", PRRef{Owner: "foo.bar", Repo: "baz-qux", Number: 128}, true},
+		{"尾随文件路径", "https://github.com/foo/bar/pull/9/files#diff-abc", PRRef{}, false},
+		{"http 不认", "http://github.com/foo/bar/pull/3", PRRef{}, false},
+		{"PR 号 0 非法", "https://github.com/foo/bar/pull/0", PRRef{}, false},
+		{"PR 号非纯数字", "https://github.com/foo/bar/pull/x1", PRRef{}, false},
+		{"缺段", "https://github.com/foo/pull/3", PRRef{}, false},
+		{"空串", "", PRRef{}, false},
+		{"纯文本", "详见时间线", PRRef{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParsePRRef(tc.url)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParsePRRef(%q) = (%+v, %v), want (%+v, %v)", tc.url, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 // TestParseCommentPRURL：任意类型事件的正文里出现 PR URL 都随事件携带
 // （审批/决策评论里贴 PR 链接同样有效，供深链与合并卡引用）。
 func TestParseCommentPRURL(t *testing.T) {

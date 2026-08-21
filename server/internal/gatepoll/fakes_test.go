@@ -130,11 +130,18 @@ func prKey(owner, repo string, number int) string {
 }
 
 func (f *fakeGitHub) addPR(owner, repo string, number int, state string) {
+	// 缺省 merged=false：open PR 与"被驳回关闭"的 PR 都未合并。
+	f.addPRMerged(owner, repo, number, state, false)
+}
+
+// addPRMerged 显式指定 merged（closed+merged=true 是"已合并"形态，
+// closed+merged=false 是"被驳回关闭"形态——state 单看不出来）。
+func (f *fakeGitHub) addPRMerged(owner, repo string, number int, state string, merged bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	open := state == "open"
 	f.prs[prKey(owner, repo, number)] = github.PullRequest{
-		Number: number, State: state, Title: "pr", HTMLURL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, number),
+		Number: number, State: state, Merged: merged, Title: "pr", HTMLURL: fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, number),
 		Mergeable: &open, MergeableState: state,
 	}
 }
@@ -185,6 +192,7 @@ func (f *fakeGitHub) MergePullRequest(_ context.Context, owner, repo string, num
 	f.mergedPRs[key] = true
 	pr := f.prs[key]
 	pr.State = "closed"
+	pr.Merged = true // 镜像 GitHub：合并成功后 state=closed 且 merged=true
 	f.prs[key] = pr
 	return github.MergeResult{Merged: true, SHA: "deadbeef", Message: "merged"}, nil
 }

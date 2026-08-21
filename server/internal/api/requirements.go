@@ -28,6 +28,7 @@ type RequirementsAPI interface {
 	Merge(ctx context.Context, requirementID, cardID string) (github.MergeResult, error)
 	Rework(ctx context.Context, requirementID, cardID, feedback string) error
 	ListAudit(ctx context.Context, requirementID string) ([]reqservice.AuditEntry, error)
+	GetPRReview(ctx context.Context, requirementID string) (*reqservice.PRReview, error)
 	GetMergePolicy(ctx context.Context, projectID string) (flow.MergePolicy, error)
 	SetMergePolicy(ctx context.Context, projectID string, p flow.MergePolicy) (flow.MergePolicy, error)
 }
@@ -250,6 +251,24 @@ func (s *Server) handleRequirementAudit(w http.ResponseWriter, r *http.Request) 
 		entries = []reqservice.AuditEntry{}
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleRequirementPRReview：PR 行级评审评论 + diff 概要只读端点（T09
+// 加法扩展，合并卡渲染数据源，FR-4/FR-7）。沿用既有鉴权与错误码约定。
+func (s *Server) handleRequirementPRReview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireReq(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	rv, err := s.req.GetPRReview(r.Context(), id)
+	if err != nil {
+		writeReqErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rv)
 }
 
 func (s *Server) handleGetMergePolicy(w http.ResponseWriter, r *http.Request) {

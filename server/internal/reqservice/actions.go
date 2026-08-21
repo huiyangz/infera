@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/tokfinity/infera/internal/flow"
@@ -181,30 +179,16 @@ func (s *Service) resolveCardWithAudit(ctx context.Context, requirementID, cardI
 // 与鉴权、网络等硬错误区分，API 层给"稍后重试"文案而不是"系统故障"。
 var ErrMergeBlocked = errors.New("reqservice: PR 当前不可合并")
 
-// prRef 是从 requirement.pr_url 解析出的 GitHub PR 定位。
-type prRef struct {
-	Owner  string
-	Repo   string
-	Number int
-}
-
-// parsePRRef 解析规范形 PR URL（https://github.com/{owner}/{repo}/pull/{n}，
-// 与 flow.ExtractPRURL 提取的形态一致）。非规范形按冲突处理——数据来自
-// 本服务落库的规范提取，走歪说明状态异常。
-func parsePRRef(raw string) (prRef, error) {
-	m := prURLRe.FindStringSubmatch(raw)
-	if m == nil {
-		return prRef{}, fmt.Errorf("%w: PR 引用 %q 不是规范 github PR URL", ErrConflict, raw)
+// parsePRRef 把 requirement.pr_url 解析为 GitHub PR 定位：解析单源在
+// flow.ParsePRRef，这里只补错误语义。非规范形按冲突处理——数据来自本
+// 服务落库的规范提取，走歪说明状态异常。
+func parsePRRef(raw string) (flow.PRRef, error) {
+	ref, ok := flow.ParsePRRef(raw)
+	if !ok {
+		return flow.PRRef{}, fmt.Errorf("%w: PR 引用 %q 不是规范 github PR URL", ErrConflict, raw)
 	}
-	n, err := strconv.Atoi(m[3])
-	if err != nil {
-		return prRef{}, fmt.Errorf("%w: PR 号非法 %q", ErrConflict, m[3])
-	}
-	return prRef{Owner: m[1], Repo: m[2], Number: n}, nil
+	return ref, nil
 }
-
-// prURLRe 与 flow 包的提取正则同构（flow 冻结不 import 正则导出，这里只解析）。
-var prURLRe = regexp.MustCompile(`^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/([0-9]+)$`)
 
 // Merge 终审合并：经 gh API 合并 requirement 关联的 PR → 处理卡 + 审计。
 // 不推进大节点——单一状态源纪律：节点由轮询器按 Multica 父 issue 状态推进

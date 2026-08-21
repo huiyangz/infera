@@ -25,9 +25,11 @@ type MulticaClient interface {
 	PostComment(ctx context.Context, issueID, content string) (multica.Comment, error)
 }
 
-// GitHubClient 是合并动作对 github client 的窄接口。
+// GitHubClient 是合并动作与 PR 评审读取对 github client 的窄接口。
 type GitHubClient interface {
 	MergePullRequest(ctx context.Context, owner, repo string, number int, in github.MergeInput) (github.MergeResult, error)
+	ListReviewComments(ctx context.Context, owner, repo string, number int) ([]github.ReviewComment, error)
+	GetDiffStats(ctx context.Context, owner, repo string, number int) (github.DiffStats, error)
 }
 
 // Options 是装配期输入：派发目标与深链拼装所需的 Multica 侧定位。

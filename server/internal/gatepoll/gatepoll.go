@@ -11,8 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -276,7 +274,8 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 //   - threshold：diff 行数 ≤ 阈值自动合并，超过弹卡留人。
 //
 // 每轮都扫：可重试合并阻塞（IsMergeBlocked，如 CI 未过）下一轮自然重试；
-// PR 已 closed（合并成功后收口丢失的崩溃窗口）直接收敛收口。失败路径一律
+// PR 已 closed 且 merged=true（合并成功后收口丢失的崩溃窗口）直接收敛收口；
+// closed 未合并（被驳回）不是已了结，卡保持 pending 转人工。失败路径一律
 // 保持卡 pending——卡本身就是人合并的逃生口。
 func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur flow.PollCursor) error {
 	policy, err := p.policy.MergePolicy(ctx, *req)
@@ -294,7 +293,7 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 		return nil
 	}
 
-	owner, repo, num, prOK := parsePRRef(req.PRURL)
+	ref, prOK := flow.ParsePRRef(req.PRURL)
 	if req.PRURL != "" && !prOK {
 		// flow.ExtractPRURL 产物不会走到这；存储被外改时的防御。
 		log.Printf("gatepoll: 需求 %s 的 PR 引用 %q 无法解析，自动合并跳过", req.MulticaIssueKey, req.PRURL)
@@ -310,7 +309,7 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 			return nil
 		}
 		if policy.Mode == flow.MergeThreshold {
-			stats, err := p.gh.GetDiffStats(ctx, owner, repo, num)
+			stats, err := p.gh.GetDiffStats(ctx, ref.Owner, ref.Repo, ref.Number)
 			if err != nil {
 				log.Printf("gatepoll: 需求 %s 拉 diff 统计: %v（下轮重试）", req.MulticaIssueKey, err)
 				continue
@@ -319,16 +318,22 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 				continue // 超阈值：卡留人
 			}
 		}
-		pr, err := p.gh.GetPullRequest(ctx, owner, repo, num)
+		pr, err := p.gh.GetPullRequest(ctx, ref.Owner, ref.Repo, ref.Number)
 		if err != nil {
 			log.Printf("gatepoll: 需求 %s 读 PR: %v（下轮重试）", req.MulticaIssueKey, err)
 			continue
 		}
 		if pr.State != "open" {
-			// closed：合并成功后收口丢失的收敛路径——视为已了结。
-			return p.completeMerge(ctx, card.ID, req, cur, policy, "PR 已关闭，收敛收口")
+			if !pr.Merged {
+				// closed 未合并（被驳回后关闭）：不是已了结——卡保持待处理
+				// 转人工，不误置 delivered、不误记 merge 审计。
+				log.Printf("gatepoll: 需求 %s 的 PR 已关闭且未合并（疑似被驳回），PASS 合并卡转人工处理", req.MulticaIssueKey)
+				continue
+			}
+			// closed 且已合并：合并成功后收口丢失的收敛路径——视为已了结。
+			return p.completeMerge(ctx, card.ID, req, cur, policy, "PR 已关闭（已合并），收敛收口")
 		}
-		if _, err := p.gh.MergePullRequest(ctx, owner, repo, num, github.MergeInput{Method: p.mergeMethod}); err != nil {
+		if _, err := p.gh.MergePullRequest(ctx, ref.Owner, ref.Repo, ref.Number, github.MergeInput{Method: p.mergeMethod}); err != nil {
 			if github.IsMergeBlocked(err) {
 				log.Printf("gatepoll: 需求 %s 自动合并暂被阻塞: %v（下轮重试）", req.MulticaIssueKey, err)
 			} else {
@@ -363,21 +368,4 @@ func issueRef(req flow.Requirement) string {
 		return req.MulticaIssueID
 	}
 	return req.MulticaIssueKey
-}
-
-// parsePRRef 把规范形 PR URL（flow.ExtractPRURL 产物）拆成 owner / repo / number。
-func parsePRRef(u string) (owner, repo string, number int, ok bool) {
-	const prefix = "https://github.com/"
-	if !strings.HasPrefix(u, prefix) {
-		return "", "", 0, false
-	}
-	parts := strings.Split(strings.TrimPrefix(u, prefix), "/")
-	if len(parts) != 4 || parts[2] != "pull" {
-		return "", "", 0, false
-	}
-	n, err := strconv.Atoi(parts[3])
-	if err != nil || n <= 0 {
-		return "", "", 0, false
-	}
-	return parts[0], parts[1], n, true
 }
