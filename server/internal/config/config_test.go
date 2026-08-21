@@ -70,6 +70,25 @@ func TestLoadMultica(t *testing.T) {
 	})
 }
 
+// TestLoadMulticaProjectID：固定 project（FR-2 派发时 Multica 父 issue 归属的
+// 固定项目）。同 multica 接入面其余键：不设置为空（未启用固定项目语义），
+// 设置后原样透传，不内置默认值。
+func TestLoadMulticaProjectID(t *testing.T) {
+	t.Run("未设置时为空", func(t *testing.T) {
+		t.Setenv("MULTICA_PROJECT_ID", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Empty(t, cfg.MulticaProjectID)
+	})
+
+	t.Run("设置后原样透传", func(t *testing.T) {
+		t.Setenv("MULTICA_PROJECT_ID", "proj-uuid-1")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "proj-uuid-1", cfg.MulticaProjectID)
+	})
+}
+
 // TestLoadDatabaseURL：开发模式缺省回落内置连接串；生产模式（INFERA_ENV=production）
 // 必须显式设置——内置默认串连上错误的库比启动失败更危险。
 func TestLoadDatabaseURL(t *testing.T) {

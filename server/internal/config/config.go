@@ -23,6 +23,9 @@ type Config struct {
 	MulticaServerURL   string
 	MulticaToken       string
 	MulticaWorkspaceID string
+	// MulticaProjectID 固定 project（FR-2：派发创建的 Multica 父 issue 固定
+	// 归属的项目）。空 = 不启用固定项目语义。
+	MulticaProjectID string
 }
 
 // devDatabaseURL 开发回落值：docker-compose 的本地 postgres（127.0.0.1:5433）。
@@ -58,6 +61,7 @@ func Load() (Config, error) {
 		MulticaServerURL:   os.Getenv("MULTICA_SERVER_URL"),
 		MulticaToken:       os.Getenv("MULTICA_TOKEN"),
 		MulticaWorkspaceID: os.Getenv("MULTICA_WORKSPACE_ID"),
+		MulticaProjectID:   os.Getenv("MULTICA_PROJECT_ID"),
 	}, nil
 }
 

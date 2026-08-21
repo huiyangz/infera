@@ -16,6 +16,7 @@ type Issue struct {
 
 // Comment 是 agent 产物（issue 评论）的最小字段面。
 type Comment struct {
+	ID         string    `json:"id"`          // 游标协议字段面：增量拉取必须能定位每条评论
 	AuthorType string    `json:"author_type"` // agent | member
 	AuthorID   string    `json:"author_id"`
 	Content    string    `json:"content"`
@@ -36,12 +37,23 @@ type CreateIssueInput struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Status      string `json:"status,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"` // 固定 project（FR-2 项目固定）；空则整个省略
 }
 
 // CreateIssue 创建 issue（POST /api/issues）。
 func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (Issue, error) {
 	var issue Issue
 	if err := c.do(ctx, http.MethodPost, "/api/issues", in, &issue); err != nil {
+		return Issue{}, err
+	}
+	return issue, nil
+}
+
+// GetIssue 读取 issue（GET /api/issues/{id 或 key}——key 解析本身就是这个
+// 端点，无需单独 resolve API，spike 实证）。大节点映射轮询至少消费 Status。
+func (c *Client) GetIssue(ctx context.Context, idOrKey string) (Issue, error) {
+	var issue Issue
+	if err := c.do(ctx, http.MethodGet, "/api/issues/"+idOrKey, nil, &issue); err != nil {
 		return Issue{}, err
 	}
 	return issue, nil
