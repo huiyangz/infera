@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -114,8 +116,47 @@ func main() {
 		log.Printf("mcp: 已启用（/mcp，Bearer token 鉴权）")
 	}
 
+	// 需求流转装配（T07）：reqservice 注入 router（未装配时需求路由 503）、
+	// gatepoll 后台轮询随进程生命周期启停。未配置 MULTICA_* 时不装配不启动。
+	reqSvc, poller, err := assembleFlow(pool, cfg)
+	if err != nil {
+		log.Fatalf("需求流转装配: %v", err)
+	}
+	if reqSvc != nil {
+		srv.SetRequirements(reqSvc)
+		log.Printf("flow: 需求流转已装配（闸门轮询间隔 %s，合并策略 SettingsPolicy）", cfg.GatePollInterval)
+	}
+
+	// 优雅停止（T07）：SIGINT/SIGTERM → HTTP Shutdown（10s 排空在途请求）→
+	// 轮询器 Stop（等在途一轮收口）→ 连接池关闭。ListenAndServe 返回
+	// ErrServerClosed 是正常退出路径。
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	httpSrv := &http.Server{Addr: cfg.Addr, Handler: root}
+	if poller != nil {
+		if err := poller.Start(ctx); err != nil {
+			log.Fatalf("gatepoll 启动: %v", err)
+		}
+	}
+	go func() {
+		<-ctx.Done()
+		log.Printf("shutdown: 收到退出信号，停止接收新请求")
+		shCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpSrv.Shutdown(shCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
+	}()
+
 	log.Printf("infera listening on %s (workdir root %s)", cfg.Addr, cfg.RepoWorkRoot)
-	log.Fatal(http.ListenAndServe(cfg.Addr, root))
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("http: %v", err)
+	}
+	if poller != nil {
+		poller.Stop()
+	}
+	pool.Close()
+	log.Printf("infera 已停止")
 }
 
 // seedDefaultOrchestration 幂等种子：无默认绑定时注册 default-cli（command 取

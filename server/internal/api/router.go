@@ -34,7 +34,8 @@ type Server struct {
 	auth *sessionManager
 
 	engine EngineAPI
-	g      *git.Git // 可选：创建项目时做 LsRemote 可达性校验
+	req    RequirementsAPI // 需求编排服务（可选：未装配 → 需求路由 503）
+	g      *git.Git        // 可选：创建项目时做 LsRemote 可达性校验
 
 	// cookieSecure session cookie 的 Secure 属性：HTTPS 终端开启（防明文泄露），
 	// 本地 http 开发保持关闭（否则浏览器丢弃 cookie）。main 按 env 装配。
@@ -102,6 +103,20 @@ func (s *Server) Mux() http.Handler {
 		r.Put("/api/pipeline", s.putPipeline)
 		r.Get("/api/projects/{id}/pipeline", s.getProjectPipeline)
 		r.Put("/api/projects/{id}/pipeline", s.putProjectPipeline)
+		// 需求流转面（INFERA-11 T05）
+		r.Post("/api/requirements", s.handleCreateRequirement)
+		r.Get("/api/requirements", s.handleListRequirements)
+		r.Get("/api/requirements/{id}", s.handleGetRequirement)
+		r.Post("/api/requirements/{id}/cards/{cardID}/approve", s.handleCardApprove)
+		r.Post("/api/requirements/{id}/cards/{cardID}/reject", s.handleCardReject)
+		r.Post("/api/requirements/{id}/cards/{cardID}/decide", s.handleCardDecide)
+		r.Post("/api/requirements/{id}/cards/{cardID}/merge", s.handleCardMerge)
+		r.Post("/api/requirements/{id}/cards/{cardID}/rework", s.handleCardRework)
+		r.Get("/api/requirements/{id}/audit", s.handleRequirementAudit)
+		// PR 评审只读面（T09 加法扩展）：行级评审评论 + diff 概要
+		r.Get("/api/requirements/{id}/pr-review", s.handleRequirementPRReview)
+		r.Get("/api/projects/{id}/merge-policy", s.handleGetMergePolicy)
+		r.Put("/api/projects/{id}/merge-policy", s.handleSetMergePolicy)
 	})
 	return r
 }
