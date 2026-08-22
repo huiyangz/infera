@@ -283,3 +283,48 @@ func TestWaitForTerminalTimeout(t *testing.T) {
 	require.ErrorContains(t, err, "超时")
 	require.ErrorContains(t, err, "running")
 }
+
+// TestCreateIssueExtendedFields：创建载荷扩展面（L202608230412-1-T01，本地
+// capture 实证——官方 CLI `issue create --priority --assignee-id` 的同一载荷
+// 形状）：POST /api/issues 内联携带 priority 与 assignee（assignee_type/
+// assignee_id）。可选字段语义同 project_id：未设置时整个省略，空值序列化
+// 成 ""/null 会覆盖服务端默认。
+func TestCreateIssueExtendedFields(t *testing.T) {
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		decodeBody(t, r, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"i-1","identifier":"INFERA-177","status":"todo"}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	t.Run("设置时随请求发送", func(t *testing.T) {
+		gotBody = nil
+		_, err := c.CreateIssue(context.Background(), CreateIssueInput{
+			Title: "新需求", Description: "描述", Status: "todo", ProjectID: "p-1",
+			Priority:     "high",
+			AssigneeType: "agent",
+			AssigneeID:   "agent-uuid-1",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "high", gotBody["priority"])
+		require.Equal(t, "agent", gotBody["assignee_type"])
+		require.Equal(t, "agent-uuid-1", gotBody["assignee_id"])
+	})
+
+	t.Run("未设置时整个省略", func(t *testing.T) {
+		gotBody = nil
+		_, err := c.CreateIssue(context.Background(), CreateIssueInput{
+			Title: "新需求", Description: "d", Status: "backlog",
+		})
+		require.NoError(t, err)
+		for _, key := range []string{"priority", "assignee_type", "assignee_id"} {
+			_, has := gotBody[key]
+			require.False(t, has, "空 %s 必须省略字段（可选字段语义）", key)
+		}
+	})
+}

@@ -41,6 +41,10 @@ type Server struct {
 	// （main）从 env 构造 client 后注入，Server 不持有凭据。
 	taskSync TaskSyncAPI
 
+	// reqCreator 需求创建编排（可选：未装配 → 创建端点 503）。与 taskSync
+	// 共用同一批 TASK_SYNC_* 凭据装配，main 后置注入。
+	reqCreator RequirementCreatorAPI
+
 	// cookieSecure session cookie 的 Secure 属性：HTTPS 终端开启（防明文泄露），
 	// 本地 http 开发保持关闭（否则浏览器丢弃 cookie）。main 按 env 装配。
 	cookieSecure bool
@@ -131,6 +135,9 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/task-sync", s.handleTaskSyncTrigger)
 		r.Get("/api/task-sync", s.handleTaskSyncState)
 		r.Get("/api/task-sync/status", s.handleTaskSyncStatus)
+		// 创建需求（L202608230412-1-T01 冻结契约）：项目任务列表/详情页
+		// 「新建需求」唯一后端入口，Layer 2 前端只消费本端点。
+		r.Post("/api/projects/{id}/requirements", s.handleCreateProjectRequirement)
 	})
 	return r
 }

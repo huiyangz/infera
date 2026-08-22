@@ -132,7 +132,7 @@ func main() {
 	// 记录错误继续）。凭据只经 env → config → tasksource.New（token 只进
 	// client 内存），不落库不进仓。三键不齐 = 未接入（同步路由 503）；半配
 	// 时 assembleFlow 已用同一组键显式报错过，这里错误只降级不装配。
-	syncSvc, syncSched, err := assembleTaskSync(cfg, st)
+	syncSvc, syncSched, syncCreator, err := assembleTaskSync(cfg, st)
 	if err != nil {
 		log.Printf("task sync: %v（同步端点保持 503）", err)
 	}
@@ -145,6 +145,10 @@ func main() {
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: root}
 	if syncSvc != nil {
 		srv.SetTaskSync(syncSvc)
+		if syncCreator != nil {
+			srv.SetRequirementCreator(syncCreator)
+			log.Printf("task sync: 需求创建已装配（POST /api/projects/{id}/requirements，缺省智能体 Tech Lead）")
+		}
 		if err := syncSched.Start(ctx); err != nil {
 			log.Printf("task sync: 调度器启动: %v（周期轮询不可用，手动触发仍可用）", err)
 		} else {
