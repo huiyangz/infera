@@ -92,6 +92,9 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/projects", s.createProject)
 		r.Get("/api/projects/{id}", s.getProject)
 		r.Patch("/api/projects/{id}", s.patchProject)
+		// 项目维度只读视图（INFERA-108 T01）：需求统计 + 跨项目待决策列表。
+		r.Get("/api/projects/{id}/stats", s.handleProjectStats)
+		r.Get("/api/pending-decisions", s.handlePendingDecisions)
 		r.Get("/api/projects/{id}/deliveries", s.handleListDeliveries)
 		r.Post("/api/projects/{id}/deliveries", s.handleCreateDelivery)
 		r.Get("/api/deliveries/{id}", s.handleGetDelivery)

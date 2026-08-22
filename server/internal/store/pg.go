@@ -161,6 +161,71 @@ func (pg *Pg) ProjectStats(ctx context.Context, id string) (ProjectStats, error)
 	return ProjectStats{Active: active, Pending: pending, Last: last.Time}, nil
 }
 
+// RequirementStats 单条 SQL 聚合（同 ProjectStats 形态）：总数与各状态桶、
+// 待决策数（pending_gate 非空且未完结）、交付数与最近同步时间一次带回，
+// EXISTS 兜底项目存在性（无 delivery 的项目聚合行全零，仍需区分 404）。
+func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats, error) {
+	var (
+		total, active, queued, completed, blocked, pending int
+		synced                                             sql.NullTime
+		exists                                             bool
+	)
+	err := pg.pool.QueryRow(ctx,
+		`SELECT count(*),
+		        count(*) FILTER (WHERE status='active'),
+		        count(*) FILTER (WHERE status='queued'),
+		        count(*) FILTER (WHERE status='completed'),
+		        count(*) FILTER (WHERE status='blocked'),
+		        count(*) FILTER (WHERE pending_gate<>'' AND status<>'completed'),
+		        (SELECT multica_synced_at FROM projects WHERE id=$1),
+		        EXISTS(SELECT 1 FROM projects WHERE id=$1)
+		 FROM deliveries WHERE project_id=$1`, id).
+		Scan(&total, &active, &queued, &completed, &blocked, &pending, &synced, &exists)
+	if err != nil {
+		return RequirementStats{}, err
+	}
+	if !exists {
+		return RequirementStats{}, ErrNotFound
+	}
+	s := RequirementStats{
+		ProjectID:        id,
+		RequirementTotal: total,
+		ByStatus:         map[string]int{"active": active, "queued": queued, "completed": completed, "blocked": blocked},
+		PendingDecisions: pending,
+		Delivered:        completed,
+	}
+	if synced.Valid {
+		t := synced.Time
+		s.LastSyncedAt = &t
+	}
+	return s, nil
+}
+
+// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空且未
+// 完结），JOIN projects 带 ProjectName，按 updated_at 降序。
+func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, error) {
+	rows, err := pg.pool.Query(ctx,
+		`SELECT d.id, d.project_id, p.name, d.title, d.status, d.pending_gate, d.current_stage,
+		        d.multica_issue_key, d.assignee, d.priority, d.created_at, d.updated_at
+		 FROM deliveries d JOIN projects p ON p.id = d.project_id
+		 WHERE d.pending_gate <> '' AND d.status <> 'completed'
+		 ORDER BY d.updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]PendingDecision, 0)
+	for rows.Next() {
+		var r PendingDecision
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.ProjectName, &r.Title, &r.Status, &r.PendingGate,
+			&r.CurrentStage, &r.MulticaIssueKey, &r.Assignee, &r.Priority, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
 // ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新 name 与 synced_at，
 // repo_url/default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
