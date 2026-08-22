@@ -81,11 +81,11 @@ function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
     fail_count: 0,
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-22T10:00:00Z',
-    multica_issue_id: '',
-    multica_issue_key: '',
+    external_issue_id: '',
+    external_issue_key: '',
     assignee: '',
     priority: '',
-    multica_synced_at: null,
+    external_synced_at: null,
     parent_id: '',
     wave: 0,
     split_mode: false,
@@ -239,7 +239,7 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
   it('INFERA-145 返工: 镜像任务 current_stage 为空串时阶段位给占位，不留悬空「阶段」标签', async () => {
     // 同步镜像任务无 current_stage：stageLabel('') 为空串，旧版元信息行渲染成「阶段 · 创建 …」
     const screen = await renderDetail(
-      makeDelivery({ current_stage: '', multica_issue_key: 'INFERA-77' })
+      makeDelivery({ current_stage: '', external_issue_key: 'INFERA-77' })
     )
     await waitForLoad(screen)
 

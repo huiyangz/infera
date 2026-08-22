@@ -1,4 +1,8 @@
-package multica
+//go:build e2e
+
+// 本文件所有测试默认不参与编译执行（go test ./... 时不存在），需要显式
+// -tags=e2e 才会构建。双重门禁：构建标签 + TASK_SYNC_* 环境变量两者齐备才真实执行。
+package tasksource
 
 import (
 	"context"
@@ -11,26 +15,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2ELocalLoop 对本地 Multica（默认 http://localhost:8088）打真实闭环：
+// TestE2ELocalLoop 对本地任务平台（默认 http://localhost:8088）打真实闭环：
 // 创建 → 指派 agent → 轮询终态 → 拉产物评论。
 //
-// 门禁（不硬编码任何凭据）：MULTICA_TOKEN / MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID
-// 全部就绪才跑；本地 Multica 不可达时显式 SKIP 并打印原因，绝不假绿。
+// 门禁（不硬编码任何凭据）：TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID / TASK_SYNC_AGENT_ID
+// 全部就绪才跑；本地任务平台不可达时显式 SKIP 并打印原因，绝不假绿。
 // 凭据误配（可达但 401/403 等）则如实失败——那是错误配置，不是"不可达"。
 //
 // 成本控制（已随计划批准的默认决策）：issue 标题带 [infera-e2e] 前缀、描述注明
 // 自动化测试并要求一行简短回复；断言产物后以 suppress_run 置 cancelled 收尾，
 // 避免唤醒 assignee 的下一次 run（坑3）。
 func TestE2ELocalLoop(t *testing.T) {
-	token := os.Getenv("MULTICA_TOKEN")
-	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
-	agentID := os.Getenv("MULTICA_AGENT_ID")
+	token := os.Getenv("TASK_SYNC_TOKEN")
+	wsID := os.Getenv("TASK_SYNC_WORKSPACE_ID")
+	agentID := os.Getenv("TASK_SYNC_AGENT_ID")
 	if token == "" || wsID == "" || agentID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID 未全部设置（token=%t ws=%t agent=%t），跳过 E2E 闭环",
+		t.Skipf("需构建标签（go test -tags=e2e）+ TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID / TASK_SYNC_AGENT_ID 两者齐备才执行；当前变量未全设置（token=%t ws=%t agent=%t），跳过 E2E 闭环",
 			token != "", wsID != "", agentID != "")
 	}
-	// E2E 默认打本地实例；MULTICA_SERVER_URL 可覆盖（生产配置本身无默认值，坑4）。
-	baseURL := os.Getenv("MULTICA_SERVER_URL")
+	// E2E 默认打本地实例；TASK_SYNC_SERVER_URL 可覆盖（生产配置本身无默认值，坑4）。
+	baseURL := os.Getenv("TASK_SYNC_SERVER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8088"
 	}
@@ -44,7 +48,7 @@ func TestE2ELocalLoop(t *testing.T) {
 	hc := &http.Client{Timeout: 2 * time.Second}
 	resp, err := hc.Do(probe)
 	if err != nil {
-		t.Skipf("本地 Multica 不可达（%s）: %v — 跳过 E2E 闭环", baseURL, err)
+		t.Skipf("本地任务平台不可达（%s）: %v — 跳过 E2E 闭环", baseURL, err)
 	}
 	_ = resp.Body.Close()
 
@@ -54,7 +58,7 @@ func TestE2ELocalLoop(t *testing.T) {
 
 	// 1. 创建（backlog 不触发 run；标题前缀 + 描述注明自动化测试）。
 	title := "[infera-e2e] server 薄 client 闭环冒烟 " + time.Now().Format("0102-150405")
-	desc := "这是 infera server multica 薄 client 的自动化 E2E 测试 issue，测试结束会被自动置为 cancelled，请忽略。\n\n" +
+	desc := "这是 infera server tasksource 薄 client 的自动化 E2E 测试 issue，测试结束会被自动置为 cancelled，请忽略。\n\n" +
 		"任务：读仓库根 README.md 的第一段，回复一行评论——以 e2e-ok 开头，加一句话概括。除此之外不要做任何事，不要改代码。"
 	issue, err := c.CreateIssue(ctx, CreateIssueInput{Title: title, Description: desc, Status: "backlog"})
 	require.NoError(t, err)
@@ -90,19 +94,19 @@ func TestE2ELocalLoop(t *testing.T) {
 	t.Logf("产物评论: %s", artifact)
 }
 
-// TestE2ESmokeListSurface 对本地 Multica 打拉取面的真冒烟（T01）：纯只读——
+// TestE2ESmokeListSurface 对本地任务平台打拉取面的真冒烟（T01）：纯只读——
 // ListProjects / ListIssues 拉全 workspace，再过一遍映射函数验证真实响应
 // 形状能完整解码、父子关系在映射后自洽。不创建、不改任何实体，无收尾。
 //
 // 门禁与跳过语义同 TestE2ELocalLoop（只需 token + workspace，无需 agent）。
 func TestE2ESmokeListSurface(t *testing.T) {
-	token := os.Getenv("MULTICA_TOKEN")
-	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
+	token := os.Getenv("TASK_SYNC_TOKEN")
+	wsID := os.Getenv("TASK_SYNC_WORKSPACE_ID")
 	if token == "" || wsID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过拉取面冒烟",
+		t.Skipf("需构建标签（go test -tags=e2e）+ TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID 两者齐备才执行；当前变量未设置（token=%t ws=%t），跳过拉取面冒烟",
 			token != "", wsID != "")
 	}
-	baseURL := os.Getenv("MULTICA_SERVER_URL")
+	baseURL := os.Getenv("TASK_SYNC_SERVER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8088"
 	}
@@ -113,7 +117,7 @@ func TestE2ESmokeListSurface(t *testing.T) {
 	hc := &http.Client{Timeout: 2 * time.Second}
 	resp, err := hc.Do(probe)
 	if err != nil {
-		t.Skipf("本地 Multica 不可达（%s）: %v — 跳过拉取面冒烟", baseURL, err)
+		t.Skipf("本地任务平台不可达（%s）: %v — 跳过拉取面冒烟", baseURL, err)
 	}
 	_ = resp.Body.Close()
 
@@ -168,19 +172,19 @@ func TestE2ESmokeListSurface(t *testing.T) {
 	}
 }
 
-// TestE2ESmokeProxySurface 对本地 Multica 打新增面的真冒烟（不派发 agent，
+// TestE2ESmokeProxySurface 对本地任务平台打新增面的真冒烟（不派发 agent，
 // 秒级完成）：自建测试 issue → 代发评论 → GetIssue 读状态（uuid 与 key 两条
 // 路径）→ ListCommentsSince 增量游标不漏不重。收尾 suppress_run 置 cancelled。
 //
 // 门禁与跳过语义同 TestE2ELocalLoop；绝不在真实业务 issue 上刷评论。
 func TestE2ESmokeProxySurface(t *testing.T) {
-	token := os.Getenv("MULTICA_TOKEN")
-	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
+	token := os.Getenv("TASK_SYNC_TOKEN")
+	wsID := os.Getenv("TASK_SYNC_WORKSPACE_ID")
 	if token == "" || wsID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过代发面冒烟",
+		t.Skipf("需构建标签（go test -tags=e2e）+ TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID 两者齐备才执行；当前变量未设置（token=%t ws=%t），跳过代发面冒烟",
 			token != "", wsID != "")
 	}
-	baseURL := os.Getenv("MULTICA_SERVER_URL")
+	baseURL := os.Getenv("TASK_SYNC_SERVER_URL")
 	if baseURL == "" {
 		baseURL = "http://localhost:8088"
 	}
@@ -191,7 +195,7 @@ func TestE2ESmokeProxySurface(t *testing.T) {
 	hc := &http.Client{Timeout: 2 * time.Second}
 	resp, err := hc.Do(probe)
 	if err != nil {
-		t.Skipf("本地 Multica 不可达（%s）: %v — 跳过代发面冒烟", baseURL, err)
+		t.Skipf("本地任务平台不可达（%s）: %v — 跳过代发面冒烟", baseURL, err)
 	}
 	_ = resp.Body.Close()
 
@@ -202,7 +206,7 @@ func TestE2ESmokeProxySurface(t *testing.T) {
 	// 1. 自建测试 issue（backlog 不触发 run；收尾 cancelled）。
 	issue, err := c.CreateIssue(ctx, CreateIssueInput{
 		Title:       "[infera-e2e] 代发面冒烟 " + time.Now().Format("0102-150405"),
-		Description: "infera multica client 新增面（代发评论/状态读取/增量游标）的自动化冒烟，测试结束自动置 cancelled，请忽略。",
+		Description: "infera 任务同步 client 新增面（代发评论/状态读取/增量游标）的自动化冒烟，测试结束自动置 cancelled，请忽略。",
 		Status:      "backlog",
 	})
 	require.NoError(t, err)

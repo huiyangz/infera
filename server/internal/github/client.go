@@ -121,7 +121,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512)) // 回显截断，沿用 multica client 风格
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512)) // 回显截断，沿用 tasksource client 风格
 		apiErr := &APIError{
 			Method:     method,
 			Path:       path,

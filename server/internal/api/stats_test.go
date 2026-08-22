@@ -15,8 +15,8 @@ import (
 func seedStatsAPI(t *testing.T, st *store.Memory) (synced, empty store.Project) {
 	t.Helper()
 	ctx := context.Background()
-	synced = store.Project{Name: "同步项目", MulticaProjectID: "mp-1"}
-	require.NoError(t, st.UpsertProjectByMulticaID(ctx, &synced))
+	synced = store.Project{Name: "同步项目", ExternalProjectID: "mp-1"}
+	require.NoError(t, st.UpsertProjectByExternalID(ctx, &synced))
 	empty = store.Project{Name: "本地项目"}
 	require.NoError(t, st.CreateProject(ctx, &empty))
 	require.NoError(t, st.CreateDelivery(ctx, &store.Delivery{

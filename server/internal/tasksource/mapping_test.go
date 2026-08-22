@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"testing"
@@ -28,7 +28,7 @@ func TestMapProject(t *testing.T) {
 		UpdatedAt:   updatedAt,
 	})
 
-	require.Equal(t, "p-1", got.ExternalID, "外部实体以 multica id 唯一标识（幂等 upsert 的锚点）")
+	require.Equal(t, "p-1", got.ExternalID, "外部实体以上游 id 唯一标识（幂等 upsert 的锚点）")
 	require.Equal(t, "自动闭环", got.Title)
 	require.Equal(t, "infera 需求闭环", got.Description)
 	require.Equal(t, "in_progress", got.Status)
@@ -77,7 +77,7 @@ func TestMapIssue(t *testing.T) {
 	require.Equal(t, "in_progress", got.Status)
 	require.Equal(t, "high", got.Priority)
 	require.Equal(t, ActorRef{Type: "agent", ID: "a-1"}, got.Assignee, "负责人（assignee）映射为多态 ActorRef")
-	require.Equal(t, "i-0", got.ParentExternalID, "父子关系：父 issue 的 multica id")
+	require.Equal(t, "i-0", got.ParentExternalID, "父子关系：父 issue 的上游 id")
 	require.Equal(t, "p-1", got.ProjectExternalID, "项目归属：issue 两级关联的锚点")
 	require.Equal(t, 2, got.Stage, "stage（子任务所属阶段）随快照透传，不在这层丢弃")
 	require.Equal(t, updatedAt, got.UpdatedAt)
@@ -103,7 +103,7 @@ func TestMapIssueParentChildRoundTrip(t *testing.T) {
 	require.Equal(t, parent.ExternalID, child.ParentExternalID, "子快照的父引用必须能对上父快照的外部 id")
 }
 
-// TestMapPreservesSourceVocabulary：状态/优先级保留 Multica 原词表透传——
+// TestMapPreservesSourceVocabulary：状态/优先级保留上游原词表透传——
 // 快照是"外部事实的结构化"，向 infera 词表（如 delivery status）的翻译
 // 语义属于消费方（T02/T03），本层不发明对照表。
 func TestMapPreservesSourceVocabulary(t *testing.T) {

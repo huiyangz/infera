@@ -11,12 +11,12 @@ type Project struct {
 	RepoURL       string `json:"repo_url"`
 	DefaultBranch string `json:"default_branch"`
 	Pinned        bool   `json:"pinned"`
-	// Multica 来源映射（INFERA-79 T02 契约）：外部项目 ID 空 = 非 multica 同步；
-	// synced_at nil = 从未同步。字段归同步入口（UpsertProjectByMulticaID）所有。
-	MulticaProjectID string     `json:"multica_project_id"`
-	MulticaSyncedAt  *time.Time `json:"multica_synced_at"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// 外部来源映射（INFERA-79 T02 契约）：外部项目 ID 空 = 非同步来源；
+	// synced_at nil = 从未同步。字段归同步入口（UpsertProjectByExternalID）所有。
+	ExternalProjectID string     `json:"external_project_id"`
+	ExternalSyncedAt  *time.Time `json:"external_synced_at"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type ProjectStats struct {
@@ -29,7 +29,7 @@ type ProjectStats struct {
 // GET /api/projects/{id}/stats 的响应载荷形态）。ByStatus 恒含四个固定键
 // active/queued/completed/blocked（无行时为 0）；Delivered 与
 // ByStatus["completed"] 同源（交付数单列是冻结口径）。LastSyncedAt
-// nil = 项目从未被 multica 同步。
+// nil = 项目从未被 任务同步。
 type RequirementStats struct {
 	ProjectID        string         `json:"project_id"`
 	RequirementTotal int            `json:"requirement_total"`
@@ -43,18 +43,18 @@ type RequirementStats struct {
 // GET /api/pending-decisions 的响应载荷形态）。ID 即 delivery ID，
 // 前端以其跳转既有需求详情；ProjectName 由查询 JOIN projects 带回。
 type PendingDecision struct {
-	ID              string    `json:"id"`
-	ProjectID       string    `json:"project_id"`
-	ProjectName     string    `json:"project_name"`
-	Title           string    `json:"title"`
-	Status          string    `json:"status"`
-	PendingGate     string    `json:"pending_gate"`
-	CurrentStage    string    `json:"current_stage"`
-	MulticaIssueKey string    `json:"multica_issue_key"` // ''=本地需求（非同步来源）
-	Assignee        string    `json:"assignee"`          // multica 同步展示数据；''=无
-	Priority        string    `json:"priority"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	ProjectID        string    `json:"project_id"`
+	ProjectName      string    `json:"project_name"`
+	Title            string    `json:"title"`
+	Status           string    `json:"status"`
+	PendingGate      string    `json:"pending_gate"`
+	CurrentStage     string    `json:"current_stage"`
+	ExternalIssueKey string    `json:"external_issue_key"` // ''=本地需求（非同步来源）
+	Assignee         string    `json:"assignee"`           // 任务同步展示数据；''=无
+	Priority         string    `json:"priority"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type Delivery struct {
@@ -74,16 +74,16 @@ type Delivery struct {
 	SplitMode      bool   `json:"split_mode"`      // 父在设计审批选择了拆分
 	MergeState     string `json:"merge_state"`     // 父合并状态：'' | 'conflict'
 	Complexity     string `json:"complexity"`      // 需求复杂度：''（老数据，按 small 走）| small | large（spec_approval 门裁定）
-	// Multica 来源映射（INFERA-79 T02 契约）：issue ID 空 = 非 multica 同步；synced_at nil = 从未同步。
+	// 外部来源映射（INFERA-79 T02 契约）：issue ID 空 = 非同步来源；synced_at nil = 从未同步。
 	// issue_key 为展示键（如 INFERA-79）；assignee/priority 为同步进来的展示数据（非同步行为空）。
-	// 这些字段归同步入口（UpsertDeliveryByMulticaID）所有，UpdateDelivery 全行覆盖不冲掉。
-	MulticaIssueID  string     `json:"multica_issue_id"`
-	MulticaIssueKey string     `json:"multica_issue_key"`
-	Assignee        string     `json:"assignee"`
-	Priority        string     `json:"priority"`
-	MulticaSyncedAt *time.Time `json:"multica_synced_at"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	// 这些字段归同步入口（UpsertDeliveryByExternalID）所有，UpdateDelivery 全行覆盖不冲掉。
+	ExternalIssueID  string     `json:"external_issue_id"`
+	ExternalIssueKey string     `json:"external_issue_key"`
+	Assignee         string     `json:"assignee"`
+	Priority         string     `json:"priority"`
+	ExternalSyncedAt *time.Time `json:"external_synced_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type Event struct {
@@ -196,11 +196,11 @@ type Store interface {
 	// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空
 	// 且未完结），JOIN projects 带 ProjectName，按 updated_at 降序。
 	ListPendingDecisions(ctx context.Context) ([]PendingDecision, error)
-	// multica 同步导入（T02 冻结的存储面）：按外部 ID 幂等 upsert——不存在则插入、
+	// 任务同步导入（T02 冻结的存储面）：按外部 ID 幂等 upsert——不存在则插入、
 	// 存在则只更新外部来源字段（infera 侧配置/引擎字段不被同步覆盖），
 	// 重复执行不产生重复行。外部 ID 为空 → ErrInvalid；delivery 引用不存在的
 	// project → ErrNotFound。
-	UpsertProjectByMulticaID(ctx context.Context, p *Project) error
+	UpsertProjectByExternalID(ctx context.Context, p *Project) error
 	// deliveries
 	CreateDelivery(ctx context.Context, d *Delivery) error
 	GetDelivery(ctx context.Context, id string) (*Delivery, error)
@@ -208,7 +208,7 @@ type Store interface {
 	ListActiveDeliveries(ctx context.Context) ([]Delivery, error)
 	ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error)
 	UpdateDelivery(ctx context.Context, d *Delivery) error
-	UpsertDeliveryByMulticaID(ctx context.Context, d *Delivery) error
+	UpsertDeliveryByExternalID(ctx context.Context, d *Delivery) error
 	// events / artifacts / stage_runs
 	AppendEvent(ctx context.Context, e *Event) error
 	ListEvents(ctx context.Context, deliveryID string) ([]Event, error)

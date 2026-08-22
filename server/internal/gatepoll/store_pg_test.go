@@ -50,9 +50,9 @@ func insertRequirement(t *testing.T, s *PgStore, req flow.Requirement) {
 		acceptors += "}"
 	}
 	_, err := s.pool.Exec(context.Background(), `
-		INSERT INTO requirements (id, title, multica_issue_id, multica_issue_key, node, pr_url)
+		INSERT INTO requirements (id, title, external_issue_id, external_issue_key, node, pr_url)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
-		req.ID, req.Title, req.MulticaIssueID, req.MulticaIssueKey, string(req.Node), req.PRURL)
+		req.ID, req.Title, req.ExternalIssueID, req.ExternalIssueKey, string(req.Node), req.PRURL)
 	require.NoError(t, err)
 }
 
@@ -76,7 +76,7 @@ func TestPgStoreListInFlight(t *testing.T) {
 	ids := map[string]bool{}
 	for _, r := range got {
 		ids[r.Req.ID] = true
-		require.Equal(t, r.Req.MulticaIssueID, r.Cursor.MulticaIssueID, "游标携带 issue 映射")
+		require.Equal(t, r.Req.ExternalIssueID, r.Cursor.ExternalIssueID, "游标携带 issue 映射")
 		require.True(t, r.Cursor.LastCommentAt.IsZero(), "尚未轮询过：游标时间为零值（首轮全量）")
 		require.Empty(t, r.Cursor.LastStatus)
 	}
@@ -95,11 +95,11 @@ func TestPgStoreSavePollStateRoundtrip(t *testing.T) {
 
 	at := time.Date(2026, 8, 21, 12, 30, 5, 0, time.UTC)
 	cur := flow.PollCursor{
-		RequirementID:  req.ID,
-		MulticaIssueID: req.MulticaIssueID,
-		LastCommentAt:  at,
-		LastStatus:     "in_review",
-		SeenVerdict:    true,
+		RequirementID:   req.ID,
+		ExternalIssueID: req.ExternalIssueID,
+		LastCommentAt:   at,
+		LastStatus:      "in_review",
+		SeenVerdict:     true,
 	}
 	require.NoError(t, s.SavePollState(ctx, req.ID, flow.NodeInReview, "https://github.com/acme/app/pull/42", cur))
 
@@ -162,7 +162,7 @@ func TestPgStoreCompleteAutoMergeAtomic(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 
-	cur := flow.PollCursor{RequirementID: req.ID, MulticaIssueID: req.MulticaIssueID, LastStatus: "in_review", SeenVerdict: true}
+	cur := flow.PollCursor{RequirementID: req.ID, ExternalIssueID: req.ExternalIssueID, LastStatus: "in_review", SeenVerdict: true}
 	audit := flow.AuditEntry{RequirementID: req.ID, Actor: "system", Action: "merge", Detail: "auto merge https://github.com/acme/app/pull/42 (policy=auto_pass)"}
 	require.NoError(t, s.CompleteAutoMerge(ctx, pending[0].ID, flow.NodeDelivered, "https://github.com/acme/app/pull/42", cur, audit))
 
@@ -203,10 +203,10 @@ func pending0ID(t *testing.T, s *PgStore, reqID string) string {
 // TestCursorPersistenceAcrossRestart：AC——游标持久化，进程重启后从上次位置续读，
 // 不重放旧评论、不漏新评论。真实 pg store + fake client，两个 Poller 实例模拟重启
 // （AfterID 不持久化：服务端秒级截断会让锚点评论重发——按评论 id 幂等去重兜住，
-// 与 multica.ListCommentsSince 的调用方契约一致）。
+// 与 tasksource.ListCommentsSince 的调用方契约一致）。
 func TestCursorPersistenceAcrossRestart(t *testing.T) {
 	s := testPgStore(t)
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	mc.redeliverAnchor = true // 重启后锚点评论会重发（真实截断语义）
 	req := newTestReq("11111111-1111-1111-1111-111111111111", "issue-1")
 	insertRequirement(t, s, req)
@@ -321,7 +321,8 @@ func TestPgStoreDecisionAdvanceAtomicRollback(t *testing.T) {
 	require.Equal(t, "dispatched", node)
 }
 
-func cardCountDB(t *testing.T, s *PgStore, reqID string) int {	t.Helper()
+func cardCountDB(t *testing.T, s *PgStore, reqID string) int {
+	t.Helper()
 	var n int64
 	require.NoError(t, s.pool.QueryRow(context.Background(),
 		`SELECT count(*) FROM gate_cards WHERE requirement_id=$1`, reqID).Scan(&n))

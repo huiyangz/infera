@@ -283,7 +283,7 @@ infera 把"交付"显式建模成一条**流水线**，让多个专职 Agent 在
 - 它们**不留痕**；infera 全程记录在 Delivery 时间线。
 - infera 底层就用这类工具（Claude Code）作为 Agent 的执行引擎，但在上面加了流程、协作、多 Agent、留痕。
 
-### 10.3 vs Agent 协作平台（Multica 类）
+### 10.3 vs Agent 协作平台（外部任务源类）
 这类平台把 AI Agent 作为团队里的"队友"，像派活给同事一样派给 Agent，强调 Agent 是一等协作者、本地运行时、可自部署。
 - infera 借鉴其核心理念（Agent 主体、多 Agent、留痕、运行时抽象、触发机制），但**全自研**，专注 FDE 的**代码交付闭环**。
 - 它们以 **issue 看板** 为中心；infera 以**交付流水线 + loop engineering** 为中心——这是 infera 的差异化。

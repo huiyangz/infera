@@ -42,9 +42,9 @@ function detail(over: Partial<RequirementDetail> = {}): RequirementDetail {
     source: 'web',
     priority: 'P1',
     acceptors: ['张三', '李四'],
-    multica_issue_id: 'm1',
-    multica_issue_key: 'INFERA-31',
-    multica_issue_url: 'http://multica.local/infera/issues/m1',
+    external_issue_id: 'm1',
+    external_issue_key: 'INFERA-31',
+    external_issue_url: 'http://tasks.local/infera/issues/m1',
     pr_url: 'https://github.com/acme/repo/pull/7',
     node: 'in_review',
     created_at: '2026-08-21T00:00:00Z',
@@ -82,7 +82,7 @@ afterEach(async () => {
 })
 
 describe('RequirementDetailPage 需求详情', () => {
-  it('渲染需求信息、时间线、深链（Multica issue / PR 新窗口）与审计记录', async () => {
+  it('渲染需求信息、时间线、深链（外部任务源 issue / PR 新窗口）与审计记录', async () => {
     vi.mocked(getRequirement).mockResolvedValue(detail())
     vi.mocked(listRequirementAudit).mockResolvedValue([
       {
@@ -111,10 +111,10 @@ describe('RequirementDetailPage 需求详情', () => {
       .toBeInTheDocument()
     // 验收人
     await expect.element(screen.getByText('张三、李四')).toBeInTheDocument()
-    // 深链：Multica issue 与 PR，均新窗口
+    // 深链：外部任务源 issue 与 PR，均新窗口
     const issue = screen.getByRole('link', { name: /INFERA-31/ })
     expect((await issue.element()).getAttribute('href')).toBe(
-      'http://multica.local/infera/issues/m1'
+      'http://tasks.local/infera/issues/m1'
     )
     expect((await issue.element()).getAttribute('target')).toBe('_blank')
     const pr = screen.getByRole('link', { name: /pull\/7/ })

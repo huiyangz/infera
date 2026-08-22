@@ -50,25 +50,25 @@ func TestLoadGatePollInterval(t *testing.T) {
 	})
 }
 
-// TestLoadMulticaFlowAssemblyKeys：装配期（T07） reqservice.Options 需要的
+// TestLoadTaskSyncFlowAssemblyKeys：装配期（T07） reqservice.Options 需要的
 // 两个定位值：Tech Lead agent id（派发指派）与 workspace slug（深链段）。
-// 与其余 MULTICA_* 键同语义：缺失 = 空串，必填性由构造器显式报错（不内置默认）。
-func TestLoadMulticaFlowAssemblyKeys(t *testing.T) {
+// 与其余 TASK_SYNC_* 键同语义：缺失 = 空串，必填性由构造器显式报错（不内置默认）。
+func TestLoadTaskSyncFlowAssemblyKeys(t *testing.T) {
 	t.Run("缺省为空", func(t *testing.T) {
 		// 显式清空：e2e 环境可能带同名变量，测试必须对环境封闭。
-		t.Setenv("MULTICA_TECH_LEAD_AGENT_ID", "")
-		t.Setenv("MULTICA_WORKSPACE_SLUG", "")
+		t.Setenv("TASK_SYNC_TECH_LEAD_AGENT_ID", "")
+		t.Setenv("TASK_SYNC_WORKSPACE_SLUG", "")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Empty(t, cfg.MulticaTechLeadAgentID)
-		require.Empty(t, cfg.MulticaWorkspaceSlug)
+		require.Empty(t, cfg.TaskSyncTechLeadAgentID)
+		require.Empty(t, cfg.TaskSyncWorkspaceSlug)
 	})
 	t.Run("显式配置加载", func(t *testing.T) {
-		t.Setenv("MULTICA_TECH_LEAD_AGENT_ID", "9b45e9f4-0000-0000-0000-000000000000")
-		t.Setenv("MULTICA_WORKSPACE_SLUG", "infera")
+		t.Setenv("TASK_SYNC_TECH_LEAD_AGENT_ID", "9b45e9f4-0000-0000-0000-000000000000")
+		t.Setenv("TASK_SYNC_WORKSPACE_SLUG", "infera")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Equal(t, "9b45e9f4-0000-0000-0000-000000000000", cfg.MulticaTechLeadAgentID)
-		require.Equal(t, "infera", cfg.MulticaWorkspaceSlug)
+		require.Equal(t, "9b45e9f4-0000-0000-0000-000000000000", cfg.TaskSyncTechLeadAgentID)
+		require.Equal(t, "infera", cfg.TaskSyncWorkspaceSlug)
 	})
 }

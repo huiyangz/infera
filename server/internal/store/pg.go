@@ -42,8 +42,8 @@ func isFKViolation(err error) bool {
 }
 
 const (
-	projectCols  = "id,name,repo_url,default_branch,pinned,multica_project_id,multica_synced_at,created_at,updated_at"
-	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,multica_issue_id,multica_issue_key,assignee,priority,multica_synced_at,created_at,updated_at"
+	projectCols  = "id,name,repo_url,default_branch,pinned,external_project_id,external_synced_at,created_at,updated_at"
+	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,external_issue_id,external_issue_key,assignee,priority,external_synced_at,created_at,updated_at"
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
@@ -51,7 +51,7 @@ const (
 
 func scanProject(row pgx.Row) (*Project, error) {
 	p := &Project{}
-	if err := row.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.MulticaProjectID, &p.MulticaSyncedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.ExternalProjectID, &p.ExternalSyncedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	return p, nil
@@ -60,7 +60,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 func scanDelivery(row pgx.Row) (*Delivery, error) {
 	d := &Delivery{}
 	var parentID sql.NullString
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.Complexity, &d.MulticaIssueID, &d.MulticaIssueKey, &d.Assignee, &d.Priority, &d.MulticaSyncedAt, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.Complexity, &d.ExternalIssueID, &d.ExternalIssueKey, &d.Assignee, &d.Priority, &d.ExternalSyncedAt, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	d.ParentID = parentID.String
@@ -177,7 +177,7 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 		        count(*) FILTER (WHERE status='completed'),
 		        count(*) FILTER (WHERE status='blocked'),
 		        count(*) FILTER (WHERE pending_gate<>'' AND status<>'completed'),
-		        (SELECT multica_synced_at FROM projects WHERE id=$1),
+		        (SELECT external_synced_at FROM projects WHERE id=$1),
 		        EXISTS(SELECT 1 FROM projects WHERE id=$1)
 		 FROM deliveries WHERE project_id=$1`, id).
 		Scan(&total, &active, &queued, &completed, &blocked, &pending, &synced, &exists)
@@ -206,7 +206,7 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, error) {
 	rows, err := pg.pool.Query(ctx,
 		`SELECT d.id, d.project_id, p.name, d.title, d.status, d.pending_gate, d.current_stage,
-		        d.multica_issue_key, d.assignee, d.priority, d.created_at, d.updated_at
+		        d.external_issue_key, d.assignee, d.priority, d.created_at, d.updated_at
 		 FROM deliveries d JOIN projects p ON p.id = d.project_id
 		 WHERE d.pending_gate <> '' AND d.status <> 'completed'
 		 ORDER BY d.updated_at DESC`)
@@ -218,7 +218,7 @@ func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, erro
 	for rows.Next() {
 		var r PendingDecision
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.ProjectName, &r.Title, &r.Status, &r.PendingGate,
-			&r.CurrentStage, &r.MulticaIssueKey, &r.Assignee, &r.Priority, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&r.CurrentStage, &r.ExternalIssueKey, &r.Assignee, &r.Priority, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -226,14 +226,14 @@ func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, erro
 	return out, rows.Err()
 }
 
-// UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
+// UpsertProjectByExternalID 按 上游项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
 // ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 更新 name、synced_at 与
 // repo_url（覆写契约 INFERA-175：EXCLUDED 非空覆写现值，空串保留现值不清空，
 // COALESCE+NULLIF 一处收口）；default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
 // RETURNING id 两个分支都回行 ID，回读整行填充结构体。
-// MulticaProjectID 为空 → ErrInvalid。
-func (pg *Pg) UpsertProjectByMulticaID(ctx context.Context, p *Project) error {
-	if p.MulticaProjectID == "" {
+// ExternalProjectID 为空 → ErrInvalid。
+func (pg *Pg) UpsertProjectByExternalID(ctx context.Context, p *Project) error {
+	if p.ExternalProjectID == "" {
 		return ErrInvalid
 	}
 	if p.ID == "" {
@@ -241,14 +241,14 @@ func (pg *Pg) UpsertProjectByMulticaID(ctx context.Context, p *Project) error {
 	}
 	var id string
 	err := pg.pool.QueryRow(ctx,
-		`INSERT INTO projects (id,name,repo_url,default_branch,pinned,multica_project_id,multica_synced_at)
+		`INSERT INTO projects (id,name,repo_url,default_branch,pinned,external_project_id,external_synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,now())
-		 ON CONFLICT (multica_project_id) WHERE multica_project_id <> ''
+		 ON CONFLICT (external_project_id) WHERE external_project_id <> ''
 		 DO UPDATE SET name=EXCLUDED.name,
 		               repo_url=COALESCE(NULLIF(EXCLUDED.repo_url, ''), projects.repo_url),
-		               multica_synced_at=now()
+		               external_synced_at=now()
 		 RETURNING id`,
-		p.ID, p.Name, p.RepoURL, p.DefaultBranch, p.Pinned, p.MulticaProjectID).Scan(&id)
+		p.ID, p.Name, p.RepoURL, p.DefaultBranch, p.Pinned, p.ExternalProjectID).Scan(&id)
 	if err != nil {
 		return err
 	}
@@ -322,8 +322,8 @@ func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 
 // UpdateDelivery 按读到的 updated_at 条件更新（乐观锁，同 UpdateAgent）：
 // 并发读-改-写的后写者条件不命中 → 回读定性（不存在 → ErrNotFound；版本过期 → ErrConflict），
-// 全行覆盖不得静默冲掉并发修改。SET 不含 multica 来源列——同步映射字段归
-// UpsertDeliveryByMulticaID 所有，普通更新路径不冲掉（同 Memory 的字段保留语义）。
+// 全行覆盖不得静默冲掉并发修改。SET 不含外部来源列——同步映射字段归
+// UpsertDeliveryByExternalID 所有，普通更新路径不冲掉（同 Memory 的字段保留语义）。
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
 		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,complexity=$15,updated_at=now()
@@ -339,14 +339,14 @@ func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	return mapErr(err)
 }
 
-// UpsertDeliveryByMulticaID 按 multica issue ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
+// UpsertDeliveryByExternalID 按 上游 issue ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
 // ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新外部来源字段
 // （project_id/title/description/status/parent_id/wave/issue_key/assignee/priority），
 // 引擎侧字段（stage/gate/fail_count/...）不被同步覆盖；插入分支整行走入参（同 CreateDelivery）。
 // RETURNING id 两个分支都回行 ID，回读整行填充结构体。
-// MulticaIssueID 为空 → ErrInvalid；ProjectID 不存在（FK 23503）→ ErrNotFound。
-func (pg *Pg) UpsertDeliveryByMulticaID(ctx context.Context, d *Delivery) error {
-	if d.MulticaIssueID == "" {
+// ExternalIssueID 为空 → ErrInvalid；ProjectID 不存在（FK 23503）→ ErrNotFound。
+func (pg *Pg) UpsertDeliveryByExternalID(ctx context.Context, d *Delivery) error {
+	if d.ExternalIssueID == "" {
 		return ErrInvalid
 	}
 	if d.ID == "" {
@@ -354,21 +354,21 @@ func (pg *Pg) UpsertDeliveryByMulticaID(ctx context.Context, d *Delivery) error 
 	}
 	var id string
 	err := pg.pool.QueryRow(ctx,
-		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,multica_issue_id,multica_issue_key,assignee,priority,multica_synced_at)
+		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,external_issue_id,external_issue_key,assignee,priority,external_synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now())
-		 ON CONFLICT (multica_issue_id) WHERE multica_issue_id <> ''
+		 ON CONFLICT (external_issue_id) WHERE external_issue_id <> ''
 		 DO UPDATE SET project_id=EXCLUDED.project_id,
 		               title=EXCLUDED.title,
 		               description=EXCLUDED.description,
 		               status=EXCLUDED.status,
 		               parent_id=EXCLUDED.parent_id,
 		               wave=EXCLUDED.wave,
-		               multica_issue_key=EXCLUDED.multica_issue_key,
+		               external_issue_key=EXCLUDED.external_issue_key,
 		               assignee=EXCLUDED.assignee,
 		               priority=EXCLUDED.priority,
-		               multica_synced_at=now()
+		               external_synced_at=now()
 		 RETURNING id`,
-		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity, d.MulticaIssueID, d.MulticaIssueKey, d.Assignee, d.Priority).Scan(&id)
+		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity, d.ExternalIssueID, d.ExternalIssueKey, d.Assignee, d.Priority).Scan(&id)
 	if isFKViolation(err) { // project_id 不存在
 		return ErrNotFound
 	}

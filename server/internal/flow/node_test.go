@@ -2,10 +2,10 @@ package flow
 
 import "testing"
 
-// TestNodeFromMulticaStatus：Multica 父 issue 状态 → 大节点映射全表。
+// TestNodeFromExternalStatus：上游父 issue 状态 → 大节点映射全表。
 // 只有四个业务状态有映射；blocked / backlog / cancelled / 未知 / 大小写变体
 // 一律无映射（不推进节点）。
-func TestNodeFromMulticaStatus(t *testing.T) {
+func TestNodeFromExternalStatus(t *testing.T) {
 	cases := []struct {
 		status string
 		want   Node
@@ -24,9 +24,9 @@ func TestNodeFromMulticaStatus(t *testing.T) {
 		{"in-progress", "", false},
 	}
 	for _, tc := range cases {
-		got, ok := NodeFromMulticaStatus(tc.status)
+		got, ok := NodeFromExternalStatus(tc.status)
 		if got != tc.want || ok != tc.ok {
-			t.Fatalf("NodeFromMulticaStatus(%q) = (%q, %v), want (%q, %v)",
+			t.Fatalf("NodeFromExternalStatus(%q) = (%q, %v), want (%q, %v)",
 				tc.status, got, ok, tc.want, tc.ok)
 		}
 	}
@@ -52,7 +52,7 @@ func TestCanTransition(t *testing.T) {
 		{NodeInProgress, NodeInReview, true},
 		{NodeInProgress, NodeDelivered, true},
 		{NodeInReview, NodeDelivered, true},
-		// 主链后退一律非法（单一状态源：infera 不因 Multica 回退而回退）
+		// 主链后退一律非法（单一状态源：infera 不因上游回退而回退）
 		{NodeDispatched, NodeIntake, false},
 		{NodeInProgress, NodeDispatched, false},
 		{NodeInProgress, NodeIntake, false},

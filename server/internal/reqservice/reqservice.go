@@ -13,16 +13,16 @@ import (
 
 	"github.com/tokfinity/infera/internal/flow"
 	"github.com/tokfinity/infera/internal/github"
-	"github.com/tokfinity/infera/internal/multica"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
-// MulticaClient 是 reqservice 对 Multica 薄 client 的窄接口（Go 鸭型，
-// *multica.Client 天然满足；单测用 fake，不碰真服务）。
-type MulticaClient interface {
-	CreateIssue(ctx context.Context, in multica.CreateIssueInput) (multica.Issue, error)
+// TaskSourceClient 是 reqservice 对 tasksource 薄 client 的窄接口（Go 鸭型，
+// *tasksource.Client 天然满足；单测用 fake，不碰真服务）。
+type TaskSourceClient interface {
+	CreateIssue(ctx context.Context, in tasksource.CreateIssueInput) (tasksource.Issue, error)
 	AssignAgent(ctx context.Context, issueID, agentID string) error
 	SetStatus(ctx context.Context, issueID, status string, suppressRun bool) error
-	PostComment(ctx context.Context, issueID, content string) (multica.Comment, error)
+	PostComment(ctx context.Context, issueID, content string) (tasksource.Comment, error)
 }
 
 // GitHubClient 是合并动作与 PR 评审读取对 github client 的窄接口。
@@ -32,48 +32,48 @@ type GitHubClient interface {
 	GetDiffStats(ctx context.Context, owner, repo string, number int) (github.DiffStats, error)
 }
 
-// Options 是装配期输入：派发目标与深链拼装所需的 Multica 侧定位。
+// Options 是装配期输入：派发目标与深链拼装所需的 上游侧定位。
 type Options struct {
-	MulticaProjectID     string // 派发目标 Multica 项目（必填）
-	TechLeadAgentID      string // 派发指派的 Tech Lead agent（必填）
-	MulticaServerURL     string // 深链前缀，如 http://localhost:8088（必填）
-	MulticaWorkspaceSlug string // 深链工作区段，如 infera（必填）
+	TaskSyncProjectID     string // 派发目标 上游项目（必填）
+	TechLeadAgentID       string // 派发指派的 Tech Lead agent（必填）
+	TaskSyncServerURL     string // 深链前缀，如 http://localhost:8088（必填）
+	TaskSyncWorkspaceSlug string // 深链工作区段，如 infera（必填）
 }
 
 // Service 是需求编排服务。线程安全（pgx 连接池 + 无状态 client）。
 type Service struct {
 	pool *pgxpool.Pool
-	mc   MulticaClient
+	mc   TaskSourceClient
 	gh   GitHubClient
 	opts Options
 }
 
 // New 构造 Service。装配期显式校验（必填性在 reqservice 决定——缺失
 // 只会变成运行期难排查的派发失败，构造期报错）。
-func New(pool *pgxpool.Pool, mc MulticaClient, gh GitHubClient, opts Options) (*Service, error) {
+func New(pool *pgxpool.Pool, mc TaskSourceClient, gh GitHubClient, opts Options) (*Service, error) {
 	if pool == nil {
 		return nil, errors.New("reqservice: 连接池缺失")
 	}
 	if mc == nil {
-		return nil, errors.New("reqservice: multica client 缺失")
+		return nil, errors.New("reqservice: tasksource client 缺失")
 	}
 	if gh == nil {
 		return nil, errors.New("reqservice: github client 缺失")
 	}
-	if opts.MulticaProjectID == "" {
-		return nil, errors.New("reqservice: MulticaProjectID 必填（派发固定项目，FR-2）")
+	if opts.TaskSyncProjectID == "" {
+		return nil, errors.New("reqservice: TaskSyncProjectID 必填（派发固定项目，FR-2）")
 	}
 	if opts.TechLeadAgentID == "" {
 		return nil, errors.New("reqservice: TechLeadAgentID 必填（派发指派 Tech Lead）")
 	}
-	if opts.MulticaServerURL == "" || opts.MulticaWorkspaceSlug == "" {
-		return nil, errors.New("reqservice: MulticaServerURL 与 MulticaWorkspaceSlug 必填（深链逃生口 FR-8）")
+	if opts.TaskSyncServerURL == "" || opts.TaskSyncWorkspaceSlug == "" {
+		return nil, errors.New("reqservice: TaskSyncServerURL 与 TaskSyncWorkspaceSlug 必填（深链逃生口 FR-8）")
 	}
-	opts.MulticaServerURL = strings.TrimSuffix(opts.MulticaServerURL, "/")
+	opts.TaskSyncServerURL = strings.TrimSuffix(opts.TaskSyncServerURL, "/")
 	return &Service{pool: pool, mc: mc, gh: gh, opts: opts}, nil
 }
 
-// CreateInput 是发起需求的输入面。业务元数据只存 infera，不下发 Multica。
+// CreateInput 是发起需求的输入面。业务元数据只存 infera，不下发上游平台。
 type CreateInput struct {
 	Title              string
 	Description        string
@@ -92,9 +92,9 @@ type Requirement struct {
 	Source             string    `json:"source"`
 	Priority           string    `json:"priority"`
 	Acceptors          []string  `json:"acceptors"`
-	MulticaIssueID     string    `json:"multica_issue_id"`
-	MulticaIssueKey    string    `json:"multica_issue_key"`
-	MulticaIssueURL    string    `json:"multica_issue_url"`
+	ExternalIssueID    string    `json:"external_issue_id"`
+	ExternalIssueKey   string    `json:"external_issue_key"`
+	ExternalIssueURL   string    `json:"external_issue_url"`
 	PRURL              string    `json:"pr_url"`
 	Node               flow.Node `json:"node"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -171,21 +171,21 @@ func (s *Service) List(ctx context.Context) ([]RequirementListItem, error) {
 	return out, nil
 }
 
-// Create 发起需求并派发：Multica 固定项目建父 issue（backlog 起步，不触发
+// Create 发起需求并派发：上游固定项目建父 issue（backlog 起步，不触发
 // run）→ 指派 Tech Lead（置 todo 唤醒 agent）→ infera 落库（大节点=已派发）。
-// 需求描述、验收标准与业务元数据只存 infera，不下发 Multica（FR-2）。
-// Multica 侧失败则不落库（宁可不派发，不留无 issue 的本地孤儿行）。
+// 需求描述、验收标准与业务元数据只存 infera，不下发上游平台（FR-2）。
+// 上游侧失败则不落库（宁可不派发，不留无 issue 的本地孤儿行）。
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Requirement, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return nil, fmt.Errorf("%w: 标题不能为空", ErrInvalid)
 	}
-	issue, err := s.mc.CreateIssue(ctx, multica.CreateIssueInput{
+	issue, err := s.mc.CreateIssue(ctx, tasksource.CreateIssueInput{
 		Title:     in.Title,
 		Status:    "backlog",
-		ProjectID: s.opts.MulticaProjectID,
+		ProjectID: s.opts.TaskSyncProjectID,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("multica 建卡失败: %w", err)
+		return nil, fmt.Errorf("上游建卡失败: %w", err)
 	}
 	if err := s.mc.AssignAgent(ctx, issue.ID, s.opts.TechLeadAgentID); err != nil {
 		// 指派失败：尽力把已建的 issue 停回 backlog（suppressRun 防误唤醒），
@@ -193,7 +193,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Requirement, err
 		if serr := s.mc.SetStatus(ctx, issue.ID, "backlog", true); serr != nil {
 			err = fmt.Errorf("%w（回收 issue 亦失败: %v）", err, serr)
 		}
-		return nil, fmt.Errorf("multica 指派 Tech Lead 失败: %w", err)
+		return nil, fmt.Errorf("上游指派 Tech Lead 失败: %w", err)
 	}
 	r := &flow.Requirement{
 		ID:                 newID(),
@@ -203,8 +203,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Requirement, err
 		Source:             in.Source,
 		Priority:           in.Priority,
 		Acceptors:          in.Acceptors,
-		MulticaIssueID:     issue.ID,
-		MulticaIssueKey:    issue.Identifier,
+		ExternalIssueID:    issue.ID,
+		ExternalIssueKey:   issue.Identifier,
 		Node:               flow.NodeDispatched,
 	}
 	if r.Acceptors == nil {
@@ -217,12 +217,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Requirement, err
 	return &out, nil
 }
 
-// issueURL 拼装 Multica issue 深链（Web 路由 /{slug}/issues/{id}，FR-8）。
+// issueURL 拼装 上游 issue 深链（Web 路由 /{slug}/issues/{id}，FR-8）。
 func (s *Service) issueURL(r *flow.Requirement) string {
-	if r.MulticaIssueID == "" {
+	if r.ExternalIssueID == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s/issues/%s", s.opts.MulticaServerURL, s.opts.MulticaWorkspaceSlug, r.MulticaIssueID)
+	return fmt.Sprintf("%s/%s/issues/%s", s.opts.TaskSyncServerURL, s.opts.TaskSyncWorkspaceSlug, r.ExternalIssueID)
 }
 
 // toRequirement 领域行 → API 响应形态（含深链）。
@@ -239,9 +239,9 @@ func (s *Service) toRequirement(r *flow.Requirement) Requirement {
 		Source:             r.Source,
 		Priority:           r.Priority,
 		Acceptors:          acc,
-		MulticaIssueID:     r.MulticaIssueID,
-		MulticaIssueKey:    r.MulticaIssueKey,
-		MulticaIssueURL:    s.issueURL(r),
+		ExternalIssueID:    r.ExternalIssueID,
+		ExternalIssueKey:   r.ExternalIssueKey,
+		ExternalIssueURL:   s.issueURL(r),
 		PRURL:              r.PRURL,
 		Node:               r.Node,
 		CreatedAt:          r.CreatedAt,

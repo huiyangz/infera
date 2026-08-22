@@ -9,16 +9,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigrateMulticaSyncFromScratch：multica 同步迁移（projects/deliveries 的外部来源
+// TestMigrateTaskSyncFromScratch：任务同步迁移（projects/deliveries 的外部来源
 // 列 + 部分唯一索引）在全新数据库上从零执行成功，且可重复执行（幂等）。
 // 契约列与唯一索引是 T03 同步链路的存储面（INFERA-79 T02 冻结）。
-func TestMigrateMulticaSyncFromScratch(t *testing.T) {
+func TestMigrateTaskSyncFromScratch(t *testing.T) {
 	adminURL := os.Getenv("TEST_DATABASE_URL")
 	if adminURL == "" {
 		t.Skip("TEST_DATABASE_URL 未设置")
 	}
 
-	scratch := fmt.Sprintf("multica_scratch_%d", os.Getpid())
+	scratch := fmt.Sprintf("task_sync_scratch_%d", os.Getpid())
 	scratchURL, err := withDatabase(adminURL, scratch)
 	require.NoError(t, err)
 
@@ -40,11 +40,11 @@ func TestMigrateMulticaSyncFromScratch(t *testing.T) {
 
 	// 外部来源契约列存在
 	for _, col := range []struct{ tbl, col string }{
-		{"projects", "multica_project_id"},
-		{"projects", "multica_synced_at"},
-		{"deliveries", "multica_issue_id"},
-		{"deliveries", "multica_issue_key"},
-		{"deliveries", "multica_synced_at"},
+		{"projects", "external_project_id"},
+		{"projects", "external_synced_at"},
+		{"deliveries", "external_issue_id"},
+		{"deliveries", "external_issue_key"},
+		{"deliveries", "external_synced_at"},
 		{"deliveries", "assignee"},
 		{"deliveries", "priority"},
 	} {
@@ -58,8 +58,8 @@ func TestMigrateMulticaSyncFromScratch(t *testing.T) {
 
 	// 外部 ID 部分唯一索引存在（同步 upsert 的 ON CONFLICT 目标）
 	for _, idx := range []struct{ tbl, idx string }{
-		{"projects", "idx_projects_multica"},
-		{"deliveries", "idx_deliveries_multica"},
+		{"projects", "idx_projects_external"},
+		{"deliveries", "idx_deliveries_external"},
 	} {
 		var n int
 		require.NoError(t, pool.QueryRow(context.Background(),

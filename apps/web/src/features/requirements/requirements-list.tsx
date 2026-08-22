@@ -268,7 +268,7 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
                   </div>
                   <p className='text-xs tabular-nums text-muted-foreground'>
                     活动 {timeAgo(r.updated_at)}
-                    {r.multica_issue_key && ` · ${r.multica_issue_key}`}
+                    {r.external_issue_key && ` · ${r.external_issue_key}`}
                   </p>
                 </CardContent>
               </Card>

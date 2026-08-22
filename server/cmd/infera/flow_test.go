@@ -9,33 +9,33 @@ import (
 	"github.com/tokfinity/infera/internal/config"
 )
 
-// fullFlowConfig 返回完整接入配置（真实值形态，非占位）：multica 三键 +
+// fullFlowConfig 返回完整接入配置（真实值形态，非占位）：tasksource 三键 +
 // 装配两键 + github token。单测用它派生缺项 / 误配场景。
 func fullFlowConfig() config.Config {
 	return config.Config{
-		MulticaServerURL:       "http://localhost:8088",
-		MulticaToken:           "mat_test-token",
-		MulticaWorkspaceID:     "0192eeee-0000-7000-8000-000000000000",
-		MulticaProjectID:       "0192eeee-0000-7000-8000-000000000001",
-		MulticaTechLeadAgentID: "0192eeee-0000-7000-8000-000000000002",
-		MulticaWorkspaceSlug:   "infera",
-		GitHubToken:            "ghp_test-token",
-		GatePollInterval:       30 * time.Second,
+		TaskSyncServerURL:       "http://localhost:8088",
+		TaskSyncToken:           "mat_test-token",
+		TaskSyncWorkspaceID:     "0192eeee-0000-7000-8000-000000000000",
+		TaskSyncProjectID:       "0192eeee-0000-7000-8000-000000000001",
+		TaskSyncTechLeadAgentID: "0192eeee-0000-7000-8000-000000000002",
+		TaskSyncWorkspaceSlug:   "infera",
+		GitHubToken:             "ghp_test-token",
+		GatePollInterval:        30 * time.Second,
 	}
 }
 
-// TestFlowConfigured：全部 MULTICA_* 流转键为空 = 未接入（不装配、不报错）；
+// TestFlowConfigured：全部 TASK_SYNC_* 流转键为空 = 未接入（不装配、不报错）；
 // 任一键出现即视为尝试接入——半配不该静默降级，交给构造器显式报错。
 func TestFlowConfigured(t *testing.T) {
 	require.False(t, flowConfigured(config.Config{}), "全空 = 未接入")
 
 	for name, mutate := range map[string]func(*config.Config){
-		"ServerURL":     func(c *config.Config) { c.MulticaServerURL = "http://localhost:8088" },
-		"Token":         func(c *config.Config) { c.MulticaToken = "t" },
-		"WorkspaceID":   func(c *config.Config) { c.MulticaWorkspaceID = "w" },
-		"ProjectID":     func(c *config.Config) { c.MulticaProjectID = "p" },
-		"TechLeadAgent": func(c *config.Config) { c.MulticaTechLeadAgentID = "a" },
-		"WorkspaceSlug": func(c *config.Config) { c.MulticaWorkspaceSlug = "s" },
+		"ServerURL":     func(c *config.Config) { c.TaskSyncServerURL = "http://localhost:8088" },
+		"Token":         func(c *config.Config) { c.TaskSyncToken = "t" },
+		"WorkspaceID":   func(c *config.Config) { c.TaskSyncWorkspaceID = "w" },
+		"ProjectID":     func(c *config.Config) { c.TaskSyncProjectID = "p" },
+		"TechLeadAgent": func(c *config.Config) { c.TaskSyncTechLeadAgentID = "a" },
+		"WorkspaceSlug": func(c *config.Config) { c.TaskSyncWorkspaceSlug = "s" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := config.Config{}
@@ -54,13 +54,13 @@ func TestAssembleFlowNotConfigured(t *testing.T) {
 	require.Nil(t, poller)
 }
 
-// TestAssembleFlowMulticaMisconfig：multica 半配必须拿到构造器的显式报错
+// TestAssembleFlowTaskSyncMisconfig：tasksource 半配必须拿到构造器的显式报错
 // （哪一项缺、为什么），而不是静默不装配或运行期难排查的 401。
-func TestAssembleFlowMulticaMisconfig(t *testing.T) {
+func TestAssembleFlowTaskSyncMisconfig(t *testing.T) {
 	cfg := fullFlowConfig()
-	cfg.MulticaToken = "" // 有 ServerURL 无 Token：multica.New 显式报错
+	cfg.TaskSyncToken = "" // 有 ServerURL 无 Token：tasksource.New 显式报错
 	_, _, err := assembleFlow(nil, cfg)
-	require.ErrorContains(t, err, "multica: Token 缺失")
+	require.ErrorContains(t, err, "tasksource: Token 缺失")
 }
 
 // TestAssembleFlowGitHubTokenRequired：接入流转必须有 GITHUB_TOKEN
@@ -82,10 +82,46 @@ func TestAssembleFlowPollIntervalValidated(t *testing.T) {
 }
 
 // TestAssembleFlowReachesReqservice：全配置 + 缺连接池 → 报 reqservice 的
-// 连接池错误：证明 multica / github client 与 poller 均已构造成功、装配链
+// 连接池错误：证明 tasksource / github client 与 poller 均已构造成功、装配链
 // 完整走到了 reqservice（Options 必填项校验在 pool 检查之后由 reqservice
 // 自测覆盖；真实 pool 的全链路由 server/test 流转 e2e 覆盖）。
 func TestAssembleFlowReachesReqservice(t *testing.T) {
 	_, _, err := assembleFlow(nil, fullFlowConfig())
 	require.ErrorContains(t, err, "reqservice: 连接池缺失")
+}
+
+// TestAssembleTaskSyncNotConfigured：同步三键全空 = 未接入（不装配、不报错），
+// main 据此不注入同步服务（同步路由 503）也不启动调度器。
+func TestAssembleTaskSyncNotConfigured(t *testing.T) {
+	svc, sched, err := assembleTaskSync(config.Config{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, svc)
+	require.Nil(t, sched)
+}
+
+// TestAssembleTaskSyncFullConfig：三键齐 → 同步服务 + 自动同步调度器
+// （间隔取 cfg.TaskSyncInterval，含 0=仅启动轮）。
+func TestAssembleTaskSyncFullConfig(t *testing.T) {
+	base := fullFlowConfig()
+	for name, interval := range map[string]time.Duration{
+		"周期轮询":  5 * time.Minute,
+		"0 仅启动轮": 0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			cfg.TaskSyncInterval = interval
+			svc, sched, err := assembleTaskSync(cfg, nil)
+			require.NoError(t, err)
+			require.NotNil(t, svc)
+			require.NotNil(t, sched)
+		})
+	}
+}
+
+// TestAssembleTaskSyncMisconfig：半配（有 URL 无 token）拿到构造器显式报错。
+func TestAssembleTaskSyncMisconfig(t *testing.T) {
+	cfg := fullFlowConfig()
+	cfg.TaskSyncToken = ""
+	_, _, err := assembleTaskSync(cfg, nil)
+	require.ErrorContains(t, err, "Token")
 }

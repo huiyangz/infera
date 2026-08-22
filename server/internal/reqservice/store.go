@@ -32,11 +32,11 @@ func mapErr(err error) error {
 func (s *Service) insertRequirement(ctx context.Context, r *flow.Requirement) error {
 	return s.pool.QueryRow(ctx, `
 		INSERT INTO requirements (id, title, description, acceptance_criteria, source, priority,
-			acceptors, multica_issue_id, multica_issue_key, node, pr_url)
+			acceptors, external_issue_id, external_issue_key, node, pr_url)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING created_at, updated_at`,
 		r.ID, r.Title, r.Description, r.AcceptanceCriteria, r.Source, r.Priority,
-		r.Acceptors, r.MulticaIssueID, r.MulticaIssueKey, string(r.Node), r.PRURL,
+		r.Acceptors, r.ExternalIssueID, r.ExternalIssueKey, string(r.Node), r.PRURL,
 	).Scan(&r.CreatedAt, &r.UpdatedAt)
 }
 
@@ -45,7 +45,7 @@ func scanRequirement(row pgx.Row) (*flow.Requirement, error) {
 	var r flow.Requirement
 	var node string
 	err := row.Scan(&r.ID, &r.Title, &r.Description, &r.AcceptanceCriteria, &r.Source, &r.Priority,
-		&r.Acceptors, &r.MulticaIssueID, &r.MulticaIssueKey, &node, &r.PRURL, &r.CreatedAt, &r.UpdatedAt)
+		&r.Acceptors, &r.ExternalIssueID, &r.ExternalIssueKey, &node, &r.PRURL, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -54,7 +54,7 @@ func scanRequirement(row pgx.Row) (*flow.Requirement, error) {
 }
 
 const requirementCols = `id, title, description, acceptance_criteria, source, priority,
-	acceptors, multica_issue_id, multica_issue_key, node, pr_url, created_at, updated_at`
+	acceptors, external_issue_id, external_issue_key, node, pr_url, created_at, updated_at`
 
 // getRequirement 按 id 取需求行。
 func (s *Service) getRequirement(ctx context.Context, id string) (*flow.Requirement, error) {
@@ -74,7 +74,7 @@ func (s *Service) listRequirements(ctx context.Context) ([]flow.Requirement, err
 		var r flow.Requirement
 		var node string
 		if err := rows.Scan(&r.ID, &r.Title, &r.Description, &r.AcceptanceCriteria, &r.Source, &r.Priority,
-			&r.Acceptors, &r.MulticaIssueID, &r.MulticaIssueKey, &node, &r.PRURL, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&r.Acceptors, &r.ExternalIssueID, &r.ExternalIssueKey, &node, &r.PRURL, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.Node = flow.Node(node)
