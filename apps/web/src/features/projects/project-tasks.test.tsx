@@ -10,8 +10,8 @@ import {
 } from 'vitest'
 import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
-import { getProject, listProjectDeliveries } from '@/lib/infera-api'
-import type { Delivery, Project } from '@/lib/infera-types'
+import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
+import type { Project, TaskChild, TaskGroupRow } from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { ProjectTasks } from './project-tasks'
 
@@ -20,7 +20,7 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
   return {
     ...actual,
     getProject: vi.fn(),
-    listProjectDeliveries: vi.fn(),
+    listProjectTaskGroups: vi.fn(),
   }
 })
 
@@ -61,11 +61,29 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   }
 }
 
-function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
+function makeChild(overrides: Partial<TaskChild> = {}): TaskChild {
   return {
-    id: 'd1',
+    id: 'c1',
+    title: '子任务',
+    stage: 1,
+    status: 'active',
+    current_stage: 'code_gen',
+    pending_gate: '',
+    multica_issue_id: '',
+    multica_issue_key: '',
+    assignee: '',
+    priority: '',
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function makeGroup(overrides: Partial<TaskGroupRow> = {}): TaskGroupRow {
+  return {
+    id: 'g1',
     project_id: 'p1',
-    title: '本地需求',
+    title: '本地任务',
     description: '',
     status: 'active',
     current_stage: 'spec',
@@ -73,26 +91,29 @@ function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
     fail_count: 0,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    parent_id: '',
-    wave: 0,
-    split_mode: false,
-    merge_state: '',
-    complexity: '',
     multica_issue_id: '',
     multica_issue_key: '',
     assignee: '',
     priority: '',
     multica_synced_at: null,
+    parent_id: '',
+    wave: 0,
+    split_mode: false,
+    merge_state: '',
+    complexity: '',
+    child_total: 0,
+    child_completed: 0,
+    stages: [],
     ...overrides,
   }
 }
 
 async function renderProjectTasks(
   project: Project,
-  deliveries: Delivery[]
+  groups: TaskGroupRow[]
 ): Promise<RenderResult> {
   vi.mocked(getProject).mockResolvedValue(project)
-  vi.mocked(listProjectDeliveries).mockResolvedValue(deliveries)
+  vi.mocked(listProjectTaskGroups).mockResolvedValue(groups)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -107,47 +128,59 @@ async function renderProjectTasks(
   )
 }
 
-/** 三层结构 fixture：本地父 + 同步父（两个子，一个完成一个排队）+ 孤儿排序稳定 */
-function familyFixture(): Delivery[] {
+/**
+ * 分组 fixture：本地父（无子任务）+ 同步父（两个阶段共三个子任务，
+ * 一完成两未完成），覆盖「父卡片 + 子任务按阶段分组」主路径。
+ */
+function groupsFixture(): TaskGroupRow[] {
   return [
-    makeDelivery({ id: 'd1', title: '本地需求' }),
-    makeDelivery({
-      id: 'd2',
-      title: '同步需求',
+    makeGroup({ id: 'g1', title: '本地任务', status: 'active' }),
+    makeGroup({
+      id: 'g2',
+      title: '同步父任务',
       status: 'queued',
       current_stage: '',
       multica_issue_id: 'mi-2',
       multica_issue_key: 'INFERA-77',
       assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
       multica_synced_at: '2026-08-22T03:00:05Z',
-    }),
-    makeDelivery({
-      id: 'd3',
-      title: '同步子需求甲',
-      status: 'completed',
-      current_stage: '',
-      parent_id: 'd2',
-      wave: 1,
-      multica_issue_id: 'mi-3',
-      multica_issue_key: 'INFERA-78',
-      assignee: 'member:9b45e9f4-a3f2-4c1e-92f4-1cbd88238da3',
-      multica_synced_at: '2026-08-22T03:00:05Z',
-    }),
-    makeDelivery({
-      id: 'd4',
-      title: '同步子需求乙',
-      status: 'queued',
-      current_stage: '',
-      parent_id: 'd2',
-      wave: 1,
-      multica_issue_id: 'mi-4',
-      multica_issue_key: 'INFERA-79',
-      multica_synced_at: '2026-08-22T03:00:05Z',
+      child_total: 3,
+      child_completed: 1,
+      stages: [
+        {
+          stage: 1,
+          tasks: [
+            makeChild({
+              id: 'c3',
+              title: '同步子任务甲',
+              status: 'completed',
+              current_stage: '',
+              multica_issue_id: 'mi-3',
+              multica_issue_key: 'INFERA-78',
+              assignee: 'member:9b45e9f4-a3f2-4c1e-92f4-1cbd88238da3',
+            }),
+            makeChild({
+              id: 'c4',
+              title: '同步子任务乙',
+              status: 'queued',
+              current_stage: '',
+              multica_issue_id: 'mi-4',
+              multica_issue_key: 'INFERA-79',
+            }),
+          ],
+        },
+        {
+          stage: 2,
+          tasks: [
+            makeChild({ id: 'c5', title: '第二批子任务', stage: 2 }),
+          ],
+        },
+      ],
     }),
   ]
 }
 
-/** 等任务行渲染完成（第一行标题出现即 deliveries query 已 resolve） */
+/** 等任务卡片渲染完成（第一行标题出现即 task-groups query 已 resolve） */
 async function waitForTasks(screen: RenderResult, title: string) {
   await expect
     .element(screen.getByRole('link', { name: new RegExp(title) }))
@@ -166,71 +199,121 @@ afterEach(async () => {
   await cleanup()
 })
 
-describe('ProjectTasks 项目任务列表页（AC：父子结构只读 + 可进需求详情）', () => {
-  it('AC2-1: 父子结构展示——父行在顶、子行缩进带「子」chip、父行有完成进度', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      familyFixture()
-    )
-    await waitForTasks(screen, '本地需求')
+describe('ProjectTasks 项目任务页（L202608221704-2-T02：父任务卡片 + 子任务按阶段分组）', () => {
+  it('AC1-1: 父任务渲染为卡片，子任务按「阶段 N」分组列于对应父任务下', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
 
-    // 两个父行 + 两个子行都以链接渲染
-    for (const t of ['本地需求', '同步需求', '同步子需求甲', '同步子需求乙']) {
+    // 两个父任务卡片 + 三个子任务行都以链接渲染
+    for (const t of [
+      '本地任务',
+      '同步父任务',
+      '同步子任务甲',
+      '同步子任务乙',
+      '第二批子任务',
+    ]) {
       await expect
         .element(screen.getByRole('link', { name: new RegExp(t) }))
         .toBeInTheDocument()
     }
-    // 子行带「子」chip，父行不带
-    const childChips = await screen.getByText('子', { exact: true }).all()
-    expect(childChips).toHaveLength(2)
-    // 父行完成进度：1/2
+    // 阶段分组标题（每个阶段组一枚，含该组任务计数）
     await expect
-      .element(screen.getByText(/1\/2/))
+      .element(screen.getByText('阶段 1 · 2 个子任务', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('阶段 2 · 1 个子任务', { exact: true }))
       .toBeInTheDocument()
   })
 
-  it('AC2-2: 只读——无创建表单、无审批/操作按钮（展示性徽标除外）', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      [
-        ...familyFixture(),
-        makeDelivery({
-          id: 'd5',
-          title: '卡门需求',
-          pending_gate: 'spec_approval',
-        }),
-      ]
-    )
-    await waitForTasks(screen, '卡门需求')
+  it('AC1-2: 阶段组按阶段号升序排列（阶段 1 在阶段 2 之前）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '第二批子任务')
 
-    // 无创建入口（旧项目页的「新建交付」表单不在此页）
+    const s1 = await screen
+      .getByText('阶段 1 · 2 个子任务', { exact: true })
+      .element()
+    const s2 = await screen
+      .getByText('阶段 2 · 1 个子任务', { exact: true })
+      .element()
+    expect(s1).toBeTruthy()
+    expect(s2).toBeTruthy()
+    // s1 需在文档流中先于 s2
     expect(
-      await screen.getByPlaceholder('一句话需求，回车提交…').query()
-    ).toBeNull()
-    expect(
-      await screen.getByRole('button', { name: '新建交付' }).query()
-    ).toBeNull()
-    // 待审批只作状态展示（徽标），不提供动作按钮
-    await expect
-      .element(screen.getByText('待审批', { exact: true }))
-      .toBeInTheDocument()
-    expect(
-      await screen.getByRole('button', { name: /批准|通过|审批/ }).query()
-    ).toBeNull()
+      s1!.compareDocumentPosition(s2!) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
-  it('AC2-3: 每条（父与子）可点击进入需求详情 /deliveries/{id}', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      familyFixture()
-    )
-    await waitForTasks(screen, '本地需求')
+  it('AC2-1: 父任务展示状态、阶段与子任务进度（x/y 完成）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '同步父任务')
+
+    // 状态徽标：本地任务=进行中，同步父任务=未启动
+    await expect
+      .element(screen.getByText('进行中', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('未启动', { exact: true }))
+      .toBeInTheDocument()
+    // 阶段位：本地任务在规格生成；同步父无 current_stage 时以 issue key 顶替
+    await expect
+      .element(screen.getByText('规格生成', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('INFERA-77', { exact: true }))
+      .toBeInTheDocument()
+    // 子任务进度 1/3
+    await expect
+      .element(screen.getByText(/1\/3/))
+      .toBeInTheDocument()
+  })
+
+  it('AC2-2: 子任务行展示状态与阶段信息（状态徽标 + 阶段位）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '第二批子任务')
+
+    // 子任务状态：一个已完成、一个未启动、一个进行中
+    await expect
+      .element(screen.getByText('已完成', { exact: true }))
+      .toBeInTheDocument()
+    // 阶段位：有 current_stage 的子任务展示阶段 label；同步镜像以 issue key 顶替
+    await expect
+      .element(screen.getByText('INFERA-78', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('INFERA-79', { exact: true }))
+      .toBeInTheDocument()
+    // 第二批子任务 current_stage=code_gen → 实现阶段 label
+    await expect
+      .element(screen.getByText('实现', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('AC3-1: 界面文案不出现「需求」', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '同步父任务')
+
+    expect(await screen.getByText(/需求/).query()).toBeNull()
+  })
+
+  it('AC3-2: 页头口径为「父任务/子任务」', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    await expect
+      .element(screen.getByText(/父任务与子任务/))
+      .toBeInTheDocument()
+  })
+
+  it('导航: 父与子任务均可点击进入任务详情 /deliveries/{id}', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
 
     const cases: Array<[string, string]> = [
-      ['本地需求', '/deliveries/d1'],
-      ['同步需求', '/deliveries/d2'],
-      ['同步子需求甲', '/deliveries/d3'],
-      ['同步子需求乙', '/deliveries/d4'],
+      ['本地任务', '/deliveries/g1'],
+      ['同步父任务', '/deliveries/g2'],
+      ['同步子任务甲', '/deliveries/c3'],
+      ['同步子任务乙', '/deliveries/c4'],
+      ['第二批子任务', '/deliveries/c5'],
     ]
     for (const [title, href] of cases) {
       const el = await screen
@@ -240,70 +323,84 @@ describe('ProjectTasks 项目任务列表页（AC：父子结构只读 + 可进�
     }
   })
 
-  it('AC2-4: multica 来源标识——同步行带 Multica chip 与 issue key，父行显示负责人短标', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      familyFixture()
-    )
-    await waitForTasks(screen, '本地需求')
+  it('multica 来源: 同步行带 Multica 标识与 issue key，父卡片显示负责人短标', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
 
-    // 三条同步行各带一枚来源标识；本地行不带
+    // 四条同步行各带一枚来源标识（父 1 + 子 3）；本地行不带
     const chips = await screen.getByText('Multica', { exact: true }).all()
-    expect(chips).toHaveLength(3)
-    // issue key 代替空阶段位展示（同步镜像无 current_stage）
-    await expect
-      .element(screen.getByText('INFERA-77', { exact: true }))
-      .toBeInTheDocument()
-    await expect
-      .element(screen.getByText('INFERA-78', { exact: true }))
-      .toBeInTheDocument()
-    // 负责人展示串 type:id 的前端短标（姓名解析归展示层）
+    expect(chips).toHaveLength(4)
+    // 负责人展示串 type:id 的前端短标
     await expect
       .element(screen.getByText('Agent 7bc775bc'))
       .toBeInTheDocument()
   })
 
-  it('AC2-5: 空项目给空态提示', async () => {
+  it('父任务可展开/收起子任务（纯视图切换，进度恒可见）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '同步父任务')
+
+    // 默认展开：子任务与阶段组可见
+    await expect
+      .element(screen.getByRole('link', { name: /同步子任务甲/ }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('阶段 1 · 2 个子任务', { exact: true }))
+      .toBeInTheDocument()
+
+    // 收起：子任务与阶段组隐藏，父卡片与进度仍在
+    await screen.getByRole('button', { name: '收起子任务' }).click()
+    await expect
+      .element(screen.getByRole('link', { name: /同步子任务甲/ }).query())
+      .toBeNull()
+    await expect
+      .element(screen.getByText('阶段 1 · 2 个子任务', { exact: true }).query())
+      .toBeNull()
+    await expect
+      .element(screen.getByRole('link', { name: /同步父任务/ }))
+      .toBeInTheDocument()
+    await expect.element(screen.getByText(/1\/3/)).toBeInTheDocument()
+
+    // 再展开：子任务恢复
+    await screen.getByRole('button', { name: '展开子任务' }).click()
+    await expect
+      .element(screen.getByRole('link', { name: /同步子任务甲/ }))
+      .toBeInTheDocument()
+  })
+
+  it('门禁与冲突徽标: 待审批父任务展示徽标（只读，无动作按钮）', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      [
+        ...groupsFixture(),
+        makeGroup({
+          id: 'g6',
+          title: '卡门任务',
+          pending_gate: 'spec_approval',
+        }),
+      ]
+    )
+    await waitForTasks(screen, '卡门任务')
+
+    // 待审批只作状态展示（徽标），不提供动作按钮
+    await expect
+      .element(screen.getByText('待审批', { exact: true }))
+      .toBeInTheDocument()
+    expect(
+      await screen.getByRole('button', { name: /批准|通过|审批/ }).query()
+    ).toBeNull()
+  })
+
+  it('空项目给空态提示', async () => {
     const screen = await renderProjectTasks(makeProject(), [])
     await expect
       .element(screen.getByText('还没有任务'))
       .toBeInTheDocument()
   })
 
-  it('AC2-6: 父行可展开/收起子任务（纯视图切换）', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      familyFixture()
-    )
-    await waitForTasks(screen, '同步需求')
-
-    // 默认展开：子行可见
-    await expect
-      .element(screen.getByRole('link', { name: /同步子需求甲/ }))
-      .toBeInTheDocument()
-
-    // 收起：子行隐藏，父行仍在
-    await screen.getByRole('button', { name: '收起子任务' }).click()
-    await expect
-      .element(screen.getByRole('link', { name: /同步子需求甲/ }).query())
-      .toBeNull()
-    await expect
-      .element(screen.getByRole('link', { name: /同步需求/ }))
-      .toBeInTheDocument()
-
-    // 再展开：子行恢复
-    await screen.getByRole('button', { name: '展开子任务' }).click()
-    await expect
-      .element(screen.getByRole('link', { name: /同步子需求甲/ }))
-      .toBeInTheDocument()
-  })
-
-  it('AC2-7: 面包屑回链项目详情', async () => {
-    const screen = await renderProjectTasks(
-      makeProject(),
-      familyFixture()
-    )
-    await waitForTasks(screen, '本地需求')
+  it('面包屑回链项目详情', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
 
     const back = await screen.getByRole('link', { name: '演示项目' }).element()
     expect(back?.getAttribute('href')).toBe('/projects/p1')
