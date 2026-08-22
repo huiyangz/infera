@@ -1,15 +1,15 @@
 # 需求流转（infera 作为唯一前台）
 
 INFERA-11：用户只在 infera 里工作——发起需求、审批计划、处理异常、终审合并；
-Multica（执行编排）与 GitHub（PR/评审）全部隐身为后台基础设施，仅保留深链
+任务源（执行编排）与 GitHub（PR/评审）全部隐身为后台基础设施，仅保留深链
 逃生口。infera 侧不内嵌任何 AI：状态机、协议解析、卡片动作全部是确定性代码。
 
 ## 大节点状态机（单一状态源）
 
 每个需求在 infera 侧只有一个业务大节点（`requirements.node`），由闸门轮询器按
-Multica 父 issue 状态推进；infera 是状态源，Multica 只承载执行态：
+任务源父 issue 状态推进；infera 是状态源，任务源只承载执行态：
 
-| infera 节点 | Multica 父 issue 状态 | 说明 |
+| infera 节点 | 任务源父 issue 状态 | 说明 |
 |---|---|---|
 | `intake` 需求受理 | （未建卡） | 本地行，未派发 |
 | `dispatched` 已派发 | `todo` | 已建父 issue 并指派 Tech Lead |
@@ -18,8 +18,8 @@ Multica 父 issue 状态推进；infera 是状态源，Multica 只承载执行�
 | `delivered` 已交付 | `done` | 终态（自动合并档位可直达） |
 | `needs_decision` ⚠️ 需决策 | （异常节点） | 闸门检测触发，状态推进挂起 |
 
-规则：主链只进不退、允许跨级；Multica 侧状态回退不导致节点回退。`needs_decision`
-由「需要决策：」评论进入，停驻期间 Multica 状态推进挂起，只经用户决策动作离开
+规则：主链只进不退、允许跨级；任务源侧状态回退不导致节点回退。`needs_decision`
+由「需要决策：」评论进入，停驻期间任务源状态推进挂起，只经用户决策动作离开
 （重试/跳过/自定义 → 回执行中；中止 → 直达已交付）。
 
 ## 闸门协议（冻结）
@@ -27,7 +27,7 @@ Multica 父 issue 状态推进；infera 是状态源，Multica 只承载执行�
 轮询器增量拉取父 issue 评论，按**顶格、区分大小写、不做 trim** 的固定前缀识别
 三类闸门，识别不了的评论一律落兜底「有新动态」卡：
 
-| 前缀 | 卡片 | 用户动作（infera 代发到 Multica） |
+| 前缀 | 卡片 | 用户动作（infera 代发到任务源） |
 |---|---|---|
 | `待批准：`（全角冒号） | 审批卡 | 批准 → `approved`；驳回并反馈 → 文本原样代发 |
 | `需要决策：`（全角冒号） | 决策卡 | 重试/跳过/中止（固定文本）/自定义回复 |
@@ -54,17 +54,17 @@ body）与 diff 概要（文件数与 +/- 行数），数据经只读端点
 
 | 键 | 说明 |
 |---|---|
-| `MULTICA_SERVER_URL` | 本地 Multica 地址（如 `http://localhost:8088`）。必须显式给出；指向云端 `multica.ai` 视为误配，构造期报错 |
-| `MULTICA_TOKEN` | 服务 token（`mul_*` 用户 / `mat_*` agent 均可）。代发评论、状态轮询、增量评论拉取都以这个身份执行 |
-| `MULTICA_WORKSPACE_ID` | workspace id（每个请求注入 `X-Workspace-Id` 头） |
-| `MULTICA_PROJECT_ID` | 派发目标 Multica 项目 id（父 issue 固定归属） |
-| `MULTICA_TECH_LEAD_AGENT_ID` | 派发指派的 Tech Lead agent id（指派即置 `todo` 唤醒） |
-| `MULTICA_WORKSPACE_SLUG` | workspace slug（深链工作区段，如 `infera`） |
+| `TASK_SYNC_SERVER_URL` | 任务源服务地址（如 `http://localhost:8088`）。必须显式给出且为合法 http(s) 地址（token、workspace id 缺失同样构造期报错——误配宁可不启动） |
+| `TASK_SYNC_TOKEN` | 服务 token（`mul_*` 用户 / `mat_*` agent 均可）。代发评论、状态轮询、增量评论拉取都以这个身份执行 |
+| `TASK_SYNC_WORKSPACE_ID` | workspace id（每个请求注入 `X-Workspace-Id` 头） |
+| `TASK_SYNC_PROJECT_ID` | 派发目标任务源项目 id（父 issue 固定归属） |
+| `TASK_SYNC_TECH_LEAD_AGENT_ID` | 派发指派的 Tech Lead agent id（指派即置 `todo` 唤醒） |
+| `TASK_SYNC_WORKSPACE_SLUG` | workspace slug（深链工作区段，如 `infera`） |
 | `GITHUB_TOKEN` | 合并动作的 GitHub PAT（与仓库导入共用；接入流转时必填） |
 | `GITHUB_API_URL` | 可选，GitHub Enterprise API 入口覆盖 |
 | `GATE_POLL_INTERVAL` | 闸门轮询间隔。默认 30s；(0, 60s] 之外报错——状态变化须 2 分钟内反映 |
 
-装配落点：`server/cmd/infera/flow.go`（`assembleFlow`）。multica/github 薄
+装配落点：`server/cmd/infera/flow.go`（`assembleFlow`）。tasksource/github 薄
 client、`reqservice`（聚合根：派发/读取/代理动作/审计/策略设置）与 `gatepoll`
 （轮询器，`SettingsPolicy` 读表解析合并策略）的构造契约以各包代码为准。
 
@@ -86,8 +86,8 @@ client、`reqservice`（聚合根：派发/读取/代理动作/审计/策略设�
 
 ## 深链逃生口
 
-每张卡与需求行都带 Multica 深链（`multica_issue_url`），形如
-`{MULTICA_SERVER_URL}/{MULTICA_WORKSPACE_SLUG}/issues/{issue-id}`；合并卡另带
+每张卡与需求行都带任务源深链（`external_issue_url`），形如
+`{TASK_SYNC_SERVER_URL}/{TASK_SYNC_WORKSPACE_SLUG}/issues/{issue-id}`；合并卡另带
 GitHub PR 深链（`pr_url`）。默认不打扰，排查时一键直达完整时间线。
 
 ## 运维注意
