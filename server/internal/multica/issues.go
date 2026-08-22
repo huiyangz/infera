@@ -7,11 +7,23 @@ import (
 	"time"
 )
 
-// Issue 是创建后我们消费的最小字段面。
+// Issue 是 issue 的最小字段面。GET /api/issues 与 GET /api/issues/{id}
+// 返回同一 IssueResponse 形状，共用此类型；拉取面（T01）在其上补齐映射
+// 消费的字段——可空字段按指针保真（未填 = null），归一交给 MapIssue。
 type Issue struct {
 	ID         string `json:"id"`
 	Identifier string `json:"identifier"` // 如 INFERA-5
 	Status     string `json:"status"`
+
+	// —— 拉取面（GET /api/issues）补齐的映射消费字段（T01）——
+	Title         string    `json:"title"`
+	Description   *string   `json:"description"`     // 可空：未填为 null
+	Priority      string    `json:"priority"`        // urgent/high/medium/low/none
+	AssigneeType  *string   `json:"assignee_type"`   // 负责人类型（member|agent|squad），可空
+	AssigneeID    *string   `json:"assignee_id"`     // 负责人 id，可空
+	ParentIssueID *string   `json:"parent_issue_id"` // 父子关系：父 issue id，可空（顶层）
+	ProjectID     *string   `json:"project_id"`      // 归属项目，可空
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Comment 是 agent 产物（issue 评论）的最小字段面。
@@ -90,7 +102,55 @@ func (c *Client) ListTaskRuns(ctx context.Context, issueID string) ([]TaskRun, e
 	return runs, nil
 }
 
-// IsTerminal 报告 task 生命周期是否终态。完成判定只认 task-runs 的
+// issuePageSize 是 GET /api/issues 的翻页页大小：服务端上限 100（limit>100
+// 会被压回 100，multica-src 实证），取满上限让拉全量的请求次数最少。
+const issuePageSize = 100
+
+// maxIssuePages 是翻页不收敛防御的上限（100 页 × 100 条 = 1 万条 issue，
+// 远超单 workspace 量级）。正常路径永远到不了这里；到达即服务端 offset
+// 语义异常（恒返满页且 total 谎报），大声报错好过死循环或静默截断。
+const maxIssuePages = 100
+
+// ListIssues 拉取当前 workspace 全部 issue（GET /api/issues?limit=100&offset=N
+// 逐页拉全，聚合保序返回）。
+//
+// 翻页协议（multica-src ListIssues 实证）：
+//   - 服务端按 limit/offset 切页，limit 上限 100；排序键确定
+//     （position + created_at/id 决胜），跨页稳定不重不漏；
+//   - 响应 {"issues": [...], "total": N}，total 是同 WHERE 的 COUNT 真实值
+//     （计数失败时服务端退化为当页条数）；
+//   - 收敛三条件任一满足即停：累计条数达 total / 当页短于请求页大小 /
+//     （兜底）超过 maxIssuePages 报"不收敛"——前两条覆盖正常路径，
+//     第三条兜住病态服务端（如恒返第一页）。
+//
+// 客户端既有增量游标（CommentCursor）只属于评论面；issue 列表端点没有
+// 游标语义，这里按服务端原生 offset 协议翻页，不发明新机制。
+func (c *Client) ListIssues(ctx context.Context) ([]Issue, error) {
+	var all []Issue
+	lastTotal := 0
+	for page := 0; ; page++ {
+		if page >= maxIssuePages {
+			return nil, fmt.Errorf("multica: ListIssues 翻页不收敛：已拉 %d 页（%d 条）仍未满足 total=%d——服务端 offset 语义异常", page, len(all), lastTotal)
+		}
+		var resp struct {
+			Issues []Issue `json:"issues"`
+			Total  int     `json:"total"`
+		}
+		path := fmt.Sprintf("/api/issues?limit=%d&offset=%d", issuePageSize, len(all))
+		if err := c.do(ctx, http.MethodGet, path, nil, &resp); err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Issues...)
+		lastTotal = resp.Total
+		if resp.Total > 0 && len(all) >= resp.Total {
+			return all, nil
+		}
+		if len(resp.Issues) < issuePageSize {
+			return all, nil
+		}
+	}
+}
+
 // completed/failed/timeout/cancelled（坑2）——issue status 不算数：agent 完成时
 // 通常自己把 issue 挪到 in_review，那是设计行为而非编排方的完成信号。
 func IsTerminal(status string) bool {

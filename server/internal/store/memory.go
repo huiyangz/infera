@@ -83,6 +83,38 @@ func (m *Memory) PatchProjectPinned(ctx context.Context, id string, pinned bool)
 	return nil
 }
 
+// UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Pg 一致）：
+// 不存在则插入（整行走入参）、存在则只更新外部来源字段 name——repo_url/default_branch/pinned
+// 归 infera 侧配置，冲突分支不覆盖。重复执行不产生重复行。
+// MulticaProjectID 为空 → ErrInvalid。
+func (m *Memory) UpsertProjectByMulticaID(_ context.Context, p *Project) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.MulticaProjectID == "" {
+		return ErrInvalid
+	}
+	now := time.Now().UTC()
+	for _, ex := range m.projects {
+		if ex.MulticaProjectID != p.MulticaProjectID {
+			continue
+		}
+		ex.Name = p.Name
+		ex.UpdatedAt = now
+		ex.MulticaSyncedAt = &now
+		*p = *ex
+		return nil
+	}
+	if p.ID == "" {
+		p.ID = uuid.NewString()
+	}
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	p.MulticaSyncedAt = &now
+	cp := *p
+	m.projects[cp.ID] = &cp
+	return nil
+}
+
 func (m *Memory) ProjectStats(ctx context.Context, id string) (ProjectStats, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -183,6 +215,7 @@ func (m *Memory) ListChildDeliveries(ctx context.Context, parentID string) ([]De
 
 // UpdateDelivery 按读到的 UpdatedAt 条件更新（乐观锁，同 UpdateAgent）：
 // 并发读-改-写的后写者版本已过期 → ErrConflict，不静默覆盖（全行覆盖曾无版本校验）。
+// multica 来源映射字段归同步入口所有，全行覆盖不冲掉（同 Pg 的列集语义）。
 func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -194,6 +227,55 @@ func (m *Memory) UpdateDelivery(ctx context.Context, d *Delivery) error {
 		return ErrConflict // 读-改-写窗口内被并发更新
 	}
 	d.UpdatedAt = time.Now().UTC()
+	d.MulticaIssueID = ex.MulticaIssueID
+	d.MulticaIssueKey = ex.MulticaIssueKey
+	d.Assignee = ex.Assignee
+	d.Priority = ex.Priority
+	d.MulticaSyncedAt = ex.MulticaSyncedAt
+	cp := *d
+	m.deliveries[cp.ID] = &cp
+	return nil
+}
+
+// UpsertDeliveryByMulticaID 按 multica issue ID 幂等导入（同步链路唯一入口，语义与 Pg 一致）：
+// 不存在则插入（整行走入参，同 CreateDelivery）、存在则只更新外部来源字段
+// （title/description/status/parent_id/wave/issue_key/assignee/priority）——
+// 引擎侧字段（stage/gate/fail_count/...）不被同步覆盖。重复执行不产生重复行。
+// MulticaIssueID 为空 → ErrInvalid；ProjectID 不存在 → ErrNotFound。
+func (m *Memory) UpsertDeliveryByMulticaID(_ context.Context, d *Delivery) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d.MulticaIssueID == "" {
+		return ErrInvalid
+	}
+	if _, ok := m.projects[d.ProjectID]; !ok {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	for _, ex := range m.deliveries {
+		if ex.MulticaIssueID != d.MulticaIssueID {
+			continue
+		}
+		ex.ProjectID = d.ProjectID
+		ex.Title = d.Title
+		ex.Description = d.Description
+		ex.Status = d.Status
+		ex.ParentID = d.ParentID
+		ex.Wave = d.Wave
+		ex.MulticaIssueKey = d.MulticaIssueKey
+		ex.Assignee = d.Assignee
+		ex.Priority = d.Priority
+		ex.UpdatedAt = now
+		ex.MulticaSyncedAt = &now
+		*d = *ex
+		return nil
+	}
+	if d.ID == "" {
+		d.ID = uuid.NewString()
+	}
+	d.CreatedAt = now
+	d.UpdatedAt = now
+	d.MulticaSyncedAt = &now
 	cp := *d
 	m.deliveries[cp.ID] = &cp
 	return nil

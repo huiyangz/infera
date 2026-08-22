@@ -6,13 +6,17 @@ import (
 )
 
 type Project struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	RepoURL       string    `json:"repo_url"`
-	DefaultBranch string    `json:"default_branch"`
-	Pinned        bool      `json:"pinned"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	RepoURL       string `json:"repo_url"`
+	DefaultBranch string `json:"default_branch"`
+	Pinned        bool   `json:"pinned"`
+	// Multica 来源映射（INFERA-79 T02 契约）：外部项目 ID 空 = 非 multica 同步；
+	// synced_at nil = 从未同步。字段归同步入口（UpsertProjectByMulticaID）所有。
+	MulticaProjectID string     `json:"multica_project_id"`
+	MulticaSyncedAt  *time.Time `json:"multica_synced_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type ProjectStats struct {
@@ -22,24 +26,32 @@ type ProjectStats struct {
 }
 
 type Delivery struct {
-	ID             string    `json:"id"`
-	ProjectID      string    `json:"project_id"`
-	Title          string    `json:"title"`
-	Description    string    `json:"description"`
-	Status         string    `json:"status"` // active|queued|completed|blocked
-	CurrentStage   string    `json:"current_stage"`
-	PendingGate    string    `json:"pending_gate"`
-	FailCount      int       `json:"fail_count"`
-	BaseCommit     string    `json:"base_commit"`
-	RejectReason   string    `json:"reject_reason"`   // 门禁驳回意见，重跑对应阶段时注入 prompt 后清空
-	WorkspaceReady bool      `json:"workspace_ready"` // workspace 已就绪（幂等防重 clone/重建）
-	ParentID       string    `json:"parent_id"`       // 拆分子需求指向父 delivery（父/普通需求为空）
-	Wave           int       `json:"wave"`            // 拆分批次号 1..N（父/普通需求=0）
-	SplitMode      bool      `json:"split_mode"`      // 父在设计审批选择了拆分
-	MergeState     string    `json:"merge_state"`     // 父合并状态：'' | 'conflict'
-	Complexity     string    `json:"complexity"`      // 需求复杂度：''（老数据，按 small 走）| small | large（spec_approval 门裁定）
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string `json:"id"`
+	ProjectID      string `json:"project_id"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	Status         string `json:"status"` // active|queued|completed|blocked
+	CurrentStage   string `json:"current_stage"`
+	PendingGate    string `json:"pending_gate"`
+	FailCount      int    `json:"fail_count"`
+	BaseCommit     string `json:"base_commit"`
+	RejectReason   string `json:"reject_reason"`   // 门禁驳回意见，重跑对应阶段时注入 prompt 后清空
+	WorkspaceReady bool   `json:"workspace_ready"` // workspace 已就绪（幂等防重 clone/重建）
+	ParentID       string `json:"parent_id"`       // 拆分子需求指向父 delivery（父/普通需求为空）
+	Wave           int    `json:"wave"`            // 拆分批次号 1..N（父/普通需求=0）
+	SplitMode      bool   `json:"split_mode"`      // 父在设计审批选择了拆分
+	MergeState     string `json:"merge_state"`     // 父合并状态：'' | 'conflict'
+	Complexity     string `json:"complexity"`      // 需求复杂度：''（老数据，按 small 走）| small | large（spec_approval 门裁定）
+	// Multica 来源映射（INFERA-79 T02 契约）：issue ID 空 = 非 multica 同步；synced_at nil = 从未同步。
+	// issue_key 为展示键（如 INFERA-79）；assignee/priority 为同步进来的展示数据（非同步行为空）。
+	// 这些字段归同步入口（UpsertDeliveryByMulticaID）所有，UpdateDelivery 全行覆盖不冲掉。
+	MulticaIssueID  string     `json:"multica_issue_id"`
+	MulticaIssueKey string     `json:"multica_issue_key"`
+	Assignee        string     `json:"assignee"`
+	Priority        string     `json:"priority"`
+	MulticaSyncedAt *time.Time `json:"multica_synced_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type Event struct {
@@ -146,6 +158,11 @@ type Store interface {
 	GetProject(ctx context.Context, id string) (*Project, error)
 	PatchProjectPinned(ctx context.Context, id string, pinned bool) error
 	ProjectStats(ctx context.Context, id string) (ProjectStats, error)
+	// multica 同步导入（T02 冻结的存储面）：按外部 ID 幂等 upsert——不存在则插入、
+	// 存在则只更新外部来源字段（infera 侧配置/引擎字段不被同步覆盖），
+	// 重复执行不产生重复行。外部 ID 为空 → ErrInvalid；delivery 引用不存在的
+	// project → ErrNotFound。
+	UpsertProjectByMulticaID(ctx context.Context, p *Project) error
 	// deliveries
 	CreateDelivery(ctx context.Context, d *Delivery) error
 	GetDelivery(ctx context.Context, id string) (*Delivery, error)
@@ -153,6 +170,7 @@ type Store interface {
 	ListActiveDeliveries(ctx context.Context) ([]Delivery, error)
 	ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error)
 	UpdateDelivery(ctx context.Context, d *Delivery) error
+	UpsertDeliveryByMulticaID(ctx context.Context, d *Delivery) error
 	// events / artifacts / stage_runs
 	AppendEvent(ctx context.Context, e *Event) error
 	ListEvents(ctx context.Context, deliveryID string) ([]Event, error)

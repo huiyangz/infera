@@ -90,6 +90,84 @@ func TestE2ELocalLoop(t *testing.T) {
 	t.Logf("产物评论: %s", artifact)
 }
 
+// TestE2ESmokeListSurface 对本地 Multica 打拉取面的真冒烟（T01）：纯只读——
+// ListProjects / ListIssues 拉全 workspace，再过一遍映射函数验证真实响应
+// 形状能完整解码、父子关系在映射后自洽。不创建、不改任何实体，无收尾。
+//
+// 门禁与跳过语义同 TestE2ELocalLoop（只需 token + workspace，无需 agent）。
+func TestE2ESmokeListSurface(t *testing.T) {
+	token := os.Getenv("MULTICA_TOKEN")
+	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
+	if token == "" || wsID == "" {
+		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过拉取面冒烟",
+			token != "", wsID != "")
+	}
+	baseURL := os.Getenv("MULTICA_SERVER_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:8088"
+	}
+	probe, err := http.NewRequest(http.MethodGet, baseURL+"/api/issue-statuses", nil)
+	require.NoError(t, err)
+	probe.Header.Set("Authorization", "Bearer "+token)
+	probe.Header.Set("X-Workspace-Id", wsID)
+	hc := &http.Client{Timeout: 2 * time.Second}
+	resp, err := hc.Do(probe)
+	if err != nil {
+		t.Skipf("本地 Multica 不可达（%s）: %v — 跳过拉取面冒烟", baseURL, err)
+	}
+	_ = resp.Body.Close()
+
+	c, err := New(baseURL, token, wsID)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 1. 项目拉全：当前 workspace 至少存在本流水线所属项目。
+	projects, err := c.ListProjects(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, projects, "workspace 应至少有一个项目")
+	t.Logf("拉到 %d 个项目", len(projects))
+	projSnapshots := make([]ProjectSnapshot, len(projects))
+	for i, p := range projects {
+		require.NotEmpty(t, p.ID)
+		require.NotEmpty(t, p.Title)
+		projSnapshots[i] = MapProject(p)
+	}
+
+	// 2. issue 拉全（分页聚合），真实字段面解码 + 映射自洽。
+	issues, err := c.ListIssues(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, issues, "workspace 应至少有一个 issue")
+	t.Logf("拉到 %d 个 issue", len(issues))
+	seen := make(map[string]bool, len(issues))
+	issueSnapshots := make([]IssueSnapshot, len(issues))
+	for i, is := range issues {
+		require.NotEmpty(t, is.ID)
+		require.NotEmpty(t, is.Identifier, "列表响应必须带人读键 identifier")
+		require.NotEmpty(t, is.Status)
+		require.False(t, seen[is.ID], "分页聚合不得重复同一条 issue: %s", is.ID)
+		seen[is.ID] = true
+		issueSnapshots[i] = MapIssue(is)
+	}
+	// 父子自洽：子的 ParentExternalID 若非空，必须指向拉到的某个 issue。
+	for _, snap := range issueSnapshots {
+		if snap.ParentExternalID != "" {
+			require.True(t, seen[snap.ParentExternalID],
+				"子的父引用 %s 必须在拉全的 issue 集合内", snap.ParentExternalID)
+		}
+	}
+	// 项目归属自洽：issue 挂的项目必须出现在项目列表里（两级拉面的交叉验证）。
+	projIDs := make(map[string]bool, len(projects))
+	for _, p := range projects {
+		projIDs[p.ID] = true
+	}
+	for _, snap := range issueSnapshots {
+		if snap.ProjectExternalID != "" {
+			require.True(t, projIDs[snap.ProjectExternalID],
+				"issue 挂的项目 %s 必须在项目列表内", snap.ProjectExternalID)
+		}
+	}
+}
+
 // TestE2ESmokeProxySurface 对本地 Multica 打新增面的真冒烟（不派发 agent，
 // 秒级完成）：自建测试 issue → 代发评论 → GetIssue 读状态（uuid 与 key 两条
 // 路径）→ ListCommentsSince 增量游标不漏不重。收尾 suppress_run 置 cancelled。
