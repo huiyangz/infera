@@ -219,7 +219,8 @@ function ParentTaskCard({
   )
 }
 
-/** 一个阶段（批次）组：组头（「阶段 N」标题）+ 组内缩进的子任务行列表 */
+/** 一个阶段（批次）组：组头（「阶段 N」标题；stage 0 = 同步镜像无阶段子任务，
+ *  后端契约排于编号阶段之后）+ 组内缩进的子任务行列表 */
 function StageGroup({
   group,
   separated,
@@ -229,7 +230,9 @@ function StageGroup({
 }) {
   return (
     <section className={cn('mt-3', separated && 'border-t pt-3')}>
-      <h4 className='text-xs font-medium'>阶段 {group.stage}</h4>
+      <h4 className='text-xs font-medium'>
+        {group.stage === 0 ? '无阶段' : `阶段 ${group.stage}`}
+      </h4>
       <ul className='mt-1 space-y-0.5'>
         {group.tasks.map((t) => (
           <li key={t.id}>

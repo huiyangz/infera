@@ -130,11 +130,11 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 	require.Empty(t, parent.ParentID)
 	require.Zero(t, parent.Wave, "顶层需求 wave=0")
 
-	// 子需求：ParentID 解析为父的 infera 内部 ID；未带 stage → wave 兜底 1。
+	// 子需求：ParentID 解析为父的 infera 内部 ID；未带 stage → wave 0（无阶段）。
 	child := findByMulticaIssueID(t, st, "m-iss-2")
 	require.NotNil(t, child)
 	require.Equal(t, parent.ID, child.ParentID)
-	require.Equal(t, 1, child.Wave)
+	require.Zero(t, child.Wave, "无 stage 子任务 wave=0（无阶段），不兜底 1")
 
 	// 终态翻译：done → completed。
 	done := findByMulticaIssueID(t, st, "m-iss-3")
@@ -279,8 +279,9 @@ func TestTranslateStatus(t *testing.T) {
 // --- AC: 同步保留子任务的真实阶段（multica stage → wave，不再全部落阶段 1） ---
 
 // TestSyncChildStagePreserved：含多阶段子任务的项目同步后，子任务在 infera
-// 侧的 stage 与 multica 侧一致——原生表示即拆分批次 wave（父/普通=0，子>=1），
-// 同步镜像沿用同一字段，不发明平行入口。stage 缺失（0）兜底 1；顶层的 stage
+// 侧的 stage 与 multica 侧一致——原生表示即拆分批次 wave（编号阶段>=1），
+// 同步镜像沿用同一字段，不发明平行入口。无 stage 子任务 = 「无阶段」，wave 0
+// 原样落库（不兜底 1，否则显示层会把它混进「阶段 1」）；顶层的 stage
 // 不上行（顶层恒 wave=0）。
 func TestSyncChildStagePreserved(t *testing.T) {
 	st := store.NewMemory()
@@ -316,7 +317,7 @@ func TestSyncChildStagePreserved(t *testing.T) {
 	require.Zero(t, findByMulticaIssueID(t, st, "m-parent").Wave, "顶层恒 wave=0：multica stage 不上行到顶层")
 	require.Equal(t, 2, findByMulticaIssueID(t, st, "m-c1").Wave, "子任务 wave = multica stage")
 	require.Equal(t, 3, findByMulticaIssueID(t, st, "m-c2").Wave, "子任务 wave = multica stage")
-	require.Equal(t, 1, findByMulticaIssueID(t, st, "m-c3").Wave, "stage 缺失（0）兜底 1（子需求 wave>=1 字段约定）")
+	require.Zero(t, findByMulticaIssueID(t, st, "m-c3").Wave, "无 stage 子任务 wave 0 原样落库（0=无阶段，不兜底 1）")
 }
 
 // TestSyncChildStageUpdatedOnResync：multica 侧改阶段后再同步 → 镜像行 wave

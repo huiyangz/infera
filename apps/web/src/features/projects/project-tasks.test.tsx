@@ -319,6 +319,64 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02：子任务按阶�
     await expectBefore(screen, '第二批子任务', '第二批阻塞任务')
   })
 
+  it('无阶段分组: stage 0 渲染「无阶段」标题且位于编号阶段之后（INFERA-146）', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      [
+        makeGroup({
+          id: 'g3',
+          title: '混合父任务',
+          child_total: 3,
+          child_completed: 1,
+          // 后端契约：编号阶段升序在前，wave 0「无阶段」分组垫底
+          stages: [
+            {
+              stage: 1,
+              tasks: [
+                makeChild({ id: 'c11', title: '第一批任务', status: 'completed' }),
+              ],
+            },
+            {
+              stage: 2,
+              tasks: [makeChild({ id: 'c12', title: '第二批任务', stage: 2 })],
+            },
+            {
+              stage: 0,
+              tasks: [
+                makeChild({
+                  id: 'c13',
+                  title: '无阶段同步子任务',
+                  stage: 0,
+                  status: 'queued',
+                  current_stage: '',
+                  multica_issue_id: 'mi-13',
+                  multica_issue_key: 'INFERA-13',
+                }),
+              ],
+            },
+          ],
+        }),
+      ]
+    )
+    await waitForTasks(screen, '无阶段同步子任务')
+
+    // stage 0 组标题为「无阶段」（不渲染「阶段 0」）；编号阶段标题不变
+    await expect
+      .element(screen.getByText('无阶段', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('阶段 1', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('阶段 2', { exact: true }))
+      .toBeInTheDocument()
+
+    // 文档流顺序：阶段 1 → 阶段 2 → 无阶段 → 组内子任务
+    await expectBefore(screen, '阶段 1', '阶段 2')
+    await expectBefore(screen, '阶段 2', '无阶段')
+    await expectBefore(screen, '无阶段', '无阶段同步子任务')
+  })
+
   it('AC2-b: 进度头计数随 fixture 数据驱动（另一组数据给 2/3）', async () => {
     const screen = await renderProjectTasks(
       makeProject(),

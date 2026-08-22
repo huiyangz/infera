@@ -33,6 +33,8 @@ type taskChild struct {
 }
 
 // taskStageGroup 一个阶段（批次）下的子任务集合：tasks 按创建时间升序。
+// stage=0 表示「无阶段」组（multica 同步镜像无 stage 的子任务），排在编号
+// 阶段之后；JSON 形状不变，前端按值渲染分组标题。
 type taskStageGroup struct {
 	Stage int         `json:"stage"`
 	Tasks []taskChild `json:"tasks"`
@@ -49,7 +51,7 @@ type taskGroupRow struct {
 
 // handleProjectTaskGroups 按项目返回「父任务 + 子任务按阶段分组」数据：
 // 顶层行 = parent_id 为空的交付（按创建时间升序），其子任务按 wave 归组
-// （阶段号升序）。子任务不重复出现在顶层。
+// （编号阶段升序，无阶段 wave 0 分组垫底）。子任务不重复出现在顶层。
 func (s *Server) handleProjectTaskGroups(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 	if !validID(w, projectID) {
@@ -68,7 +70,8 @@ func (s *Server) handleProjectTaskGroups(w http.ResponseWriter, r *http.Request)
 }
 
 // buildTaskGroups 由项目交付平表（created_at 升序）装配分组视图：
-// 子任务先按父归集，再按 wave 分桶（桶内保持创建时间升序），阶段号升序输出。
+// 子任务先按父归集，再按 wave 分桶（桶内保持创建时间升序），编号阶段升序
+// 输出，无阶段（wave 0）分组垫底。
 func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
 	children := make(map[string][]store.Delivery)
 	for _, d := range ds {
@@ -101,7 +104,18 @@ func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
 		for w := range buckets {
 			waves = append(waves, w)
 		}
-		slices.Sort(waves)
+		// 编号阶段升序；无阶段（wave 0）视为最大值垫底——朴素升序会把它排到
+		// 阶段 1 之前，无阶段子任务混进编号序列头部。
+		slices.SortFunc(waves, func(a, b int) int {
+			switch {
+			case a == 0 && b != 0:
+				return 1
+			case a != 0 && b == 0:
+				return -1
+			default:
+				return a - b
+			}
+		})
 		for _, w := range waves {
 			row.Stages = append(row.Stages, taskStageGroup{Stage: w, Tasks: buckets[w]})
 		}
