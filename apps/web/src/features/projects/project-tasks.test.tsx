@@ -247,13 +247,14 @@ describe('ProjectTasks 项目任务页（L202608221704-2-T02：父任务卡片 +
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '同步父任务')
 
-    // 状态徽标：本地任务=进行中，同步父任务=未启动
-    await expect
-      .element(screen.getByText('进行中', { exact: true }))
-      .toBeInTheDocument()
-    await expect
-      .element(screen.getByText('未启动', { exact: true }))
-      .toBeInTheDocument()
+    // 状态徽标：本地任务=进行中，同步父任务=未启动（父/子徽标文案相同，
+    // 多元素命中用 .all() 断言存在性）
+    expect(
+      await screen.getByText('进行中', { exact: true }).all()
+    ).not.toHaveLength(0)
+    expect(
+      await screen.getByText('未启动', { exact: true }).all()
+    ).not.toHaveLength(0)
     // 阶段位：本地任务在规格生成；同步父无 current_stage 时以 issue key 顶替
     await expect
       .element(screen.getByText('规格生成', { exact: true }))
@@ -271,10 +272,10 @@ describe('ProjectTasks 项目任务页（L202608221704-2-T02：父任务卡片 +
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '第二批子任务')
 
-    // 子任务状态：一个已完成、一个未启动、一个进行中
-    await expect
-      .element(screen.getByText('已完成', { exact: true }))
-      .toBeInTheDocument()
+    // 子任务状态：已完成子任务的徽标在页面上出现
+    expect(
+      await screen.getByText('已完成', { exact: true }).all()
+    ).not.toHaveLength(0)
     // 阶段位：有 current_stage 的子任务展示阶段 label；同步镜像以 issue key 顶替
     await expect
       .element(screen.getByText('INFERA-78', { exact: true }))
@@ -327,9 +328,9 @@ describe('ProjectTasks 项目任务页（L202608221704-2-T02：父任务卡片 +
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '本地任务')
 
-    // 四条同步行各带一枚来源标识（父 1 + 子 3）；本地行不带
+    // 三条同步行（父 g2 + 子 c3/c4）各带一枚来源标识；本地行不带
     const chips = await screen.getByText('Multica', { exact: true }).all()
-    expect(chips).toHaveLength(4)
+    expect(chips).toHaveLength(3)
     // 负责人展示串 type:id 的前端短标
     await expect
       .element(screen.getByText('Agent 7bc775bc'))
