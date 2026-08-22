@@ -9,18 +9,18 @@ CREATE TABLE requirements (
     source              TEXT NOT NULL DEFAULT '',
     priority            TEXT NOT NULL DEFAULT '',
     acceptors           TEXT[] NOT NULL DEFAULT '{}',    -- 验收人
-    multica_issue_id    TEXT NOT NULL DEFAULT '',        -- Multica issue id 映射
-    multica_issue_key   TEXT NOT NULL DEFAULT '',        -- 如 INFERA-31
+    external_issue_id    TEXT NOT NULL DEFAULT '',        -- 上游 issue id 映射
+    external_issue_key   TEXT NOT NULL DEFAULT '',        -- 如 INFERA-31
     node                TEXT NOT NULL DEFAULT 'intake',  -- 大节点（flow.Node slug）
     pr_url              TEXT NOT NULL DEFAULT '',        -- 评论提取的 github PR 引用
     -- 轮询位置（flow.PollCursor，1:1 挂在需求行上）
     poll_last_comment_at TIMESTAMPTZ,                    -- since 游标；NULL = 尚未轮询
-    poll_last_status     TEXT NOT NULL DEFAULT '',       -- 上次见到的 Multica 状态
+    poll_last_status     TEXT NOT NULL DEFAULT '',       -- 上次见到的上游状态
     poll_seen_verdict    BOOLEAN NOT NULL DEFAULT FALSE, -- 是否见过 verdict 评论
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_requirements_multica_issue ON requirements(multica_issue_id) WHERE multica_issue_id <> '';
+CREATE INDEX idx_requirements_external_issue ON requirements(external_issue_id) WHERE external_issue_id <> '';
 CREATE INDEX idx_requirements_node ON requirements(node);
 
 CREATE TABLE gate_cards (

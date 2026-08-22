@@ -29,7 +29,7 @@ import (
 
 func TestPollOnceAdvancesNode(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -76,7 +76,7 @@ func TestPollOnceAdvancesNode(t *testing.T) {
 
 func TestPollOnceStatusBlockedAndRegressionHold(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
@@ -90,19 +90,19 @@ func TestPollOnceStatusBlockedAndRegressionHold(t *testing.T) {
 	require.Equal(t, flow.NodeDispatched, st.reqs["r1"].Node, "blocked 状态不推进")
 	st.mu.Unlock()
 
-	// 推到待验收后 Multica 状态回退 in_progress：infera 是单一状态源，节点不回退。
+	// 推到待验收后 上游状态回退 in_progress：infera 是单一状态源，节点不回退。
 	mc.setStatus("issue-1", "in_review")
 	require.NoError(t, p.PollOnce(ctx))
 	mc.setStatus("issue-1", "in_progress")
 	require.NoError(t, p.PollOnce(ctx))
 	st.mu.Lock()
-	require.Equal(t, flow.NodeInReview, st.reqs["r1"].Node, "Multica 状态回退不导致节点回退")
+	require.Equal(t, flow.NodeInReview, st.reqs["r1"].Node, "上游状态回退不导致节点回退")
 	st.mu.Unlock()
 }
 
 func TestPollOnceGeneratesGateCards(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -132,7 +132,7 @@ func TestPollOnceGeneratesGateCards(t *testing.T) {
 
 func TestPollOnceFallbackRuleOne(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -156,7 +156,7 @@ func TestPollOnceFallbackRuleOne(t *testing.T) {
 func TestPollOnceFallbackRuleTwo(t *testing.T) {
 	t.Run("跃入 in_review 未见 verdict → 有新动态卡", func(t *testing.T) {
 		st := newMemStore()
-		mc := newFakeMultica()
+		mc := newFakeTaskSource()
 		req := newTestReq("r1", "issue-1")
 		st.addReq(req)
 		mc.addIssue("issue-1", "in_progress")
@@ -177,7 +177,7 @@ func TestPollOnceFallbackRuleTwo(t *testing.T) {
 
 	t.Run("同一轮里 verdict 评论先到 → 不弹兜底卡", func(t *testing.T) {
 		st := newMemStore()
-		mc := newFakeMultica()
+		mc := newFakeTaskSource()
 		req := newTestReq("r1", "issue-1")
 		st.addReq(req)
 		mc.addIssue("issue-1", "in_review") // 首轮直接 in_review（from 空视同跃入）
@@ -193,7 +193,7 @@ func TestPollOnceFallbackRuleTwo(t *testing.T) {
 
 	t.Run("停在 in_review 不算跃迁 → 不再弹", func(t *testing.T) {
 		st := newMemStore()
-		mc := newFakeMultica()
+		mc := newFakeTaskSource()
 		req := newTestReq("r1", "issue-1")
 		st.addReq(req)
 		mc.addIssue("issue-1", "in_review")
@@ -210,7 +210,7 @@ func TestPollOnceFallbackRuleTwo(t *testing.T) {
 
 	t.Run("已见过 verdict → 不弹", func(t *testing.T) {
 		st := newMemStore()
-		mc := newFakeMultica()
+		mc := newFakeTaskSource()
 		req := newTestReq("r1", "issue-1")
 		st.addReq(req)
 		mc.addIssue("issue-1", "in_progress")
@@ -231,7 +231,7 @@ func TestPollOnceFallbackRuleTwo(t *testing.T) {
 
 func TestPollOnceStoresFirstPRURL(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -249,7 +249,7 @@ func TestPollOnceStoresFirstPRURL(t *testing.T) {
 
 func TestPollOnceDedupsRedeliveredComments(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	mc.redeliverAnchor = true // 模拟服务端秒级截断：锚点评论重复下发
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -270,7 +270,7 @@ func TestPollOnceDedupsRedeliveredComments(t *testing.T) {
 
 func TestMergePolicyManual(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -295,7 +295,7 @@ func TestMergePolicyManual(t *testing.T) {
 
 func TestMergePolicyAutoPass(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -329,7 +329,7 @@ func TestMergePolicyAutoPass(t *testing.T) {
 
 func TestMergePolicyAutoPassFailVerdictNoMerge(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -350,7 +350,7 @@ func TestMergePolicyAutoPassFailVerdictNoMerge(t *testing.T) {
 
 func TestMergePolicyThresholdUnder(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -372,7 +372,7 @@ func TestMergePolicyThresholdUnder(t *testing.T) {
 
 func TestMergePolicyThresholdOver(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -394,7 +394,7 @@ func TestMergePolicyThresholdOver(t *testing.T) {
 
 func TestAutoMergeBlockedRetriesNextCycle(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -429,7 +429,7 @@ func TestAutoMergeBlockedRetriesNextCycle(t *testing.T) {
 
 func TestAutoMergeHardErrorGoesManual(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -453,7 +453,7 @@ func TestAutoMergeHardErrorGoesManual(t *testing.T) {
 
 func TestAutoMergeClosedPRConverges(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -481,7 +481,7 @@ func TestAutoMergeClosedPRConverges(t *testing.T) {
 // 卡保持待处理转人工，不误置 delivered、不误记 merge 审计。
 func TestAutoMergeClosedUnmergedPRStaysPending(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -506,7 +506,7 @@ func TestAutoMergeClosedUnmergedPRStaysPending(t *testing.T) {
 
 func TestVerdictWithoutPRURLNoMerge(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	gh := newFakeGitHub()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -537,7 +537,7 @@ func TestDecisionEventAdvancesToNeedsDecision(t *testing.T) {
 	for _, node := range []flow.Node{flow.NodeDispatched, flow.NodeInProgress, flow.NodeInReview} {
 		t.Run(string(node), func(t *testing.T) {
 			st := newMemStore()
-			mc := newFakeMultica()
+			mc := newFakeTaskSource()
 			req := newTestReq("r1", "issue-1")
 			req.Node = node
 			st.addReq(req)
@@ -562,7 +562,7 @@ func TestDecisionEventAdvancesToNeedsDecision(t *testing.T) {
 // 去重语义与 InsertCardIfNew 一致：评论 id 去重不重复建卡，也不重复推进。
 func TestDecisionRedeliveryDoesNotReAdvance(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	mc.redeliverAnchor = true
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
@@ -586,7 +586,7 @@ func TestDecisionRedeliveryDoesNotReAdvance(t *testing.T) {
 // CanTransition 拒绝 needs_decision→needs_decision 的自跃迁。
 func TestSecondDecisionCommentWhileNeedsDecision(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -605,12 +605,12 @@ func TestSecondDecisionCommentWhileNeedsDecision(t *testing.T) {
 }
 
 // TestNeedsDecisionParksAcrossStatusChanges：停驻语义——needs_decision 期间
-// Multica 状态推进挂起。离开该节点的唯一路径是用户决策动作
-//（reqservice.Decide 经 flow.CanTransition 返回活跃节点/直达已交付）；
-// Multica 侧状态变化不越权解围（infera 是单一状态源）。
+// 上游状态推进挂起。离开该节点的唯一路径是用户决策动作
+// （reqservice.Decide 经 flow.CanTransition 返回活跃节点/直达已交付）；
+// 上游侧状态变化不越权解围（infera 是单一状态源）。
 func TestNeedsDecisionParksAcrossStatusChanges(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -629,7 +629,7 @@ func TestNeedsDecisionParksAcrossStatusChanges(t *testing.T) {
 		require.NoError(t, p.PollOnce(ctx))
 		st.mu.Lock()
 		require.Equal(t, flow.NodeNeedsDecision, st.reqs["r1"].Node,
-			"Multica 状态 %s 不解围 needs_decision（停驻等待用户决策）", status)
+			"上游状态 %s 不解围 needs_decision（停驻等待用户决策）", status)
 		st.mu.Unlock()
 	}
 }
@@ -638,7 +638,7 @@ func TestNeedsDecisionParksAcrossStatusChanges(t *testing.T) {
 // 语义与其余轮询写路径一致）。
 func TestDecisionAdvanceStoreErrorPropagates(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")
@@ -653,14 +653,14 @@ func TestDecisionAdvanceStoreErrorPropagates(t *testing.T) {
 
 func TestPollOnceIsolatesRequirementErrors(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req1 := newTestReq("r1", "issue-1")
 	req2 := newTestReq("r2", "issue-2")
 	st.addReq(req1)
 	st.addReq(req2)
 	mc.addIssue("issue-1", "in_progress")
 	mc.addIssue("issue-2", "in_progress")
-	mc.getErr["issue-1"] = errors.New("multica down")
+	mc.getErr["issue-1"] = errors.New("upstream down")
 	mc.addComment("issue-2", "c1", "待批准：计划", testNow)
 
 	p, err := newTestPoller(st, mc, newFakeGitHub(), StaticPolicy(flow.DefaultMergePolicy()))
@@ -672,19 +672,19 @@ func TestPollOnceIsolatesRequirementErrors(t *testing.T) {
 
 func TestNewIntervalValidation(t *testing.T) {
 	policy := StaticPolicy(flow.DefaultMergePolicy())
-	_, err := New(newMemStore(), newFakeMultica(), newFakeGitHub(), policy, 0)
+	_, err := New(newMemStore(), newFakeTaskSource(), newFakeGitHub(), policy, 0)
 	require.Error(t, err)
-	_, err = New(newMemStore(), newFakeMultica(), newFakeGitHub(), policy, -time.Second)
+	_, err = New(newMemStore(), newFakeTaskSource(), newFakeGitHub(), policy, -time.Second)
 	require.Error(t, err)
-	_, err = New(newMemStore(), newFakeMultica(), newFakeGitHub(), policy, 61*time.Second)
+	_, err = New(newMemStore(), newFakeTaskSource(), newFakeGitHub(), policy, 61*time.Second)
 	require.Error(t, err, "超过 60s 的间隔不满足 AC-3 的 2 分钟反映口径")
-	_, err = New(newMemStore(), newFakeMultica(), newFakeGitHub(), policy, 60*time.Second)
+	_, err = New(newMemStore(), newFakeTaskSource(), newFakeGitHub(), policy, 60*time.Second)
 	require.NoError(t, err)
 }
 
 func TestPollerLifecycle(t *testing.T) {
 	st := newMemStore()
-	mc := newFakeMultica()
+	mc := newFakeTaskSource()
 	req := newTestReq("r1", "issue-1")
 	st.addReq(req)
 	mc.addIssue("issue-1", "in_progress")

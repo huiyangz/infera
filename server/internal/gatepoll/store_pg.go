@@ -25,18 +25,18 @@ func NewPgStore(pool *pgxpool.Pool) *PgStore {
 var _ Store = (*PgStore)(nil)
 
 const requirementCols = `id,title,description,acceptance_criteria,source,priority,acceptors,
-	multica_issue_id,multica_issue_key,node,pr_url,
+	external_issue_id,external_issue_key,node,pr_url,
 	poll_last_comment_at,poll_last_status,poll_seen_verdict,created_at,updated_at`
 
 const gateCardCols = `id,requirement_id,kind,status,payload,comment_id,created_at,resolved_at`
 
-// ListInFlight 返回在途需求：已建 Multica 卡（有 issue 映射）且未到已交付。
+// ListInFlight 返回在途需求：已建上游卡（有 issue 映射）且未到已交付。
 // needs_decision 仍在途（等待用户决策后恢复）；intake 未建卡不轮询。
 // 去重语义说明：单轮询器进程内 SELECT+INSERT，无需并发防护。
 func (s *PgStore) ListInFlight(ctx context.Context) ([]InFlight, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+requirementCols+`
 		FROM requirements
-		WHERE multica_issue_id <> '' AND node <> 'delivered'
+		WHERE external_issue_id <> '' AND node <> 'delivered'
 		ORDER BY created_at`)
 	if err != nil {
 		return nil, err
@@ -53,17 +53,17 @@ func (s *PgStore) ListInFlight(ctx context.Context) ([]InFlight, error) {
 		if err := rows.Scan(
 			&req.ID, &req.Title, &req.Description, &req.AcceptanceCriteria,
 			&req.Source, &req.Priority, &req.Acceptors,
-			&req.MulticaIssueID, &req.MulticaIssueKey, &req.Node, &req.PRURL,
+			&req.ExternalIssueID, &req.ExternalIssueKey, &req.Node, &req.PRURL,
 			&lastAt, &lastStat, &seen, &req.CreatedAt, &req.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
 		cur := flow.PollCursor{
-			RequirementID:  req.ID,
-			MulticaIssueID: req.MulticaIssueID,
-			LastStatus:     lastStat,
-			SeenVerdict:    seen,
-			UpdatedAt:      req.UpdatedAt,
+			RequirementID:   req.ID,
+			ExternalIssueID: req.ExternalIssueID,
+			LastStatus:      lastStat,
+			SeenVerdict:     seen,
+			UpdatedAt:       req.UpdatedAt,
 		}
 		if lastAt != nil {
 			cur.LastCommentAt = *lastAt
@@ -74,7 +74,7 @@ func (s *PgStore) ListInFlight(ctx context.Context) ([]InFlight, error) {
 }
 
 // InsertCardIfNew 落一张闸门卡。有评论溯源的卡按 (requirement_id, comment_id)
-// 幂等去重——multica.ListCommentsSince 的调用方契约（锚点秒截断重发时按评论
+// 幂等去重——tasksource.ListCommentsSince 的调用方契约（锚点秒截断重发时按评论
 // id 去重，宁可重发不漏发）。状态类兜底卡（comment_id 空）不去重。
 func (s *PgStore) InsertCardIfNew(ctx context.Context, card flow.GateCard) (bool, error) {
 	if card.CommentID != "" {

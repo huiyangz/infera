@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -22,7 +22,7 @@ type Project struct {
 // ListProjects 拉取当前 workspace 全部项目（GET /api/projects）。
 //
 // 该端点无分页：服务端 ListProjects 不带 limit/offset，一次响应返回全量
-// （multica-src 实证）——因此客户端不翻页，也不为其发明分页机制；若未来
+// （接入 spike 实证）——因此客户端不翻页，也不为其发明分页机制；若未来
 // 服务端引入分页，此处需按 ListIssues 的翻页协议改造。
 func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	var resp struct {

@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -43,49 +44,130 @@ func TestLoadAddrPortFootgun(t *testing.T) {
 	}
 }
 
-// TestLoadMultica：multica 接入三项全走环境变量、完全挂在现有 Load 机制上。
-// ServerURL 绝不内置默认值（坑4：本机默认 profile 指向云端 api.multica.ai，
-// 误配必须可检出——空值交给 multica.New 显式报错，而不是回落到一个可能错误的地址）。
-func TestLoadMultica(t *testing.T) {
+// TestLoadTaskSync：任务源接入三项全走环境变量、完全挂在现有 Load 机制上。
+// ServerURL 绝不内置默认值（坑4），
+// 空值交给 tasksource.New 显式报错，而不是回落到一个可能错误的地址）。
+func TestLoadTaskSync(t *testing.T) {
 	t.Run("未设置时全空不回落默认", func(t *testing.T) {
-		t.Setenv("MULTICA_SERVER_URL", "")
-		t.Setenv("MULTICA_TOKEN", "")
-		t.Setenv("MULTICA_WORKSPACE_ID", "")
+		t.Setenv("TASK_SYNC_SERVER_URL", "")
+		t.Setenv("TASK_SYNC_TOKEN", "")
+		t.Setenv("TASK_SYNC_WORKSPACE_ID", "")
+		// 旧键也一并清空：运行环境可能带历史值（回退语义见 LegacyFallback 测试）。
+		t.Setenv(legacyEnvPrefix+"SERVER_URL", "")
+		t.Setenv(legacyEnvPrefix+"TOKEN", "")
+		t.Setenv(legacyEnvPrefix+"WORKSPACE_ID", "")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Empty(t, cfg.MulticaServerURL)
-		require.Empty(t, cfg.MulticaToken)
-		require.Empty(t, cfg.MulticaWorkspaceID)
+		require.Empty(t, cfg.TaskSyncServerURL)
+		require.Empty(t, cfg.TaskSyncToken)
+		require.Empty(t, cfg.TaskSyncWorkspaceID)
 	})
 
 	t.Run("设置后原样透传", func(t *testing.T) {
-		t.Setenv("MULTICA_SERVER_URL", "http://localhost:8088")
-		t.Setenv("MULTICA_TOKEN", "mul_test-token")
-		t.Setenv("MULTICA_WORKSPACE_ID", "ws-uuid-1")
+		t.Setenv("TASK_SYNC_SERVER_URL", "http://localhost:8088")
+		t.Setenv("TASK_SYNC_TOKEN", "mul_test-token")
+		t.Setenv("TASK_SYNC_WORKSPACE_ID", "ws-uuid-1")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Equal(t, "http://localhost:8088", cfg.MulticaServerURL)
-		require.Equal(t, "mul_test-token", cfg.MulticaToken)
-		require.Equal(t, "ws-uuid-1", cfg.MulticaWorkspaceID)
+		require.Equal(t, "http://localhost:8088", cfg.TaskSyncServerURL)
+		require.Equal(t, "mul_test-token", cfg.TaskSyncToken)
+		require.Equal(t, "ws-uuid-1", cfg.TaskSyncWorkspaceID)
 	})
 }
 
-// TestLoadMulticaProjectID：固定 project（FR-2 派发时 Multica 父 issue 归属的
-// 固定项目）。同 multica 接入面其余键：不设置为空（未启用固定项目语义），
-// 设置后原样透传，不内置默认值。
-func TestLoadMulticaProjectID(t *testing.T) {
-	t.Run("未设置时为空", func(t *testing.T) {
-		t.Setenv("MULTICA_PROJECT_ID", "")
+// TestLoadTaskSyncLegacyFallback：旧键兼容回退——新键未设置时按同后缀读旧键
+// （现有 .env 不中断）。旧前缀字面量只在 config.go 的回退函数一出现，
+// 测试经 legacyEnvPrefix 常量引用，不在测试里重复旧键名。
+func TestLoadTaskSyncLegacyFallback(t *testing.T) {
+	clearAll := func(t *testing.T) {
+		t.Helper()
+		for _, suffix := range []string{"SERVER_URL", "TOKEN", "WORKSPACE_ID", "PROJECT_ID", "TECH_LEAD_AGENT_ID", "WORKSPACE_SLUG"} {
+			t.Setenv(taskSyncEnvPrefix+suffix, "")
+			t.Setenv(legacyEnvPrefix+suffix, "")
+		}
+	}
+	t.Run("仅旧键时回退读取", func(t *testing.T) {
+		clearAll(t)
+		t.Setenv(legacyEnvPrefix+"SERVER_URL", "http://localhost:8088")
+		t.Setenv(legacyEnvPrefix+"TOKEN", "mul_legacy")
+		t.Setenv(legacyEnvPrefix+"WORKSPACE_ID", "ws-old")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Empty(t, cfg.MulticaProjectID)
+		require.Equal(t, "http://localhost:8088", cfg.TaskSyncServerURL)
+		require.Equal(t, "mul_legacy", cfg.TaskSyncToken)
+		require.Equal(t, "ws-old", cfg.TaskSyncWorkspaceID)
+	})
+
+	t.Run("新键优先于旧键", func(t *testing.T) {
+		clearAll(t)
+		t.Setenv(legacyEnvPrefix+"SERVER_URL", "http://old:1")
+		t.Setenv(taskSyncEnvPrefix+"SERVER_URL", "http://new:2")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, "http://new:2", cfg.TaskSyncServerURL, "新键出现即以新键为准")
+	})
+}
+
+// TestLoadTaskSyncInterval：周期轮询间隔键——默认 60s；"0"/"0s" = 关闭周期
+// 轮询（启动同步仍执行）；非法 duration 与负值在配置期直接报错。
+func TestLoadTaskSyncInterval(t *testing.T) {
+	t.Run("未设置默认 60s", func(t *testing.T) {
+		t.Setenv(taskSyncEnvPrefix+"INTERVAL", "")
+		t.Setenv(legacyEnvPrefix+"INTERVAL", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 60*time.Second, cfg.TaskSyncInterval)
+	})
+
+	t.Run("显式间隔透传", func(t *testing.T) {
+		t.Setenv(taskSyncEnvPrefix+"INTERVAL", "45s")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 45*time.Second, cfg.TaskSyncInterval)
+	})
+
+	t.Run("0 与 0s 均为关闭周期轮询", func(t *testing.T) {
+		for _, v := range []string{"0", "0s"} {
+			t.Setenv(taskSyncEnvPrefix+"INTERVAL", v)
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Zero(t, cfg.TaskSyncInterval, "%q 应解析为 0（关闭）", v)
+		}
+	})
+
+	t.Run("非法值与负值报错", func(t *testing.T) {
+		for _, v := range []string{"abc", "-5s"} {
+			t.Setenv(taskSyncEnvPrefix+"INTERVAL", v)
+			_, err := Load()
+			require.ErrorContains(t, err, "TASK_SYNC_INTERVAL", "%q 应配置期报错", v)
+		}
+	})
+
+	t.Run("旧键回退同样生效", func(t *testing.T) {
+		t.Setenv(taskSyncEnvPrefix+"INTERVAL", "")
+		t.Setenv(legacyEnvPrefix+"INTERVAL", "2m")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 2*time.Minute, cfg.TaskSyncInterval)
+	})
+}
+
+// TestLoadTaskSyncProjectID：固定 project（FR-2 派发时 上游父 issue 归属的
+// 固定项目）。同任务源接入面其余键：不设置为空（未启用固定项目语义），
+// 设置后原样透传，不内置默认值。
+func TestLoadTaskSyncProjectID(t *testing.T) {
+	t.Run("未设置时为空", func(t *testing.T) {
+		t.Setenv("TASK_SYNC_PROJECT_ID", "")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Empty(t, cfg.TaskSyncProjectID)
 	})
 
 	t.Run("设置后原样透传", func(t *testing.T) {
-		t.Setenv("MULTICA_PROJECT_ID", "proj-uuid-1")
+		t.Setenv("TASK_SYNC_PROJECT_ID", "proj-uuid-1")
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.Equal(t, "proj-uuid-1", cfg.MulticaProjectID)
+		require.Equal(t, "proj-uuid-1", cfg.TaskSyncProjectID)
 	})
 }
 

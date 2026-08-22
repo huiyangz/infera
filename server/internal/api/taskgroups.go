@@ -15,25 +15,25 @@ import (
 // 数据源，不得静默变更形状。
 
 // taskChild 子任务行：阶段组内的展示字段（stage=所属阶段：拆分子任务=批次
-// wave 1..N，multica 同步镜像子任务=其 stage；status/current_stage/pending_gate
+// wave 1..N，任务同步镜像子任务=其 stage；status/current_stage/pending_gate
 // 驱动行内徽标）。
 type taskChild struct {
-	ID              string    `json:"id"`
-	Title           string    `json:"title"`
-	Stage           int       `json:"stage"`
-	Status          string    `json:"status"`
-	CurrentStage    string    `json:"current_stage"`
-	PendingGate     string    `json:"pending_gate"`
-	MulticaIssueID  string    `json:"multica_issue_id"`
-	MulticaIssueKey string    `json:"multica_issue_key"`
-	Assignee        string    `json:"assignee"`
-	Priority        string    `json:"priority"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Title            string    `json:"title"`
+	Stage            int       `json:"stage"`
+	Status           string    `json:"status"`
+	CurrentStage     string    `json:"current_stage"`
+	PendingGate      string    `json:"pending_gate"`
+	ExternalIssueID  string    `json:"external_issue_id"`
+	ExternalIssueKey string    `json:"external_issue_key"`
+	Assignee         string    `json:"assignee"`
+	Priority         string    `json:"priority"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // taskStageGroup 一个阶段（批次）下的子任务集合：tasks 按创建时间升序。
-// stage=0 表示「无阶段」组（multica 同步镜像无 stage 的子任务），排在编号
+// stage=0 表示「无阶段」组（任务同步镜像无 stage 的子任务），排在编号
 // 阶段之后；JSON 形状不变，前端按值渲染分组标题。
 type taskStageGroup struct {
 	Stage int         `json:"stage"`
@@ -91,7 +91,7 @@ func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
 			buckets[k.Wave] = append(buckets[k.Wave], taskChild{
 				ID: k.ID, Title: k.Title, Stage: k.Wave, Status: k.Status,
 				CurrentStage: k.CurrentStage, PendingGate: k.PendingGate,
-				MulticaIssueID: k.MulticaIssueID, MulticaIssueKey: k.MulticaIssueKey,
+				ExternalIssueID: k.ExternalIssueID, ExternalIssueKey: k.ExternalIssueKey,
 				Assignee: k.Assignee, Priority: k.Priority,
 				CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
 			})

@@ -8,15 +8,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
 // fakeFetch 是 T01 拉取面的测试替身：内容可变（幂等测试两轮喂不同数据），
 // 可注入致命错误，可阻塞（运行互斥测试）。
 type fakeFetch struct {
-	projects []multica.Project
-	issues   []multica.Issue
+	projects []tasksource.Project
+	issues   []tasksource.Issue
 	projErr  error
 	issErr   error
 
@@ -25,7 +25,7 @@ type fakeFetch struct {
 	release chan struct{}
 }
 
-func (f *fakeFetch) ListProjects(ctx context.Context) ([]multica.Project, error) {
+func (f *fakeFetch) ListProjects(ctx context.Context) ([]tasksource.Project, error) {
 	if f.entered != nil {
 		f.entered <- struct{}{}
 		<-f.release
@@ -36,7 +36,7 @@ func (f *fakeFetch) ListProjects(ctx context.Context) ([]multica.Project, error)
 	return f.projects, nil
 }
 
-func (f *fakeFetch) ListIssues(ctx context.Context) ([]multica.Issue, error) {
+func (f *fakeFetch) ListIssues(ctx context.Context) ([]tasksource.Issue, error) {
 	if f.issErr != nil {
 		return nil, f.issErr
 	}
@@ -45,19 +45,19 @@ func (f *fakeFetch) ListIssues(ctx context.Context) ([]multica.Issue, error) {
 
 func ptr[T any](v T) *T { return &v }
 
-func proj(id, title string) multica.Project {
-	return multica.Project{ID: id, Title: title, Status: "in_progress", Priority: "high", UpdatedAt: time.Now()}
+func proj(id, title string) tasksource.Project {
+	return tasksource.Project{ID: id, Title: title, Status: "in_progress", Priority: "high", UpdatedAt: time.Now()}
 }
 
-func iss(id, key, title, projectID string) multica.Issue {
-	return multica.Issue{
+func iss(id, key, title, projectID string) tasksource.Issue {
+	return tasksource.Issue{
 		ID: id, Identifier: key, Title: title, Status: "todo",
 		Priority: "medium", ProjectID: &projectID, UpdatedAt: time.Now(),
 	}
 }
 
-// findByMulticaIssueID 在已落库的 deliveries 里按外部 issue ID 找行。
-func findByMulticaIssueID(t *testing.T, st *store.Memory, extID string) *store.Delivery {
+// findByExternalIssueID 在已落库的 deliveries 里按外部 issue ID 找行。
+func findByExternalIssueID(t *testing.T, st *store.Memory, extID string) *store.Delivery {
 	t.Helper()
 	ctx := context.Background()
 	projs, err := st.ListProjects(ctx)
@@ -68,7 +68,7 @@ func findByMulticaIssueID(t *testing.T, st *store.Memory, extID string) *store.D
 			require.NoError(t, err)
 			return ds
 		}() {
-			if d.MulticaIssueID == extID {
+			if d.ExternalIssueID == extID {
 				return &d
 			}
 		}
@@ -82,8 +82,8 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 	st := store.NewMemory()
 	agentID := "7bc775bc-db05-47bc-8f45-5c3baecc3fe3"
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			{
 				ID: "m-iss-1", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
 				Priority: "urgent", Description: ptr("父描述"), ProjectID: ptr("m-prj-1"),
@@ -110,20 +110,20 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 	require.False(t, res.StartedAt.IsZero())
 	require.False(t, res.FinishedAt.IsZero())
 
-	// 项目：Name 落 multica 标题，外部 ID 与同步时间回填。
+	// 项目：Name 落上游标题，外部 ID 与同步时间回填。
 	projs, err := st.ListProjects(context.Background())
 	require.NoError(t, err)
 	require.Len(t, projs, 1)
 	require.Equal(t, "自动闭环", projs[0].Name)
-	require.Equal(t, "m-prj-1", projs[0].MulticaProjectID)
-	require.NotNil(t, projs[0].MulticaSyncedAt)
+	require.Equal(t, "m-prj-1", projs[0].ExternalProjectID)
+	require.NotNil(t, projs[0].ExternalSyncedAt)
 
 	// 父需求：标题/描述/负责人/优先级/展示键落库；状态翻译为 queued（非 active）。
-	parent := findByMulticaIssueID(t, st, "m-iss-1")
+	parent := findByExternalIssueID(t, st, "m-iss-1")
 	require.NotNil(t, parent)
 	require.Equal(t, "父需求", parent.Title)
 	require.Equal(t, "父描述", parent.Description)
-	require.Equal(t, "INFERA-1", parent.MulticaIssueKey)
+	require.Equal(t, "INFERA-1", parent.ExternalIssueKey)
 	require.Equal(t, "agent:"+agentID, parent.Assignee)
 	require.Equal(t, "urgent", parent.Priority)
 	require.Equal(t, "queued", parent.Status)
@@ -131,13 +131,13 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 	require.Zero(t, parent.Wave, "顶层需求 wave=0")
 
 	// 子需求：ParentID 解析为父的 infera 内部 ID；未带 stage → wave 0（无阶段）。
-	child := findByMulticaIssueID(t, st, "m-iss-2")
+	child := findByExternalIssueID(t, st, "m-iss-2")
 	require.NotNil(t, child)
 	require.Equal(t, parent.ID, child.ParentID)
 	require.Zero(t, child.Wave, "无 stage 子任务 wave=0（无阶段），不兜底 1")
 
 	// 终态翻译：done → completed。
-	done := findByMulticaIssueID(t, st, "m-iss-3")
+	done := findByExternalIssueID(t, st, "m-iss-3")
 	require.NotNil(t, done)
 	require.Equal(t, "completed", done.Status)
 
@@ -152,8 +152,8 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 func TestSyncIdempotentReimport(t *testing.T) {
 	st := store.NewMemory()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			iss("m-iss-1", "INFERA-1", "旧标题", "m-prj-1"),
 		},
 	}
@@ -163,7 +163,7 @@ func TestSyncIdempotentReimport(t *testing.T) {
 	require.Equal(t, 1, res1.ProjectsImported)
 	require.Equal(t, 1, res1.IssuesImported)
 
-	first := findByMulticaIssueID(t, st, "m-iss-1")
+	first := findByExternalIssueID(t, st, "m-iss-1")
 	require.NotNil(t, first)
 
 	// infera 侧推进引擎字段（模拟本地状态）。
@@ -172,8 +172,8 @@ func TestSyncIdempotentReimport(t *testing.T) {
 	require.NoError(t, st.UpdateDelivery(context.Background(), first))
 
 	// 第二轮：标题更新、加一个新 issue。
-	f.projects = []multica.Project{proj("m-prj-1", "自动闭环（改名）")}
-	f.issues = []multica.Issue{
+	f.projects = []tasksource.Project{proj("m-prj-1", "自动闭环（改名）")}
+	f.issues = []tasksource.Issue{
 		iss("m-iss-1", "INFERA-1", "新标题", "m-prj-1"),
 		iss("m-iss-2", "INFERA-2", "后到的需求", "m-prj-1"),
 	}
@@ -190,7 +190,7 @@ func TestSyncIdempotentReimport(t *testing.T) {
 	require.Equal(t, 2, res2.IssuesImported)
 
 	// 同外部 ID 稳定命中同一行：ID 不变、标题更新、引擎字段保留。
-	got := findByMulticaIssueID(t, st, "m-iss-1")
+	got := findByExternalIssueID(t, st, "m-iss-1")
 	require.Equal(t, first.ID, got.ID)
 	require.Equal(t, "新标题", got.Title)
 	require.Equal(t, "code_gen", got.CurrentStage)
@@ -206,8 +206,8 @@ func TestSyncIdempotentReimport(t *testing.T) {
 func TestSyncSkipsSmokeAndProjectlessIssues(t *testing.T) {
 	st := store.NewMemory()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			iss("m-smoke", "INFERA-90", "[infera-e2e] 冒烟单", "m-prj-1"),
 			{ID: "m-noproj", Identifier: "INFERA-91", Title: "无项目 issue", Status: "todo", UpdatedAt: time.Now()},
 			iss("m-normal", "INFERA-92", "正常单", "m-prj-1"),
@@ -234,20 +234,20 @@ func TestSyncSkipsSmokeAndProjectlessIssues(t *testing.T) {
 
 	byReason := map[string]string{}
 	for _, sk := range res.Skips {
-		byReason[sk.Reason] = sk.MulticaIssueID
+		byReason[sk.Reason] = sk.ExternalIssueID
 	}
 	require.Equal(t, "m-smoke", byReason["smoke"])
 	require.Equal(t, "m-noproj", byReason["no_project"])
 
-	require.Nil(t, findByMulticaIssueID(t, st, "m-smoke"), "冒烟单不落库")
-	require.Nil(t, findByMulticaIssueID(t, st, "m-noproj"), "无项目 issue 不落库")
-	require.NotNil(t, findByMulticaIssueID(t, st, "m-normal"))
-	orphan := findByMulticaIssueID(t, st, "m-child-of-smoke")
+	require.Nil(t, findByExternalIssueID(t, st, "m-smoke"), "冒烟单不落库")
+	require.Nil(t, findByExternalIssueID(t, st, "m-noproj"), "无项目 issue 不落库")
+	require.NotNil(t, findByExternalIssueID(t, st, "m-normal"))
+	orphan := findByExternalIssueID(t, st, "m-child-of-smoke")
 	require.NotNil(t, orphan)
 	require.Empty(t, orphan.ParentID, "父未导入 → 顶层导入")
 	require.Zero(t, orphan.Wave)
 	// 父被跳过（no_project）的子单：折叠为顶层，不得误判成环跳过。
-	folded := findByMulticaIssueID(t, st, "m-child-of-noproj")
+	folded := findByExternalIssueID(t, st, "m-child-of-noproj")
 	require.NotNil(t, folded)
 	require.Empty(t, folded.ParentID)
 	require.Zero(t, folded.Wave)
@@ -268,26 +268,26 @@ func TestTranslateStatus(t *testing.T) {
 		"future-word": "queued",
 	}
 	for in, want := range cases {
-		require.Equal(t, want, translateStatus(in), "multica 状态 %q", in)
+		require.Equal(t, want, translateStatus(in), "上游状态 %q", in)
 	}
 	// 全词表穷举：任何输入都不得翻出 active。
 	for _, in := range []string{"todo", "backlog", "in_progress", "in_review", "done", "blocked", "cancelled", "", "active", "xxx"} {
-		require.NotEqual(t, "active", translateStatus(in), "multica 状态 %q 不得映射为 active", in)
+		require.NotEqual(t, "active", translateStatus(in), "上游状态 %q 不得映射为 active", in)
 	}
 }
 
-// --- AC: 同步保留子任务的真实阶段（multica stage → wave，不再全部落阶段 1） ---
+// --- AC: 同步保留子任务的真实阶段（上游 stage → wave，不再全部落阶段 1） ---
 
 // TestSyncChildStagePreserved：含多阶段子任务的项目同步后，子任务在 infera
-// 侧的 stage 与 multica 侧一致——原生表示即拆分批次 wave（编号阶段>=1），
+// 侧的 stage 与 上游侧一致——原生表示即拆分批次 wave（编号阶段>=1），
 // 同步镜像沿用同一字段，不发明平行入口。无 stage 子任务 = 「无阶段」，wave 0
 // 原样落库（不兜底 1，否则显示层会把它混进「阶段 1」）；顶层的 stage
 // 不上行（顶层恒 wave=0）。
 func TestSyncChildStagePreserved(t *testing.T) {
 	st := store.NewMemory()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			{
 				ID: "m-parent", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
 				Priority: "urgent", ProjectID: ptr("m-prj-1"), Stage: 1, UpdatedAt: time.Now(),
@@ -314,40 +314,40 @@ func TestSyncChildStagePreserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4, res.IssuesImported)
 
-	require.Zero(t, findByMulticaIssueID(t, st, "m-parent").Wave, "顶层恒 wave=0：multica stage 不上行到顶层")
-	require.Equal(t, 2, findByMulticaIssueID(t, st, "m-c1").Wave, "子任务 wave = multica stage")
-	require.Equal(t, 3, findByMulticaIssueID(t, st, "m-c2").Wave, "子任务 wave = multica stage")
-	require.Zero(t, findByMulticaIssueID(t, st, "m-c3").Wave, "无 stage 子任务 wave 0 原样落库（0=无阶段，不兜底 1）")
+	require.Zero(t, findByExternalIssueID(t, st, "m-parent").Wave, "顶层恒 wave=0：上游 stage 不上行到顶层")
+	require.Equal(t, 2, findByExternalIssueID(t, st, "m-c1").Wave, "子任务 wave = 上游 stage")
+	require.Equal(t, 3, findByExternalIssueID(t, st, "m-c2").Wave, "子任务 wave = 上游 stage")
+	require.Zero(t, findByExternalIssueID(t, st, "m-c3").Wave, "无 stage 子任务 wave 0 原样落库（0=无阶段，不兜底 1）")
 }
 
-// TestSyncChildStageUpdatedOnResync：multica 侧改阶段后再同步 → 镜像行 wave
+// TestSyncChildStageUpdatedOnResync：上游侧改阶段后再同步 → 镜像行 wave
 // 跟进（upsert 冲突分支更新 wave，幂等重放不卡在旧阶段）。
 func TestSyncChildStageUpdatedOnResync(t *testing.T) {
 	st := store.NewMemory()
-	child := multica.Issue{
+	child := tasksource.Issue{
 		ID: "m-c1", Identifier: "INFERA-2", Title: "子任务", Status: "todo",
 		Priority: "low", ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-parent"), Stage: 2,
 		UpdatedAt: time.Now(),
 	}
-	parent := multica.Issue{
+	parent := tasksource.Issue{
 		ID: "m-parent", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
 		Priority: "urgent", ProjectID: ptr("m-prj-1"), UpdatedAt: time.Now(),
 	}
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues:   []multica.Issue{parent, child},
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues:   []tasksource.Issue{parent, child},
 	}
 	svc := New(f, st)
 	_, err := svc.SyncNow(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 2, findByMulticaIssueID(t, st, "m-c1").Wave)
+	require.Equal(t, 2, findByExternalIssueID(t, st, "m-c1").Wave)
 
-	// multica 侧把子任务挪到阶段 3，再同步。
+	// 上游侧把子任务挪到阶段 3，再同步。
 	child.Stage = 3
-	f.issues = []multica.Issue{parent, child}
+	f.issues = []tasksource.Issue{parent, child}
 	_, err = svc.SyncNow(context.Background())
 	require.NoError(t, err)
-	got := findByMulticaIssueID(t, st, "m-c1")
+	got := findByExternalIssueID(t, st, "m-c1")
 	require.Equal(t, 3, got.Wave, "重同步跟进了新阶段，且不产生重复行")
 }
 
@@ -356,8 +356,8 @@ func TestSyncChildStageUpdatedOnResync(t *testing.T) {
 func TestSyncParentCycleSkipped(t *testing.T) {
 	st := store.NewMemory()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			{
 				ID: "m-a", Identifier: "INFERA-A", Title: "A", Status: "todo",
 				ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-b"), UpdatedAt: time.Now(),
@@ -377,9 +377,9 @@ func TestSyncParentCycleSkipped(t *testing.T) {
 	for _, sk := range res.Skips {
 		require.Equal(t, "parent_cycle", sk.Reason)
 	}
-	require.Nil(t, findByMulticaIssueID(t, st, "m-a"))
-	require.Nil(t, findByMulticaIssueID(t, st, "m-b"))
-	require.NotNil(t, findByMulticaIssueID(t, st, "m-c"))
+	require.Nil(t, findByExternalIssueID(t, st, "m-a"))
+	require.Nil(t, findByExternalIssueID(t, st, "m-b"))
+	require.NotNil(t, findByExternalIssueID(t, st, "m-c"))
 }
 
 // --- 并发守卫：同一时刻只允许一轮同步 ---
@@ -387,7 +387,7 @@ func TestSyncParentCycleSkipped(t *testing.T) {
 func TestSyncRunningGuard(t *testing.T) {
 	st := store.NewMemory()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
 		entered:  make(chan struct{}),
 		release:  make(chan struct{}),
 	}
@@ -417,7 +417,7 @@ func TestSyncRunningGuard(t *testing.T) {
 
 func TestSyncFatalPullError(t *testing.T) {
 	st := store.NewMemory()
-	f := &fakeFetch{projErr: errors.New("multica: HTTP 401")}
+	f := &fakeFetch{projErr: errors.New("tasksource: HTTP 401")}
 	svc := New(f, st)
 	res, err := svc.SyncNow(context.Background())
 	require.Error(t, err)

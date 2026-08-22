@@ -37,7 +37,7 @@ func TestPendingDecisionsEndpoint(t *testing.T) {
 	// 契约冻结：行键集合（解码进 map 断言键集，防形状漂移）。
 	require.ElementsMatch(t,
 		[]string{"id", "project_id", "project_name", "title", "status", "pending_gate", "current_stage",
-			"multica_issue_key", "assignee", "priority", "created_at", "updated_at"},
+			"external_issue_key", "assignee", "priority", "created_at", "updated_at"},
 		keys(rows[0]))
 
 	// updated_at 降序：新卡门的行在前。
@@ -45,7 +45,7 @@ func TestPendingDecisionsEndpoint(t *testing.T) {
 	require.Equal(t, "项目一", rows[0]["project_name"])
 	require.Equal(t, "tasks_approval", rows[0]["pending_gate"])
 	require.Equal(t, gated.ID, rows[1]["id"])
-	require.Equal(t, "", rows[1]["multica_issue_key"])
+	require.Equal(t, "", rows[1]["external_issue_key"])
 }
 
 func TestPendingDecisionsEmptyIsArray(t *testing.T) {

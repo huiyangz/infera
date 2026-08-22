@@ -19,11 +19,11 @@ import (
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/mcp"
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
 	"github.com/tokfinity/infera/internal/syncsvc"
+	"github.com/tokfinity/infera/internal/tasksource"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
 )
@@ -119,7 +119,7 @@ func main() {
 	}
 
 	// 需求流转装配（T07）：reqservice 注入 router（未装配时需求路由 503）、
-	// gatepoll 后台轮询随进程生命周期启停。未配置 MULTICA_* 时不装配不启动。
+	// gatepoll 后台轮询随进程生命周期启停。未配置 TASK_SYNC_* 时不装配不启动。
 	reqSvc, poller, err := assembleFlow(pool, cfg)
 	if err != nil {
 		log.Fatalf("需求流转装配: %v", err)
@@ -129,17 +129,17 @@ func main() {
 		log.Printf("flow: 需求流转已装配（闸门轮询间隔 %s，合并策略 SettingsPolicy）", cfg.GatePollInterval)
 	}
 
-	// Multica 同步装配（INFERA-80 T03）：凭据三键齐 → 构造 client 注入同步服务。
-	// 凭据只经 env → config → multica.New（token 只进 client 内存），不落库不进仓。
+	// 任务同步装配（INFERA-80 T03）：凭据三键齐 → 构造 client 注入同步服务。
+	// 凭据只经 env → config → tasksource.New（token 只进 client 内存），不落库不进仓。
 	// 三键不齐 = 未接入（不装配，同步路由 503）；不全配置时 assembleFlow 已用
 	// 同一组键显式报错过，这里错误只降级不装配（裸开发启动不受影响）。
-	if cfg.MulticaServerURL != "" && cfg.MulticaToken != "" && cfg.MulticaWorkspaceID != "" {
-		mcSync, err := multica.New(cfg.MulticaServerURL, cfg.MulticaToken, cfg.MulticaWorkspaceID)
+	if cfg.TaskSyncServerURL != "" && cfg.TaskSyncToken != "" && cfg.TaskSyncWorkspaceID != "" {
+		mcSync, err := tasksource.New(cfg.TaskSyncServerURL, cfg.TaskSyncToken, cfg.TaskSyncWorkspaceID)
 		if err != nil {
-			log.Printf("multica sync: %v（同步端点保持 503）", err)
+			log.Printf("task sync: %v（同步端点保持 503）", err)
 		} else {
-			srv.SetMulticaSync(syncsvc.New(mcSync, st))
-			log.Printf("multica sync: 已装配（POST/GET /api/multica/sync）")
+			srv.SetTaskSync(syncsvc.New(mcSync, st))
+			log.Printf("task sync: 已装配（POST/GET /api/task-sync）")
 		}
 	}
 

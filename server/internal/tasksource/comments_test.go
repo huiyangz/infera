@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 )
 
 // TestPostComment：代发评论（POST /api/issues/{id}/comments，请求体 content——
-// multica-src CreateComment 实证；201 回显完整评论对象）。审批/决策/返工代理
+// 接入 spike CreateComment 实证；201 回显完整评论对象）。审批/决策/返工代理
 // 动作全走这里，同样必须经过统一认证与 X-Workspace-Id 通道（坑1）。
 func TestPostComment(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotWS string
@@ -45,7 +45,7 @@ func TestPostComment(t *testing.T) {
 }
 
 // TestPostCommentEmptyContent：空内容在客户端就地拒绝、不发请求——与服务端
-// 语义对齐（multica-src 对空 content 回 400 "content is required"），
+// 语义对齐（上游服务对空 content 回 400 "content is required"），
 // 这里只是把同一规则前移，省一次注定失败的往返。
 func TestPostCommentEmptyContent(t *testing.T) {
 	var requests atomic.Int64
@@ -124,12 +124,12 @@ func TestListCommentsSinceSendsCursor(t *testing.T) {
 	_, _, err = c.ListCommentsSince(context.Background(), "i-1", cur)
 	require.NoError(t, err)
 	require.Equal(t, "2026-08-21T05:00:00.123456Z", gotSince,
-		"游标以 RFC3339Nano UTC 串行化（服务端按此格式优先解析，multica-src 实证）")
+		"游标以 RFC3339Nano UTC 串行化（服务端按此格式优先解析，接入 spike 实证）")
 }
 
 // fakeCommentServer 是有状态的假服务器，按服务端真实保真度模拟：
 //   - DB 精度：created_at 微秒（内部保留全精度）；
-//   - 响应序列化：RFC3339 秒级截断（multica-src util.TimestampToString 实证——
+//   - 响应序列化：RFC3339 秒级截断（上游服务 util.TimestampToString 实证——
 //     正是这个截断让纯时间戳游标在同一秒内重复/漏发，本地冒烟实测踩中）；
 //   - since 过滤：DB 精度严格大于；
 //   - 响应顺序：恒按时间升序（服务端文档化不变量）。

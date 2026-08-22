@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -18,15 +18,15 @@ type CommentCursor struct {
 }
 
 // PostComment 以服务身份代发评论（POST /api/issues/{id}/comments，请求体
-// content——multica-src CreateComment 实证；201 回显完整评论对象）。
+// content——接入 spike CreateComment 实证；201 回显完整评论对象）。
 // 审批（approved / 驳回反馈）、决策回复、返工指令全部走这里：infera 是唯一
-// 前台，用户不直接进 Multica 发评论。
+// 前台，用户不直接进上游平台发评论。
 //
 // 空内容在客户端就地拒绝（服务端同样回 400 "content is required"），省一次
 // 注定失败的往返。
 func (c *Client) PostComment(ctx context.Context, issueID, content string) (Comment, error) {
 	if content == "" {
-		return Comment{}, fmt.Errorf("multica: PostComment content 不能为空（服务端同样会以 400 拒绝）")
+		return Comment{}, fmt.Errorf("tasksource: PostComment content 不能为空（服务端同样会以 400 拒绝）")
 	}
 	body := struct {
 		Content string `json:"content"`
@@ -43,7 +43,7 @@ func (c *Client) PostComment(ctx context.Context, issueID, content string) (Comm
 // 评论构造 next 游标，无新评论时 next 原样返回——调用方只需存回 next。
 //
 // 为什么游标是 (AfterID, Since) 二元组而不是纯时间戳（本地冒烟实测踩中）：
-// 服务端响应的 created_at 是秒级截断（multica-src util.TimestampToString
+// 服务端响应的 created_at 是秒级截断（上游服务 util.TimestampToString
 // 用 time.RFC3339 序列化），而 DB 存微秒。纯时间戳游标解析回整秒 .000000，
 // 服务端按 DB 精度做"严格大于 since"过滤 → 边界秒内的旧评论每轮重复返回，
 // 同秒内更晚的新评论又无法与旧评论区分。因此排序唯一可靠的信号是响应顺序。
@@ -52,7 +52,7 @@ func (c *Client) PostComment(ctx context.Context, issueID, content string) (Comm
 //   - 请求：GET /api/issues/{id}/comments?since=<cur.Since>（服务端实证语义：
 //     只回 DB created_at 严格大于 since 的行；由于截断，边界秒的评论组会
 //     整组返回）。cur.Since 为零 → 不带参数（全量）。
-//   - 响应：服务端恒按时间升序（oldest → newest，multica-src 文档化不变量）。
+//   - 响应：服务端恒按时间升序（oldest → newest，上游文档化不变量）。
 //   - 切位：客户端在响应中定位 cur.AfterID，只交付其后的评论。
 //     不重：AfterID 及其之前的评论（含同秒边界组里的旧评论）一律切掉。
 //     不漏：晚于 AfterID 创建的任何评论必然排在其后（升序不变量）→ 必然交付。
@@ -60,7 +60,7 @@ func (c *Client) PostComment(ctx context.Context, issueID, content string) (Comm
 //     /api/comments/{id}，本流水线不删）→ 位置不可知，退化为交付 since 窗口
 //     内全部评论，宁可重发不漏发；调用方按评论 id 幂等去重。
 //
-// 单次返回有平台上限（约 2000 条，超出经 X-Multica-Comments-Truncated 头
+// 单次返回有平台上限（约 2000 条，超出经平台截断标记响应头
 // 标记）；本流水线单个需求 issue 的评论量远低于该量级，客户端不处理翻页。
 func (c *Client) ListCommentsSince(ctx context.Context, issueID string, cur CommentCursor) ([]Comment, CommentCursor, error) {
 	path := "/api/issues/" + issueID + "/comments"

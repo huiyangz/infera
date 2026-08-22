@@ -1,7 +1,7 @@
-// Package syncsvc 编排 Multica → infera 的一次性全量同步：
+// Package syncsvc 编排上游任务平台 → infera 的一次性全量同步：
 // 拉取（T01 client 面 ListProjects/ListIssues）→ 映射（T01 纯映射 MapProject/
-// MapIssue）→ 幂等导入（T02 upsert 面 UpsertProjectByMulticaID/
-// UpsertDeliveryByMulticaID）。只消费两张已冻结的面，不另立入口。
+// MapIssue）→ 幂等导入（T02 upsert 面 UpsertProjectByExternalID/
+// UpsertDeliveryByExternalID）。只消费两张已冻结的面，不另立入口。
 package syncsvc
 
 import (
@@ -14,14 +14,14 @@ import (
 	"time"
 
 	"github.com/tokfinity/infera/internal/engine"
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
-// Fetcher 是 T01 拉取面的最小依赖（*multica.Client 天然满足）。
+// Fetcher 是 T01 拉取面的最小依赖（*tasksource.Client 天然满足）。
 type Fetcher interface {
-	ListProjects(ctx context.Context) ([]multica.Project, error)
-	ListIssues(ctx context.Context) ([]multica.Issue, error)
+	ListProjects(ctx context.Context) ([]tasksource.Project, error)
+	ListIssues(ctx context.Context) ([]tasksource.Issue, error)
 }
 
 // ErrSyncRunning 已有同步在进行（POST 触发互斥；GET 可看 running 状态）。
@@ -36,12 +36,12 @@ const (
 
 // Skip 一条被跳过的 issue（不落库，但计数可审计）。
 type Skip struct {
-	MulticaIssueID string `json:"multica_issue_id"`
-	IssueKey       string `json:"issue_key"`
-	Reason         string `json:"reason"`
+	ExternalIssueID string `json:"external_issue_id"`
+	IssueKey        string `json:"issue_key"`
+	Reason          string `json:"reason"`
 }
 
-// Result 一轮同步的结果（GET /api/multica/sync 的载荷形状，T04/T05 消费面）。
+// Result 一轮同步的结果（GET /api/task-sync 的载荷形状，T04/T05 消费面）。
 // Error 非空 = 本轮中途失败（拉取或落库错误）；此时计数为已完成的部份值。
 type Result struct {
 	StartedAt        time.Time `json:"started_at"`
@@ -101,43 +101,43 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 
 	projects, err := s.fetch.ListProjects(ctx)
 	if err != nil {
-		return record(fmt.Errorf("拉取 multica 项目失败: %w", err))
+		return record(fmt.Errorf("拉取上游项目失败: %w", err))
 	}
 	issues, err := s.fetch.ListIssues(ctx)
 	if err != nil {
-		return record(fmt.Errorf("拉取 multica issue 失败: %w", err))
+		return record(fmt.Errorf("拉取上游 issue 失败: %w", err))
 	}
 
-	// 项目导入：仅落 multica 标题（store.Project 无 description/status/lead 列，
+	// 项目导入：仅落上游标题（store.Project 无 description/status/lead 列，
 	// repo_url/default_branch/pinned 归 infera 侧配置，T02 冻结面不覆盖）。
-	projInternal := make(map[string]string, len(projects)) // multica 项目 id → infera 项目 id
+	projInternal := make(map[string]string, len(projects)) // 上游项目 id → infera 项目 id
 	for _, p := range projects {
-		snap := multica.MapProject(p)
-		sp := &store.Project{Name: snap.Title, MulticaProjectID: snap.ExternalID}
-		if err := s.st.UpsertProjectByMulticaID(ctx, sp); err != nil {
-			return record(fmt.Errorf("导入 multica 项目 %s 失败: %w", snap.ExternalID, err))
+		snap := tasksource.MapProject(p)
+		sp := &store.Project{Name: snap.Title, ExternalProjectID: snap.ExternalID}
+		if err := s.st.UpsertProjectByExternalID(ctx, sp); err != nil {
+			return record(fmt.Errorf("导入上游项目 %s 失败: %w", snap.ExternalID, err))
 		}
 		projInternal[snap.ExternalID] = sp.ID
 		res.ProjectsImported++
 	}
 
 	// issue 映射 + 冒烟单过滤。
-	snaps := make(map[string]multica.IssueSnapshot, len(issues))
+	snaps := make(map[string]tasksource.IssueSnapshot, len(issues))
 	order := make([]string, 0, len(issues)) // 保输入序，结果可复现
 	for _, i := range issues {
 		if strings.Contains(i.Title, "[infera-e2e]") {
-			res.Skips = append(res.Skips, Skip{MulticaIssueID: i.ID, IssueKey: i.Identifier, Reason: skipSmoke})
+			res.Skips = append(res.Skips, Skip{ExternalIssueID: i.ID, IssueKey: i.Identifier, Reason: skipSmoke})
 			res.IssuesSkipped++
 			continue
 		}
-		snap := multica.MapIssue(i)
+		snap := tasksource.MapIssue(i)
 		snaps[snap.ExternalID] = snap
 		order = append(order, snap.ExternalID)
 	}
 
 	// 父先子后排序：顶层/父不在导入集/父已定（导入或跳过）→ 可处理；
 	// 一轮下来无人可放置（互相等父）= 成环，环上成员跳过。
-	internal := make(map[string]string, len(order)) // multica issue id → infera delivery id（已导入的）
+	internal := make(map[string]string, len(order)) // 上游 issue id → infera delivery id（已导入的）
 	decided := make(map[string]bool, len(order))    // 已处理（导入或跳过）——子单等的是父的"定"，不是父的"导入"
 	remaining := order
 	for len(remaining) > 0 {
@@ -162,7 +162,7 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 		}
 	}
 	for _, id := range remaining {
-		res.Skips = append(res.Skips, Skip{MulticaIssueID: id, IssueKey: snaps[id].Identifier, Reason: skipParentLoop})
+		res.Skips = append(res.Skips, Skip{ExternalIssueID: id, IssueKey: snaps[id].Identifier, Reason: skipParentLoop})
 		res.IssuesSkipped++
 	}
 	return record(nil)
@@ -170,34 +170,34 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 
 // importIssue 导入单条 issue 快照；无项目可落 → 计入 Skips 后返回（不视为
 // 错误）。父未导入（不在 internal）→ 折叠为顶层（wave=0、无父）。
-func (s *Service) importIssue(ctx context.Context, res *Result, snap multica.IssueSnapshot,
+func (s *Service) importIssue(ctx context.Context, res *Result, snap tasksource.IssueSnapshot,
 	projInternal, internal map[string]string) error {
 	pid, ok := projInternal[snap.ProjectExternalID]
 	if !ok {
-		res.Skips = append(res.Skips, Skip{MulticaIssueID: snap.ExternalID, IssueKey: snap.Identifier, Reason: skipNoProject})
+		res.Skips = append(res.Skips, Skip{ExternalIssueID: snap.ExternalID, IssueKey: snap.Identifier, Reason: skipNoProject})
 		res.IssuesSkipped++
 		return nil
 	}
 	d := &store.Delivery{
-		ProjectID:       pid,
-		Title:           snap.Title,
-		Description:     snap.Description,
-		Status:          translateStatus(snap.Status),
-		MulticaIssueID:  snap.ExternalID,
-		MulticaIssueKey: snap.Identifier,
-		Assignee:        actorDisplay(snap.Assignee),
-		Priority:        snap.Priority,
+		ProjectID:        pid,
+		Title:            snap.Title,
+		Description:      snap.Description,
+		Status:           translateStatus(snap.Status),
+		ExternalIssueID:  snap.ExternalID,
+		ExternalIssueKey: snap.Identifier,
+		Assignee:         actorDisplay(snap.Assignee),
+		Priority:         snap.Priority,
 	}
 	if parentInt := internal[snap.ParentExternalID]; snap.ParentExternalID != "" && parentInt != "" {
 		d.ParentID = parentInt
-		// 子任务的 stage 沿用原生多阶段表示（拆分批次 wave）：取 multica stage
+		// 子任务的 stage 沿用原生多阶段表示（拆分批次 wave）：取上游 stage
 		// 原值。字段约定：0 = 无阶段（父/普通需求同值域），编号阶段 1..N；无
 		// stage 子任务 0 原样落库，显示层（任务组 API/前端）归入「无阶段」分组，
 		// 引擎批次调度跳过 wave<=0。
 		d.Wave = snap.Stage
 	}
-	if err := s.st.UpsertDeliveryByMulticaID(ctx, d); err != nil {
-		return fmt.Errorf("导入 multica issue %s 失败: %w", snap.ExternalID, err)
+	if err := s.st.UpsertDeliveryByExternalID(ctx, d); err != nil {
+		return fmt.Errorf("导入上游 issue %s 失败: %w", snap.ExternalID, err)
 	}
 	internal[snap.ExternalID] = d.ID
 	res.IssuesImported++
@@ -218,12 +218,12 @@ func (s *Service) Last() *Result {
 	return &cp
 }
 
-// translateStatus 把 multica issue 状态翻译为 infera 需求状态（翻译语义归
+// translateStatus 把 上游 issue 状态翻译为 infera 需求状态（翻译语义归
 // 本消费方，T01 不发明对照表）。铁律：任何输入都不翻出 active——active 意味
 // "引擎正在驱动"（重启恢复 ResumeActive 会对全部 active 交付点火后台驱动），
 // 同步镜像被点火等于替镜像跑引擎。非终态一律 queued（镜像只排队不驱动）。
-func translateStatus(multicaStatus string) string {
-	switch multicaStatus {
+func translateStatus(externalStatus string) string {
+	switch externalStatus {
 	case "done", "cancelled": // cancelled 无 infera 对应词，按终态折叠
 		return engine.StatusCompleted
 	case "blocked":
@@ -235,7 +235,7 @@ func translateStatus(multicaStatus string) string {
 
 // actorDisplay 负责人引用 → assignee 展示串（"type:id"，如 agent:<uuid>）。
 // 拉取面不带姓名，解析展示归前端/后续消费方；无负责人 = 空串。
-func actorDisplay(a multica.ActorRef) string {
+func actorDisplay(a tasksource.ActorRef) string {
 	if a.Type == "" || a.ID == "" {
 		return ""
 	}

@@ -47,7 +47,7 @@ func (s *Server) requireReq(w http.ResponseWriter) bool {
 
 // writeReqErr 把 reqservice 错误映射为 HTTP：
 // ErrInvalid→400；ErrNotFound→404；ErrConflict / ErrMergeBlocked→409
-// （合并阻塞文案面向"稍后重试"）；其余（multica/github/db 故障）→502。
+// （合并阻塞文案面向"稍后重试"）；其余（tasksource/github/db 故障）→502。
 func writeReqErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, reqservice.ErrInvalid):

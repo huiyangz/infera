@@ -32,7 +32,7 @@ const (
 	DecisionCustom = "custom" // 自定义回复（文本原样代发）
 )
 
-// decisionText 决策选项 → 代发文本（固定三项按字面代发，Multica 侧 agent 按字面识别）。
+// decisionText 决策选项 → 代发文本（固定三项按字面代发，上游侧 agent 按字面识别）。
 func decisionText(choice, custom string) (string, error) {
 	switch choice {
 	case DecisionRetry:
@@ -56,7 +56,7 @@ func decisionText(choice, custom string) (string, error) {
 // T08 出口接线：决策成功后代发评论、卡 resolved、审计与节点返回同一事务。
 // 返回语义（经 flow.CanTransition，只从 needs_decision 起跳）：
 //   - 重试 / 跳过 / 自定义是"继续执行"的决策 → 回活跃节点（执行中；
-//     决策打断的是执行，恢复即执行，节点与 Multica 执行态的偏差由后续
+//     决策打断的是执行，恢复即执行，节点与上游执行态的偏差由后续
 //     轮询按父 issue 状态一轮内校正——单一状态源，不越权猜测执行态）；
 //   - 中止 → 直达已交付：flow 大节点集没有 cancelled，中止即不再执行，
 //     需求须退出在途，唯一出路是终态；CanTransition 冻结注释明确
@@ -110,7 +110,7 @@ func (s *Service) postAndResolve(ctx context.Context, requirementID, cardID stri
 	if err := s.checkCard(ctx, requirementID, cardID, kind); err != nil {
 		return err
 	}
-	if _, err := s.mc.PostComment(ctx, r.MulticaIssueID, content); err != nil {
+	if _, err := s.mc.PostComment(ctx, r.ExternalIssueID, content); err != nil {
 		return fmt.Errorf("代发评论失败: %w", err)
 	}
 	return s.resolveCardWithAudit(ctx, requirementID, cardID, action, detail, advance)
@@ -137,7 +137,7 @@ func (s *Service) checkCard(ctx context.Context, requirementID, cardID string, w
 // resolveCardWithAudit 单事务：卡置 resolved + 审计只增一行 [+ 节点返回]。
 // 卡行数为 0 说明并发下已被处理，按冲突回退。advance 非 nil 时再经
 // flow 状态机出口更新需求节点——以 node 仍是 needs_decision 为前提
-//（并发下节点已被移动则整体按冲突回退），任何一步失败全部回滚。
+// （并发下节点已被移动则整体按冲突回退），任何一步失败全部回滚。
 func (s *Service) resolveCardWithAudit(ctx context.Context, requirementID, cardID, action, detail string, advance *flow.Node) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -191,7 +191,7 @@ func parsePRRef(raw string) (flow.PRRef, error) {
 }
 
 // Merge 终审合并：经 gh API 合并 requirement 关联的 PR → 处理卡 + 审计。
-// 不推进大节点——单一状态源纪律：节点由轮询器按 Multica 父 issue 状态推进
+// 不推进大节点——单一状态源纪律：节点由轮询器按 上游父 issue 状态推进
 // （FR-1/FR-3；自动合并档位的直达已交付是 gatepoll 的显式例外）。
 // 合并被阻塞（IsMergeBlocked）时以 ErrMergeBlocked 归因返回，卡保持待处理。
 func (s *Service) Merge(ctx context.Context, requirementID, cardID string) (github.MergeResult, error) {

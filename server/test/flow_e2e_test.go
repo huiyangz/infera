@@ -1,6 +1,6 @@
-// 需求流转本地环境 E2E（INFERA-11 T07 / AC-1～AC-4）：对真实本地 Multica、
+// 需求流转本地环境 E2E（INFERA-11 T07 / AC-1～AC-4）：对真实本地任务平台、
 // 真实 postgres、真实 GitHub API 打全链路——infera 侧只经 infera API 驱动
-// （AC-1 口径），Multica 侧用服务 token 模拟 agent 行为（改父 issue 状态、
+// （AC-1 口径），上游侧用服务 token 模拟 agent 行为（改父 issue 状态、
 // 按协议前缀发评论），合并动作用仓库内一次性测试分支/PR（标题带 test/e2e
 // 标识，验完关闭），全部经 API，不打开任何页面。
 //
@@ -8,13 +8,13 @@
 //
 //	TEST_DATABASE_URL            独立测试库（勿用共享脏库 infera_test；
 //	                             可复用同容器 infera_test_t08 或自建）
-//	MULTICA_SERVER_URL           默认 http://localhost:8088；不可达时 skip
-//	MULTICA_TOKEN                服务 token（模拟 agent 行为的身份）
-//	MULTICA_WORKSPACE_ID         workspace id
-//	MULTICA_PROJECT_ID           派发目标 Multica 项目 id
-//	MULTICA_TECH_LEAD_AGENT_ID   派发指派的 agent——应指向不会被真实唤醒执行
+//	TASK_SYNC_SERVER_URL           默认 http://localhost:8088；不可达时 skip
+//	TASK_SYNC_TOKEN                服务 token（模拟 agent 行为的身份）
+//	TASK_SYNC_WORKSPACE_ID         workspace id
+//	TASK_SYNC_PROJECT_ID           派发目标 上游项目 id
+//	TASK_SYNC_TECH_LEAD_AGENT_ID   派发指派的 agent——应指向不会被真实唤醒执行
 //	                             的 agent（专用测试 agent），指派会置 todo
-//	MULTICA_WORKSPACE_SLUG       深链工作区段
+//	TASK_SYNC_WORKSPACE_SLUG       深链工作区段
 //	GITHUB_TOKEN                 合并动作 PAT（装配 reqservice 本身也需要）
 //	E2E_GITHUB_REPO              合并策略实测的目标仓库，默认 huiyangz/infera
 //	GITHUB_API_URL               可选，GitHub Enterprise 入口覆盖
@@ -46,9 +46,9 @@ import (
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/gatepoll"
 	"github.com/tokfinity/infera/internal/github"
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/reqservice"
 	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
 // put 发 JSON PUT，断言 2xx；out 非 nil 时解码响应体（与 e2e_test.go 的
@@ -87,12 +87,12 @@ type flowEnv struct {
 func flowEnvGate(t *testing.T) *flowEnv {
 	t.Helper()
 	e := &flowEnv{
-		serverURL:  os.Getenv("MULTICA_SERVER_URL"),
-		token:      os.Getenv("MULTICA_TOKEN"),
-		wsID:       os.Getenv("MULTICA_WORKSPACE_ID"),
-		projectID:  os.Getenv("MULTICA_PROJECT_ID"),
-		techLeadID: os.Getenv("MULTICA_TECH_LEAD_AGENT_ID"),
-		slug:       os.Getenv("MULTICA_WORKSPACE_SLUG"),
+		serverURL:  os.Getenv("TASK_SYNC_SERVER_URL"),
+		token:      os.Getenv("TASK_SYNC_TOKEN"),
+		wsID:       os.Getenv("TASK_SYNC_WORKSPACE_ID"),
+		projectID:  os.Getenv("TASK_SYNC_PROJECT_ID"),
+		techLeadID: os.Getenv("TASK_SYNC_TECH_LEAD_AGENT_ID"),
+		slug:       os.Getenv("TASK_SYNC_WORKSPACE_SLUG"),
 		ghToken:    os.Getenv("GITHUB_TOKEN"),
 		ghAPIURL:   os.Getenv("GITHUB_API_URL"),
 		ghRepo:     os.Getenv("E2E_GITHUB_REPO"),
@@ -105,13 +105,13 @@ func flowEnvGate(t *testing.T) *flowEnv {
 	}
 	var missing []string
 	for k, v := range map[string]string{
-		"TEST_DATABASE_URL":          os.Getenv("TEST_DATABASE_URL"),
-		"MULTICA_TOKEN":              e.token,
-		"MULTICA_WORKSPACE_ID":       e.wsID,
-		"MULTICA_PROJECT_ID":         e.projectID,
-		"MULTICA_TECH_LEAD_AGENT_ID": e.techLeadID,
-		"MULTICA_WORKSPACE_SLUG":     e.slug,
-		"GITHUB_TOKEN":               e.ghToken,
+		"TEST_DATABASE_URL":            os.Getenv("TEST_DATABASE_URL"),
+		"TASK_SYNC_TOKEN":              e.token,
+		"TASK_SYNC_WORKSPACE_ID":       e.wsID,
+		"TASK_SYNC_PROJECT_ID":         e.projectID,
+		"TASK_SYNC_TECH_LEAD_AGENT_ID": e.techLeadID,
+		"TASK_SYNC_WORKSPACE_SLUG":     e.slug,
+		"GITHUB_TOKEN":                 e.ghToken,
 	} {
 		if v == "" {
 			missing = append(missing, k)
@@ -123,9 +123,9 @@ func flowEnvGate(t *testing.T) *flowEnv {
 	return e
 }
 
-// probeMultica 可达性探测：连接层失败 = 不可达（skip）；有 HTTP 应答则继续，
-// 凭据问题留给真实调用如实失败（与 internal/multica e2e 同款语义）。
-func probeMultica(t *testing.T, e *flowEnv) {
+// probeTaskSource 可达性探测：连接层失败 = 不可达（skip）；有 HTTP 应答则继续，
+// 凭据问题留给真实调用如实失败（与 internal/tasksource e2e 同款语义）。
+func probeTaskSource(t *testing.T, e *flowEnv) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, e.serverURL+"/api/issue-statuses", nil)
 	require.NoError(t, err)
@@ -133,18 +133,18 @@ func probeMultica(t *testing.T, e *flowEnv) {
 	req.Header.Set("X-Workspace-Id", e.wsID)
 	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
 	if err != nil {
-		t.Skipf("本地 Multica 不可达（%s）: %v —— 跳过流转 e2e", e.serverURL, err)
+		t.Skipf("本地任务平台不可达（%s）: %v —— 跳过流转 e2e", e.serverURL, err)
 	}
 	_ = resp.Body.Close()
 }
 
-// flowHarness 装配被测系统：真实 pg + 真实 multica/github client + reqservice
+// flowHarness 装配被测系统：真实 pg + 真实 tasksource/github client + reqservice
 // + gatepoll（SettingsPolicy）+ httptest HTTP 面。每次 TRUNCATE 流转相关表，
 // 隔离出干净的 requirements / gate_cards / audit_log / project_settings。
 type flowHarness struct {
 	e      *flowEnv
 	pool   *pgxpool.Pool
-	mc     *multica.Client
+	mc     *tasksource.Client
 	gh     *github.Client
 	client *http.Client // 已登录（cookie jar）
 	base   string       // httptest URL
@@ -154,7 +154,7 @@ type flowHarness struct {
 func newFlowHarness(t *testing.T) *flowHarness {
 	t.Helper()
 	e := flowEnvGate(t)
-	probeMultica(t, e)
+	probeTaskSource(t, e)
 
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	require.NoError(t, db.Migrate(dbURL), "迁移测试库失败（库被占用？）")
@@ -165,7 +165,7 @@ func newFlowHarness(t *testing.T) *flowHarness {
 		`TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	require.NoError(t, err, "TRUNCATE 清库失败（勿用共享脏库，见文件头）")
 
-	mc, err := multica.New(e.serverURL, e.token, e.wsID)
+	mc, err := tasksource.New(e.serverURL, e.token, e.wsID)
 	require.NoError(t, err)
 	var ghOpts []github.Option
 	if e.ghAPIURL != "" {
@@ -175,10 +175,10 @@ func newFlowHarness(t *testing.T) *flowHarness {
 	require.NoError(t, err)
 
 	reqSvc, err := reqservice.New(pool, mc, gh, reqservice.Options{
-		MulticaProjectID:     e.projectID,
-		TechLeadAgentID:      e.techLeadID,
-		MulticaServerURL:     e.serverURL,
-		MulticaWorkspaceSlug: e.slug,
+		TaskSyncProjectID:     e.projectID,
+		TechLeadAgentID:       e.techLeadID,
+		TaskSyncServerURL:     e.serverURL,
+		TaskSyncWorkspaceSlug: e.slug,
 	})
 	require.NoError(t, err)
 
@@ -216,13 +216,13 @@ func newFlowHarness(t *testing.T) *flowHarness {
 
 // requirementJSON 是 GET /api/requirements/{id} 的响应面（断言用到的字段）。
 type requirementJSON struct {
-	ID              string     `json:"id"`
-	Node            string     `json:"node"`
-	MulticaIssueID  string     `json:"multica_issue_id"`
-	MulticaIssueKey string     `json:"multica_issue_key"`
-	MulticaIssueURL string     `json:"multica_issue_url"`
-	PRURL           string     `json:"pr_url"`
-	PendingCards    []cardJSON `json:"pending_cards"`
+	ID               string     `json:"id"`
+	Node             string     `json:"node"`
+	ExternalIssueID  string     `json:"external_issue_id"`
+	ExternalIssueKey string     `json:"external_issue_key"`
+	ExternalIssueURL string     `json:"external_issue_url"`
+	PRURL            string     `json:"pr_url"`
+	PendingCards     []cardJSON `json:"pending_cards"`
 }
 
 // cardJSON 是闸门卡的响应面。CommentID 空 = 状态类兜底卡（无评论溯源）。
@@ -246,10 +246,10 @@ func (h *flowHarness) createRequirement(t *testing.T, title string) requirementJ
 	post(t, h.client, h.base+"/api/requirements",
 		fmt.Sprintf(`{"title":%q,"description":"[infera-e2e] 流转 e2e 自动化需求，验完自动收尾","acceptance_criteria":"e2e"}`, title), &r)
 	require.NotEmpty(t, r.ID)
-	require.NotEmpty(t, r.MulticaIssueID, "派发应建 Multica 父 issue")
+	require.NotEmpty(t, r.ExternalIssueID, "派发应建 上游父 issue")
 	// 收尾：suppress_run 置 cancelled，绝不唤醒 assignee 再跑（坑3）。
 	t.Cleanup(func() {
-		if err := h.mc.SetStatus(context.Background(), r.MulticaIssueID, "cancelled", true); err != nil {
+		if err := h.mc.SetStatus(context.Background(), r.ExternalIssueID, "cancelled", true); err != nil {
 			t.Errorf("清理失败：置 cancelled（suppress_run）: %v", err)
 		}
 	})
@@ -327,7 +327,7 @@ func (h *flowHarness) setPolicy(t *testing.T, mode string, threshold int) {
 	require.Equal(t, mode, out.Mode, "设档响应应回显档位")
 }
 
-// --- Multica 侧（服务 token 模拟 agent 行为）---
+// --- 上游侧（服务 token 模拟 agent 行为）---
 
 func (h *flowHarness) mcSetStatus(t *testing.T, issueID, status string) {
 	t.Helper()
@@ -341,7 +341,7 @@ func (h *flowHarness) mcPost(t *testing.T, issueID, content string) {
 	require.NoError(t, err, "模拟 agent 发评论")
 }
 
-func (h *flowHarness) mcComments(t *testing.T, issueID string) []multica.Comment {
+func (h *flowHarness) mcComments(t *testing.T, issueID string) []tasksource.Comment {
 	t.Helper()
 	cs, err := h.mc.ListComments(context.Background(), issueID)
 	require.NoError(t, err)
@@ -492,40 +492,40 @@ func TestFlowE2ECardsAndNodes(t *testing.T) {
 	h := newFlowHarness(t)
 	r := h.createRequirement(t, "[infera-e2e] 闸门卡与状态映射 "+time.Now().Format("0102-150405"))
 
-	// 派发：dispatched + Multica 父 issue 已建（backlog→指派 todo）+ 深链（FR-8）。
+	// 派发：dispatched + 上游父 issue 已建（backlog→指派 todo）+ 深链（FR-8）。
 	require.Equal(t, "dispatched", r.Node, "发起后应停在已派发")
-	require.Equal(t, fmt.Sprintf("%s/%s/issues/%s", h.e.serverURL, h.e.slug, r.MulticaIssueID),
-		r.MulticaIssueURL, "深链逃生口应为 {server}/{slug}/issues/{id}")
-	issue, err := h.mc.GetIssue(context.Background(), r.MulticaIssueKey)
+	require.Equal(t, fmt.Sprintf("%s/%s/issues/%s", h.e.serverURL, h.e.slug, r.ExternalIssueID),
+		r.ExternalIssueURL, "深链逃生口应为 {server}/{slug}/issues/{id}")
+	issue, err := h.mc.GetIssue(context.Background(), r.ExternalIssueKey)
 	require.NoError(t, err)
-	require.Equal(t, r.MulticaIssueID, issue.ID, "key 解析应定位同一 issue")
+	require.Equal(t, r.ExternalIssueID, issue.ID, "key 解析应定位同一 issue")
 
 	// AC-3：in_progress 映射（预算内等到即满足"2 分钟内"）。
-	h.mcSetStatus(t, r.MulticaIssueID, "in_progress")
+	h.mcSetStatus(t, r.ExternalIssueID, "in_progress")
 	elapsed := h.waitForNode(t, r.ID, "in_progress", "AC-3 状态映射 in_progress")
 	require.Less(t, elapsed, 120*time.Second, "AC-3：状态变化必须 2 分钟内反映")
 	t.Logf("AC-3 in_progress 映射耗时 %s", elapsed)
 
-	// AC-2 审批卡：待批准 → 卡出现 → infera 批准 → 代发 approved 落 Multica + 审计。
-	h.mcPost(t, r.MulticaIssueID, "待批准：计划——分两批执行，先后端后前端，风险可控。")
+	// AC-2 审批卡：待批准 → 卡出现 → infera 批准 → 代发 approved 落上游 + 审计。
+	h.mcPost(t, r.ExternalIssueID, "待批准：计划——分两批执行，先后端后前端，风险可控。")
 	approval := h.waitForCard(t, r.ID, "approval", "待批准：")
 	h.cardAction(t, r.ID, approval.ID, "approve", "{}", nil)
 	var approvedSeen bool
-	for _, c := range h.mcComments(t, r.MulticaIssueID) {
+	for _, c := range h.mcComments(t, r.ExternalIssueID) {
 		if c.Content == "approved" {
 			approvedSeen = true
 		}
 	}
-	require.True(t, approvedSeen, "批准应代发 approved 评论到 Multica（FR-5）")
+	require.True(t, approvedSeen, "批准应代发 approved 评论到上游（FR-5）")
 	require.Contains(t, h.audit(t, r.ID)[0].Action, "approve", "代理动作应落审计")
 
 	// AC-2 决策卡（T08）：需要决策 → 卡与节点 needs_decision 同事务出现。
-	h.mcPost(t, r.MulticaIssueID, "需要决策：依赖的下游服务暂不可用，是否继续等待？")
+	h.mcPost(t, r.ExternalIssueID, "需要决策：依赖的下游服务暂不可用，是否继续等待？")
 	h.waitForCard(t, r.ID, "decision", "需要决策：")
 	h.waitForNode(t, r.ID, "needs_decision", "决策事件应推进节点 needs_decision")
 
-	// 停驻断言：needs_decision 期间 Multica 状态推进挂起（多轮轮询不动）。
-	h.mcSetStatus(t, r.MulticaIssueID, "in_review")
+	// 停驻断言：needs_decision 期间 上游状态推进挂起（多轮轮询不动）。
+	h.mcSetStatus(t, r.ExternalIssueID, "in_review")
 	time.Sleep(flowHoldTicks)
 	d := h.reqDetail(t, r.ID)
 	require.Equal(t, "needs_decision", d.Node, "停驻期间状态推进必须挂起（infera 是单一状态源）")
@@ -545,20 +545,20 @@ func TestFlowE2ECardsAndNodes(t *testing.T) {
 	h.waitForNode(t, r.ID, "in_progress", "决策 retry 应回执行中")
 	h.waitForNode(t, r.ID, "in_review", "恢复后应按父 issue 状态校正")
 	var retrySeen bool
-	for _, c := range h.mcComments(t, r.MulticaIssueID) {
+	for _, c := range h.mcComments(t, r.ExternalIssueID) {
 		if c.Content == "重试" {
 			retrySeen = true
 		}
 	}
-	require.True(t, retrySeen, "决策应代发「重试」评论到 Multica")
+	require.True(t, retrySeen, "决策应代发「重试」评论到上游")
 
 	// AC-2 兜底规则一：无前缀评论 → "有新动态"卡（有评论溯源，与规则二区分）。
-	h.mcPost(t, r.MulticaIssueID, "进展：后端联调完成，开始自测。")
+	h.mcPost(t, r.ExternalIssueID, "进展：后端联调完成，开始自测。")
 	update := h.waitForCard(t, r.ID, "update", "后端联调完成")
 	require.NotEmpty(t, update.CommentID, "无前缀评论的兜底卡应带评论溯源（区别于规则二的中性卡）")
 
 	// AC-3：done → delivered（第四档状态）。
-	h.mcSetStatus(t, r.MulticaIssueID, "done")
+	h.mcSetStatus(t, r.ExternalIssueID, "done")
 	elapsed = h.waitForNode(t, r.ID, "delivered", "AC-3 状态映射 done")
 	require.Less(t, elapsed, 120*time.Second, "AC-3：状态变化必须 2 分钟内反映")
 	t.Logf("AC-3 done 映射耗时 %s", elapsed)
@@ -574,17 +574,17 @@ func TestFlowE2EManualMergeJourney(t *testing.T) {
 	r := h.createRequirement(t, "[infera-e2e] 手动档合并全程 "+time.Now().Format("0102-150405"))
 
 	// 审批（infera 内完成）。
-	h.mcPost(t, r.MulticaIssueID, "待批准：计划——单包小改，附 PR。")
+	h.mcPost(t, r.ExternalIssueID, "待批准：计划——单包小改，附 PR。")
 	approval := h.waitForCard(t, r.ID, "approval", "待批准：")
 	h.cardAction(t, r.ID, approval.ID, "approve", "{}", nil)
 
 	// 执行（模拟 agent 推进 + 建测试 PR + verdict）。
-	h.mcSetStatus(t, r.MulticaIssueID, "in_progress")
+	h.mcSetStatus(t, r.ExternalIssueID, "in_progress")
 	h.waitForNode(t, r.ID, "in_progress", "AC-1 执行段")
 	prURL, num := h.createTestPR(t, 3)
-	h.mcPost(t, r.MulticaIssueID, "verdict: PASS\n行级评审无阻塞意见。\n"+prURL)
+	h.mcPost(t, r.ExternalIssueID, "verdict: PASS\n行级评审无阻塞意见。\n"+prURL)
 	merge := h.waitForCard(t, r.ID, "merge", "verdict:")
-	h.mcSetStatus(t, r.MulticaIssueID, "in_review")
+	h.mcSetStatus(t, r.ExternalIssueID, "in_review")
 	h.waitForNode(t, r.ID, "in_review", "AC-1 待验收段")
 	d := h.reqDetail(t, r.ID)
 	require.Equal(t, prURL, d.PRURL, "verdict 评论中的 PR 引用应被提取（FR-7/FR-8 深链）")
@@ -616,7 +616,7 @@ func TestFlowE2EManualMergeJourney(t *testing.T) {
 	require.True(t, merged, "PR 应真实合并")
 
 	// 已交付。
-	h.mcSetStatus(t, r.MulticaIssueID, "done")
+	h.mcSetStatus(t, r.ExternalIssueID, "done")
 	h.waitForNode(t, r.ID, "delivered", "AC-1 已交付段")
 	var mergeAudit bool
 	for _, a := range h.audit(t, r.ID) {
@@ -634,10 +634,10 @@ func TestFlowE2EAutoPassMerge(t *testing.T) {
 	h.setPolicy(t, "auto_pass", 0)
 	r := h.createRequirement(t, "[infera-e2e] auto_pass 自动合并 "+time.Now().Format("0102-150405"))
 
-	h.mcSetStatus(t, r.MulticaIssueID, "in_progress")
+	h.mcSetStatus(t, r.ExternalIssueID, "in_progress")
 	h.waitForNode(t, r.ID, "in_progress", "执行段")
 	prURL, num := h.createTestPR(t, 2)
-	h.mcPost(t, r.MulticaIssueID, "verdict: PASS\n"+prURL)
+	h.mcPost(t, r.ExternalIssueID, "verdict: PASS\n"+prURL)
 	h.waitForCard(t, r.ID, "merge", "verdict:")
 
 	// 自动合并：节点直达已交付（预算内，远小于 AC-3 的 2 分钟）。
@@ -661,11 +661,11 @@ func TestFlowE2EThresholdMerge(t *testing.T) {
 	h.setPolicy(t, "threshold", 1) // PR diff 5 行 > 1 → 留人
 	r := h.createRequirement(t, "[infera-e2e] threshold 阈值合并 "+time.Now().Format("0102-150405"))
 
-	h.mcSetStatus(t, r.MulticaIssueID, "in_progress")
+	h.mcSetStatus(t, r.ExternalIssueID, "in_progress")
 	h.waitForNode(t, r.ID, "in_progress", "执行段")
 	prURL, num := h.createTestPR(t, 5)
 	require.NotEmpty(t, prURL)
-	h.mcPost(t, r.MulticaIssueID, "verdict: PASS\n"+prURL)
+	h.mcPost(t, r.ExternalIssueID, "verdict: PASS\n"+prURL)
 	merge := h.waitForCard(t, r.ID, "merge", "verdict:")
 
 	// 超阈值：卡留人、PR 不动。

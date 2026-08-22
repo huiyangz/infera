@@ -6,6 +6,6 @@
 // 另造入口。
 //
 // 本包是纯确定性代码：无网络、无 DB、无时间依赖（时间只作为透传数据），
-// 不 import multica/github 等外部 client——增量评论由下游适配成
+// 不 import tasksource/github 等外部 client——增量评论由下游适配成
 // CommentInput 喂进来。
 package flow

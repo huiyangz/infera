@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 
 // TestListProjects：项目拉取（GET /api/projects）。响应面是
 // {"projects": [...], "total": N}；服务端 ListProjects 无 limit/offset——
-// 一次响应返回 workspace 全量项目（multica-src 实证），因此客户端不翻页、
+// 一次响应返回 workspace 全量项目（接入 spike 实证），因此客户端不翻页、
 // 也不发明分页机制。新端点同样必须走统一认证与 X-Workspace-Id 通道（坑1）。
 func TestListProjects(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotWS, gotQuery string
@@ -91,7 +91,7 @@ func (f *fakeIssueListServer) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if limit > 100 {
-		limit = 100 // 服务端上限（multica-src 实证：>100 压回 100）
+		limit = 100 // 服务端上限（接入 spike 实证：>100 压回 100）
 	}
 	offset := 0
 	if o := q.Get("offset"); o != "" {

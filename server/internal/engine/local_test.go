@@ -177,8 +177,8 @@ func TestLocalPromptReadonlyFeedback(t *testing.T) {
 	role, p, err := e.LocalPrompt(context.Background(), d.ID)
 	require.NoError(t, err)
 	require.Equal(t, "spec", role)
-	require.Contains(t, p, "实现 add(a,b)")     // 需求描述
-	require.Contains(t, p, "补充边界情况")       // 只读反馈
+	require.Contains(t, p, "实现 add(a,b)")       // 需求描述
+	require.Contains(t, p, "补充边界情况")            // 只读反馈
 	require.Contains(t, p, "infera-complexity") // 角色模板
 
 	// 只读：RejectReason 不被消费

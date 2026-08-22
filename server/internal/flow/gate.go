@@ -39,8 +39,8 @@ const (
 	prefixMerge    = "verdict:"
 )
 
-// CommentInput 是闸门解析器的最小输入面。multica.Comment 由下游
-// （gatepoll）适配成它——flow 自身不 import multica，保持纯确定性。
+// CommentInput 是闸门解析器的最小输入面。tasksource.Comment 由下游
+// （gatepoll）适配成它——flow 自身不 import tasksource，保持纯确定性。
 type CommentInput struct {
 	ID         string
 	AuthorType string
