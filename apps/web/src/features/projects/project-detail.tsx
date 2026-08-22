@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BindingEditor } from '@/features/pipeline/binding-editor'
+import { CreateRequirementDialog } from './requirement-create-dialog'
 import {
   Dialog,
   DialogContent,
@@ -86,6 +87,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </p>
           </div>
           <div className='flex shrink-0 items-center gap-2'>
+            <CreateRequirementDialog projectId={projectId} />
             {proj && (
               <OrchestrationDialog
                 projectId={projectId}

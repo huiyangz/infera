@@ -16,6 +16,7 @@ import {
   getProject,
   getProjectStats,
   listProjectDeliveries,
+  listProjects,
 } from '@/lib/infera-api'
 import type { Project, RequirementStats } from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
@@ -28,6 +29,7 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     getProject: vi.fn(),
     getProjectStats: vi.fn(),
     listProjectDeliveries: vi.fn(),
+    listProjects: vi.fn(),
   }
 })
 
@@ -257,5 +259,25 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     await expect
       .element(screen.getByRole('button', { name: '编排' }))
       .toBeInTheDocument()
+  })
+})
+
+describe('ProjectDetail 新建需求入口（INFERA-178：与任务列表页共享对话框）', () => {
+  it('页头「新建需求」按钮打开共享创建对话框，项目默认当前项目', async () => {
+    vi.mocked(listProjects).mockResolvedValue([makeProject()])
+    const screen = await renderProjectDetail(makeProject())
+    await waitForProject(screen)
+
+    await screen.getByRole('button', { name: '新建需求' }).click()
+    await expect.element(screen.getByRole('dialog')).toBeInTheDocument()
+    await expect
+      .element(screen.getByLabelText('标题'))
+      .toBeInTheDocument()
+
+    // 共享对话框默认值：项目 = 当前项目
+    const project = (await screen
+      .getByRole('combobox', { name: '项目', exact: true })
+      .element())!
+    expect(project.textContent).toContain('演示项目')
   })
 })
