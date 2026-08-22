@@ -25,6 +25,38 @@ type ProjectStats struct {
 	Last    time.Time `json:"last_activity"`
 }
 
+// RequirementStats 项目维度需求统计（INFERA-108 T01 冻结契约：
+// GET /api/projects/{id}/stats 的响应载荷形态）。ByStatus 恒含四个固定键
+// active/queued/completed/blocked（无行时为 0）；Delivered 与
+// ByStatus["completed"] 同源（交付数单列是冻结口径）。LastSyncedAt
+// nil = 项目从未被 multica 同步。
+type RequirementStats struct {
+	ProjectID        string         `json:"project_id"`
+	RequirementTotal int            `json:"requirement_total"`
+	ByStatus         map[string]int `json:"by_status"`
+	PendingDecisions int            `json:"pending_decisions"`
+	Delivered        int            `json:"delivered"`
+	LastSyncedAt     *time.Time     `json:"last_synced_at"`
+}
+
+// PendingDecision 待人工决策的需求行（INFERA-108 T01 冻结契约：
+// GET /api/pending-decisions 的响应载荷形态）。ID 即 delivery ID，
+// 前端以其跳转既有需求详情；ProjectName 由查询 JOIN projects 带回。
+type PendingDecision struct {
+	ID              string    `json:"id"`
+	ProjectID       string    `json:"project_id"`
+	ProjectName     string    `json:"project_name"`
+	Title           string    `json:"title"`
+	Status          string    `json:"status"`
+	PendingGate     string    `json:"pending_gate"`
+	CurrentStage    string    `json:"current_stage"`
+	MulticaIssueKey string    `json:"multica_issue_key"` // ''=本地需求（非同步来源）
+	Assignee        string    `json:"assignee"`          // multica 同步展示数据；''=无
+	Priority        string    `json:"priority"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 type Delivery struct {
 	ID             string `json:"id"`
 	ProjectID      string `json:"project_id"`
@@ -158,6 +190,12 @@ type Store interface {
 	GetProject(ctx context.Context, id string) (*Project, error)
 	PatchProjectPinned(ctx context.Context, id string, pinned bool) error
 	ProjectStats(ctx context.Context, id string) (ProjectStats, error)
+	// RequirementStats 项目维度需求统计（INFERA-108）：总数/按状态分布/
+	// 待决策数/交付数/最近同步时间；项目不存在 → ErrNotFound。
+	RequirementStats(ctx context.Context, id string) (RequirementStats, error)
+	// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空
+	// 且未完结），JOIN projects 带 ProjectName，按 updated_at 降序。
+	ListPendingDecisions(ctx context.Context) ([]PendingDecision, error)
 	// multica 同步导入（T02 冻结的存储面）：按外部 ID 幂等 upsert——不存在则插入、
 	// 存在则只更新外部来源字段（infera 侧配置/引擎字段不被同步覆盖），
 	// 重复执行不产生重复行。外部 ID 为空 → ErrInvalid；delivery 引用不存在的
