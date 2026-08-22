@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "coolvibe": {
+      "type": "http",
+      "url": "http://localhost:57001/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer hk/bCaJ1LH7CN3imM7u+X52JD8u2ZcQThFn9gvCFlXs="
+      }
+    }
+  }
+}
