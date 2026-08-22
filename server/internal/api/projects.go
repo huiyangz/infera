@@ -122,6 +122,22 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, p)
 }
 
+// handleProjectStats 项目维度需求统计（INFERA-108 T01）：总数/按状态分布/
+// 待决策数/交付数/最近同步时间。响应形状冻结于 store.RequirementStats
+// （Layer 2 前端唯一契约，不得静默变更）。
+func (s *Server) handleProjectStats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	st, err := s.st.RequirementStats(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err, "项目不存在", "读取统计失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
 func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !validID(w, id) {
