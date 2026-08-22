@@ -1,4 +1,4 @@
-import { Bot, ClipboardList, FolderKanban, Workflow } from 'lucide-react'
+import { ClipboardList, FolderKanban, SquareCheck, Workflow } from 'lucide-react'
 import { type SidebarData } from '../types'
 
 export const sidebarData: SidebarData = {
@@ -29,9 +29,9 @@ export const sidebarData: SidebarData = {
           icon: ClipboardList,
         },
         {
-          title: 'Agent',
-          url: '/agents',
-          icon: Bot,
+          title: '需要决策',
+          url: '/decisions',
+          icon: SquareCheck,
         },
       ],
     },
