@@ -227,8 +227,9 @@ func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, erro
 }
 
 // UpsertProjectByExternalID 按 上游项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
-// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新 name 与 synced_at，
-// repo_url/default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
+// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 更新 name、synced_at 与
+// repo_url（覆写契约 INFERA-175：EXCLUDED 非空覆写现值，空串保留现值不清空，
+// COALESCE+NULLIF 一处收口）；default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
 // RETURNING id 两个分支都回行 ID，回读整行填充结构体。
 // ExternalProjectID 为空 → ErrInvalid。
 func (pg *Pg) UpsertProjectByExternalID(ctx context.Context, p *Project) error {
@@ -243,7 +244,9 @@ func (pg *Pg) UpsertProjectByExternalID(ctx context.Context, p *Project) error {
 		`INSERT INTO projects (id,name,repo_url,default_branch,pinned,external_project_id,external_synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,now())
 		 ON CONFLICT (external_project_id) WHERE external_project_id <> ''
-		 DO UPDATE SET name=EXCLUDED.name, external_synced_at=now()
+		 DO UPDATE SET name=EXCLUDED.name,
+		               repo_url=COALESCE(NULLIF(EXCLUDED.repo_url, ''), projects.repo_url),
+		               external_synced_at=now()
 		 RETURNING id`,
 		p.ID, p.Name, p.RepoURL, p.DefaultBranch, p.Pinned, p.ExternalProjectID).Scan(&id)
 	if err != nil {

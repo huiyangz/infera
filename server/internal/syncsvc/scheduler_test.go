@@ -42,6 +42,16 @@ func (f *schedFetch) ListIssues(_ context.Context) ([]tasksource.Issue, error) {
 	return f.issues, nil
 }
 
+// ListProjectResources 恒无绑定（repo_url 保留现值）——调度器只关心轮次与错误。
+func (f *schedFetch) ListProjectResources(_ context.Context, _ string) ([]tasksource.ProjectResource, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
+}
+
 func (f *schedFetch) setErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

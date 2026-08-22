@@ -81,9 +81,12 @@ TASK_SYNC_WORKSPACE_ID=<工作区 id>
 - **重复同步会覆写 infera 侧状态**：非终态 issue 再同步会把交付打回 `queued`
   （实测：active 停在门禁的交付再同步后 status 变 queued；引擎字段 stage/gate
   保留）。在任务源侧先把单转终态，或在驱动期间避免重复同步。
-- 同步项目只落名称与外部 id，不落仓库地址；`repo_url` 归 infera 侧配置，且当前
-  `PATCH /api/projects/{id}` 仅支持改 `pinned`——同步项目暂时无法补绑仓库，
-  交付走绿地 workdir。
+- 同步项目随仓库绑定落 `repo_url`（INFERA-175）：任务源项目资源里
+  `github_repo` → 其 URL；`local_directory` → 其 `local_path`（按普通 clone
+  语义处理，不引入 worktree/daemon 特殊模式）。择一：两类并存 `github_repo`
+  优先，同类型取 `position` 最小。覆写：任务源侧解析出绑定 → 覆写
+  `repo_url`；无资源 → 保留 infera 侧现值，不清空。`PATCH /api/projects/{id}`
+  仍仅支持改 `pinned`——手工改绑仓库需另行建卡。
 - 同步按外部 issue id 幂等 upsert，重复执行不产生重复行；父子关系随同步落库，
   子任务按上游阶段原值落 `wave`（1..N；无阶段子任务与顶层 = 0，引擎批次调度
   跳过 `wave<=0`，显示层归「无阶段」分组）。

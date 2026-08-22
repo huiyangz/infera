@@ -33,6 +33,22 @@ func checkTaskSync(t *testing.T, s Store) {
 	require.Len(t, projects, 1, "重复 upsert 不产生重复行")
 	require.Equal(t, "自动闭环（改名）", projects[0].Name)
 
+	// --- 项目 repo_url 覆写契约（INFERA-175）：上游侧解析出绑定（非空）→
+	// 覆写现值；解析不出（空）→ 保留现值不清空。default_branch/pinned 仍归
+	// infera 侧配置，冲突分支不覆盖。 ---
+	p3 := &Project{Name: "自动闭环（改名）", RepoURL: "git@github.com:huiyangz/infera.git", ExternalProjectID: "01m-prj-1"}
+	require.NoError(t, s.UpsertProjectByExternalID(ctx, p3))
+	require.Equal(t, p1.ID, p3.ID, "repo_url 覆写轮仍命中同一行")
+	gotProj, err := s.GetProject(ctx, p1.ID)
+	require.NoError(t, err)
+	require.Equal(t, "git@github.com:huiyangz/infera.git", gotProj.RepoURL, "非空 repo_url 覆写现值")
+
+	p4 := &Project{Name: "自动闭环（改名）", ExternalProjectID: "01m-prj-1"} // RepoURL 空 = 无绑定
+	require.NoError(t, s.UpsertProjectByExternalID(ctx, p4))
+	gotProj, err = s.GetProject(ctx, p1.ID)
+	require.NoError(t, err)
+	require.Equal(t, "git@github.com:huiyangz/infera.git", gotProj.RepoURL, "空 repo_url 不清空现值")
+
 	// --- 非 上游项目共存：空外部 ID 不参与唯一约束。 ---
 	local := &Project{Name: "本地项目"}
 	require.NoError(t, s.CreateProject(ctx, local))

@@ -15,10 +15,12 @@ import (
 // fakeFetch 是 T01 拉取面的测试替身：内容可变（幂等测试两轮喂不同数据），
 // 可注入致命错误，可阻塞（运行互斥测试）。
 type fakeFetch struct {
-	projects []tasksource.Project
-	issues   []tasksource.Issue
-	projErr  error
-	issErr   error
+	projects  []tasksource.Project
+	issues    []tasksource.Issue
+	resources map[string][]tasksource.ProjectResource // 项目 id → 资源列表（nil = 无资源）
+	projErr   error
+	issErr    error
+	resErr    error
 
 	// entered/release 非空时 ListProjects 先发信号再等放行（并发守卫测试）。
 	entered chan struct{}
@@ -41,6 +43,13 @@ func (f *fakeFetch) ListIssues(ctx context.Context) ([]tasksource.Issue, error) 
 		return nil, f.issErr
 	}
 	return f.issues, nil
+}
+
+func (f *fakeFetch) ListProjectResources(_ context.Context, projectID string) ([]tasksource.ProjectResource, error) {
+	if f.resErr != nil {
+		return nil, f.resErr
+	}
+	return f.resources[projectID], nil
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -199,6 +208,174 @@ func TestSyncIdempotentReimport(t *testing.T) {
 	// 项目名更新生效，行数不变。
 	require.Equal(t, "自动闭环（改名）", projs[0].Name)
 	require.Equal(t, first.ProjectID, projs[0].ID)
+}
+
+// --- AC（INFERA-175）: 上游项目资源 → repo_url 映射与覆写 ---
+
+// ghRes / dirRes 造两类资源条目（github_repo 带 url；local_directory 带 local_path）。
+func ghRes(position int, url string) tasksource.ProjectResource {
+	return tasksource.ProjectResource{
+		ID: "r-gh", ProjectID: "m-prj-1", ResourceType: "github_repo",
+		Ref: tasksource.ResourceRef{URL: url}, Position: position,
+	}
+}
+
+func dirRes(position int, path string) tasksource.ProjectResource {
+	return tasksource.ProjectResource{
+		ID: "r-dir", ProjectID: "m-prj-1", ResourceType: "local_directory",
+		Ref: tasksource.ResourceRef{LocalPath: path, ExecutionMode: "worktree"}, Position: position,
+	}
+}
+
+// projByExtID 在已落库的 projects 里按上游项目 ID 找行。
+func projByExtID(t *testing.T, st *store.Memory, extID string) store.Project {
+	t.Helper()
+	projs, err := st.ListProjects(context.Background())
+	require.NoError(t, err)
+	for _, p := range projs {
+		if p.ExternalProjectID == extID {
+			return p
+		}
+	}
+	t.Fatalf("未找到上游项目 %s", extID)
+	return store.Project{}
+}
+
+// syncOnce 跑一轮同步并断言成功（映射测试的公共收口）。
+func syncOnce(t *testing.T, svc *Service) Result {
+	t.Helper()
+	res, err := svc.SyncNow(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	return res
+}
+
+// TestSyncProjectRepoURLFromGitHubResource：带 github_repo 资源的项目同步后
+// repo_url = 资源 URL（AC1）。
+func TestSyncProjectRepoURLFromGitHubResource(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects:  []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resources: map[string][]tasksource.ProjectResource{"m-prj-1": {ghRes(0, "git@github.com:huiyangz/infera.git")}},
+	}
+	syncOnce(t, New(f, st))
+	require.Equal(t, "git@github.com:huiyangz/infera.git", projByExtID(t, st, "m-prj-1").RepoURL)
+}
+
+// TestSyncProjectRepoURLFromLocalDirectory：仅带 local_directory 资源的项目
+// repo_url = 其 local_path（git 可克隆本地路径，intake 语义不变，AC2）。
+func TestSyncProjectRepoURLFromLocalDirectory(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects:  []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resources: map[string][]tasksource.ProjectResource{"m-prj-1": {dirRes(0, "/Users/x/tokfinity/infera")}},
+	}
+	syncOnce(t, New(f, st))
+	require.Equal(t, "/Users/x/tokfinity/infera", projByExtID(t, st, "m-prj-1").RepoURL)
+}
+
+// TestSyncProjectRepoURLGitHubWins：两类资源并存时 github_repo 胜出——远端
+// 仓库是交付的正源，local_directory 只是本机工作副本（AC3 前半）。
+func TestSyncProjectRepoURLGitHubWins(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resources: map[string][]tasksource.ProjectResource{"m-prj-1": {
+			dirRes(0, "/Users/x/tokfinity/infera"), // position 更小也赢不了 github_repo
+			ghRes(1, "git@github.com:huiyangz/infera.git"),
+		}},
+	}
+	syncOnce(t, New(f, st))
+	require.Equal(t, "git@github.com:huiyangz/infera.git", projByExtID(t, st, "m-prj-1").RepoURL)
+}
+
+// TestSyncProjectRepoURLKeptWhenNoResources：上游侧无资源 → 保留 infera
+// 侧现值，不清空（AC4）；有绑定 → 重同步覆写为新绑定（覆写规则的前半）。
+func TestSyncProjectRepoURLKeptWhenNoResources(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects:  []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resources: map[string][]tasksource.ProjectResource{"m-prj-1": {ghRes(0, "git@github.com:huiyangz/infera.git")}},
+	}
+	svc := New(f, st)
+	syncOnce(t, svc)
+
+	// 第二轮：上游侧资源被摘掉 → repo_url 原样保留。
+	f.resources = nil
+	syncOnce(t, svc)
+	require.Equal(t, "git@github.com:huiyangz/infera.git", projByExtID(t, st, "m-prj-1").RepoURL,
+		"无资源不清空 repo_url")
+
+	// 第三轮：换绑 local_directory → 覆写为新绑定。
+	f.resources = map[string][]tasksource.ProjectResource{"m-prj-1": {dirRes(0, "/Users/x/other")}}
+	syncOnce(t, svc)
+	require.Equal(t, "/Users/x/other", projByExtID(t, st, "m-prj-1").RepoURL, "解析出新绑定时覆写 repo_url")
+}
+
+// TestSyncProjectRepoURLIdempotent：同绑定重复同步 → 行数不翻倍、repo_url 稳定（AC5 幂等）。
+func TestSyncProjectRepoURLIdempotent(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects:  []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resources: map[string][]tasksource.ProjectResource{"m-prj-1": {ghRes(0, "git@github.com:huiyangz/infera.git")}},
+	}
+	svc := New(f, st)
+	syncOnce(t, svc)
+	res2 := syncOnce(t, svc)
+
+	projs, err := st.ListProjects(context.Background())
+	require.NoError(t, err)
+	require.Len(t, projs, 1, "重复同步不产生重复项目行")
+	require.Equal(t, 1, res2.ProjectsImported)
+	require.Equal(t, "git@github.com:huiyangz/infera.git", projs[0].RepoURL)
+}
+
+// TestResolveRepoURLSelection：择一规则的穷举表——github_repo 优先于
+// local_directory；同类型取 position 最小；目标值为空的条目跳过（半截资源
+// 不是合法绑定）；无可用绑定 → 空串（消费方据此保留现值）。
+func TestResolveRepoURLSelection(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []tasksource.ProjectResource
+		want string
+	}{
+		{"空列表", nil, ""},
+		{"仅 github_repo", []tasksource.ProjectResource{ghRes(0, "gh-url")}, "gh-url"},
+		{"仅 local_directory", []tasksource.ProjectResource{dirRes(0, "/p")}, "/p"},
+		{"两类并存 github 胜出", []tasksource.ProjectResource{dirRes(0, "/p"), ghRes(1, "gh-url")}, "gh-url"},
+		{"多条 github 取 position 最小", []tasksource.ProjectResource{
+			{ID: "a", ResourceType: "github_repo", Ref: tasksource.ResourceRef{URL: "gh-a"}, Position: 2},
+			{ID: "b", ResourceType: "github_repo", Ref: tasksource.ResourceRef{URL: "gh-b"}, Position: 0},
+		}, "gh-b"},
+		{"多条 local 取 position 最小", []tasksource.ProjectResource{
+			{ID: "a", ResourceType: "local_directory", Ref: tasksource.ResourceRef{LocalPath: "/a"}, Position: 3},
+			{ID: "b", ResourceType: "local_directory", Ref: tasksource.ResourceRef{LocalPath: "/b"}, Position: 1},
+		}, "/b"},
+		{"github 空条目跳过落到 local", []tasksource.ProjectResource{
+			{ID: "a", ResourceType: "github_repo", Ref: tasksource.ResourceRef{}, Position: 0},
+			dirRes(1, "/p"),
+		}, "/p"},
+		{"未知类型不参与", []tasksource.ProjectResource{
+			{ID: "a", ResourceType: "webhook", Ref: tasksource.ResourceRef{URL: "nope"}, Position: 0},
+		}, ""},
+	}
+	for _, tc := range cases {
+		require.Equal(t, tc.want, resolveRepoURL(tc.in), tc.name)
+	}
+}
+
+// TestSyncProjectResourceFetchFails：资源拉取失败 → 整轮失败上抛（拉取面语义，
+// 不得吞成"无资源"——那会把已有 repo_url 当成被保留，实际是数据不可知）。
+func TestSyncProjectResourceFetchFails(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		resErr:   errors.New("tasksource: HTTP 500"),
+	}
+	svc := New(f, st)
+	res, err := svc.SyncNow(context.Background())
+	require.Error(t, err)
+	require.NotEmpty(t, res.Error)
 }
 
 // --- AC: 标题含 [infera-e2e] 的冒烟单跳过 ---

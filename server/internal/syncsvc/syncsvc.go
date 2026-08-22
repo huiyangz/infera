@@ -1,7 +1,8 @@
 // Package syncsvc 编排上游任务平台 → infera 的一次性全量同步：
-// 拉取（T01 client 面 ListProjects/ListIssues）→ 映射（T01 纯映射 MapProject/
-// MapIssue）→ 幂等导入（T02 upsert 面 UpsertProjectByExternalID/
-// UpsertDeliveryByExternalID）。只消费两张已冻结的面，不另立入口。
+// 拉取（T01 client 面 ListProjects/ListIssues/ListProjectResources）→ 映射
+// （T01 纯映射 MapProject/MapIssue + 资源→repo_url 解析 resolveRepoURL）→
+// 幂等导入（T02 upsert 面 UpsertProjectByExternalID/UpsertDeliveryByExternalID）。
+// 只消费两张已冻结的面，不另立入口。
 package syncsvc
 
 import (
@@ -22,6 +23,7 @@ import (
 type Fetcher interface {
 	ListProjects(ctx context.Context) ([]tasksource.Project, error)
 	ListIssues(ctx context.Context) ([]tasksource.Issue, error)
+	ListProjectResources(ctx context.Context, projectID string) ([]tasksource.ProjectResource, error)
 }
 
 // ErrSyncRunning 已有同步在进行（POST 触发互斥；GET 可看 running 状态）。
@@ -108,12 +110,17 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 		return record(fmt.Errorf("拉取上游 issue 失败: %w", err))
 	}
 
-	// 项目导入：仅落上游标题（store.Project 无 description/status/lead 列，
-	// repo_url/default_branch/pinned 归 infera 侧配置，T02 冻结面不覆盖）。
+	// 项目导入：落上游标题 + 仓库绑定（资源解析见 resolveRepoURL）。
+	// store.Project 无 description/status/lead 列；default_branch/pinned 归
+	// infera 侧配置，冲突分支不覆盖；repo_url 按覆写契约随绑定走（INFERA-175）。
 	projInternal := make(map[string]string, len(projects)) // 上游项目 id → infera 项目 id
 	for _, p := range projects {
 		snap := tasksource.MapProject(p)
-		sp := &store.Project{Name: snap.Title, ExternalProjectID: snap.ExternalID}
+		resources, err := s.fetch.ListProjectResources(ctx, snap.ExternalID)
+		if err != nil {
+			return record(fmt.Errorf("拉取上游项目 %s 资源失败: %w", snap.ExternalID, err))
+		}
+		sp := &store.Project{Name: snap.Title, RepoURL: resolveRepoURL(resources), ExternalProjectID: snap.ExternalID}
 		if err := s.st.UpsertProjectByExternalID(ctx, sp); err != nil {
 			return record(fmt.Errorf("导入上游项目 %s 失败: %w", snap.ExternalID, err))
 		}
@@ -240,4 +247,33 @@ func actorDisplay(a tasksource.ActorRef) string {
 		return ""
 	}
 	return a.Type + ":" + a.ID
+}
+
+// resolveRepoURL 把上游项目资源解析为 repo_url（INFERA-175 冻结契约）：
+// github_repo → 其 URL；local_directory → 其 local_path（git 可克隆本地路径，
+// intake 按 clone 语义处理，不带 worktree/daemon 特殊模式）。择一：github_repo
+// 优先于 local_directory；同类型取 position 最小；目标值为空的条目跳过。
+// 解析不出（无资源/无可用条目）返回空串——由 upsert 冲突分支保留 infera 侧
+// 现值，不清空。
+func resolveRepoURL(resources []tasksource.ProjectResource) string {
+	var ghURL, dirPath string
+	ghPos, dirPos := 0, 0
+	for _, r := range resources {
+		switch r.ResourceType {
+		case "github_repo":
+			if r.Ref.URL == "" || (ghURL != "" && r.Position >= ghPos) {
+				continue
+			}
+			ghURL, ghPos = r.Ref.URL, r.Position
+		case "local_directory":
+			if r.Ref.LocalPath == "" || (dirPath != "" && r.Position >= dirPos) {
+				continue
+			}
+			dirPath, dirPos = r.Ref.LocalPath, r.Position
+		}
+	}
+	if ghURL != "" {
+		return ghURL
+	}
+	return dirPath
 }
