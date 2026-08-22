@@ -190,7 +190,12 @@ func (s *Service) importIssue(ctx context.Context, res *Result, snap multica.Iss
 	}
 	if parentInt := internal[snap.ParentExternalID]; snap.ParentExternalID != "" && parentInt != "" {
 		d.ParentID = parentInt
-		d.Wave = 1 // 子需求 wave>=1（字段约定：父/普通需求=0）
+		// 子任务的 stage 沿用原生多阶段表示（拆分批次 wave）：取 multica stage，
+		// 缺失/非法（<1，词表 1 起）兜底 1——字段约定：父/普通需求=0，子>=1。
+		d.Wave = snap.Stage
+		if d.Wave < 1 {
+			d.Wave = 1
+		}
 	}
 	if err := s.st.UpsertDeliveryByMulticaID(ctx, d); err != nil {
 		return fmt.Errorf("导入 multica issue %s 失败: %w", snap.ExternalID, err)

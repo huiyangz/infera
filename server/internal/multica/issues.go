@@ -23,6 +23,7 @@ type Issue struct {
 	AssigneeID    *string   `json:"assignee_id"`     // 负责人 id，可空
 	ParentIssueID *string   `json:"parent_issue_id"` // 父子关系：父 issue id，可空（顶层）
 	ProjectID     *string   `json:"project_id"`      // 归属项目，可空
+	Stage         int       `json:"stage"`           // 子任务所属阶段（1..N；顶层/未带 = 0）
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 

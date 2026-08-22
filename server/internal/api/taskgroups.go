@@ -14,8 +14,9 @@ import (
 // → 子任务按阶段分组。前端项目任务页（L202608221704-2-T02）以本响应为唯一
 // 数据源，不得静默变更形状。
 
-// taskChild 子任务行：阶段组内的展示字段（stage=所属阶段，即拆分批次 wave
-// 1..N，同步镜像子任务恒 1；status/current_stage/pending_gate 驱动行内徽标）。
+// taskChild 子任务行：阶段组内的展示字段（stage=所属阶段：拆分子任务=批次
+// wave 1..N，multica 同步镜像子任务=其 stage；status/current_stage/pending_gate
+// 驱动行内徽标）。
 type taskChild struct {
 	ID              string    `json:"id"`
 	Title           string    `json:"title"`

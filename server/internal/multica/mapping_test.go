@@ -66,6 +66,7 @@ func TestMapIssue(t *testing.T) {
 		AssigneeID:    &assigneeID,
 		ParentIssueID: &parent,
 		ProjectID:     &project,
+		Stage:         2,
 		UpdatedAt:     updatedAt,
 	})
 
@@ -78,6 +79,7 @@ func TestMapIssue(t *testing.T) {
 	require.Equal(t, ActorRef{Type: "agent", ID: "a-1"}, got.Assignee, "负责人（assignee）映射为多态 ActorRef")
 	require.Equal(t, "i-0", got.ParentExternalID, "父子关系：父 issue 的 multica id")
 	require.Equal(t, "p-1", got.ProjectExternalID, "项目归属：issue 两级关联的锚点")
+	require.Equal(t, 2, got.Stage, "stage（子任务所属阶段）随快照透传，不在这层丢弃")
 	require.Equal(t, updatedAt, got.UpdatedAt)
 }
 
@@ -89,6 +91,7 @@ func TestMapIssueEmptyOptionals(t *testing.T) {
 	require.Equal(t, ActorRef{}, got.Assignee)
 	require.Empty(t, got.ParentExternalID, "顶层 issue：无父")
 	require.Empty(t, got.ProjectExternalID, "未挂项目")
+	require.Zero(t, got.Stage, "stage 是普通 int 字段：未填 = 0，无指针语义")
 }
 
 // TestMapIssueParentChildRoundTrip：父子两级映射后仍可按 ExternalID 重建
