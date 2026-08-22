@@ -11,10 +11,16 @@ import {
   getProject,
   getProjectStats,
   listProjectDeliveries,
+  listProjectTaskGroups,
   listProjects,
   me,
 } from '@/lib/infera-api'
-import type { Delivery, Project } from '@/lib/infera-types'
+import type {
+  Delivery,
+  Project,
+  TaskChild,
+  TaskGroupRow,
+} from '@/lib/infera-types'
 import {
   getRequirement,
   listRequirementAudit,
@@ -31,6 +37,7 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     getProject: vi.fn(),
     getProjectStats: vi.fn(),
     listProjectDeliveries: vi.fn(),
+    listProjectTaskGroups: vi.fn(),
   }
 })
 
@@ -86,6 +93,30 @@ function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
   }
 }
 
+/** 任务页数据源 task-groups 的最小夹具：一个父任务 + 阶段 1 的一条子任务 */
+function makeTaskGroup(): TaskGroupRow {
+  const child: TaskChild = {
+    id: 'd2',
+    title: '子任务一',
+    stage: 1,
+    status: 'active',
+    current_stage: 'code',
+    pending_gate: '',
+    multica_issue_id: '',
+    multica_issue_key: '',
+    assignee: '',
+    priority: '',
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+  }
+  return {
+    ...makeDelivery(),
+    child_total: 1,
+    child_completed: 0,
+    stages: [{ stage: 1, tasks: [child] }],
+  }
+}
+
 /**
  * 路由接线集成测试（INFERA-119）：挂真实 routeTree.gen 生成的 router，
  * 验证 /projects/{id}/tasks 渲染任务列表页、详情入口可达、
@@ -104,6 +135,7 @@ async function renderApp(initialPath: string) {
     last_synced_at: null,
   })
   vi.mocked(listProjectDeliveries).mockResolvedValue([makeDelivery()])
+  vi.mocked(listProjectTaskGroups).mockResolvedValue([makeTaskGroup()])
   vi.mocked(listRequirements).mockResolvedValue([])
   vi.mocked(getRequirement).mockResolvedValue({
     id: 'r1',
@@ -146,9 +178,11 @@ describe('projects 域路由接线（INFERA-119）', () => {
     const { screen, router } = await renderApp('/projects/p1/tasks')
     await router.navigate({ to: '/projects/$id/tasks', params: { id: 'p1' } })
 
-    // 任务列表页标志性内容出现
+    // 任务列表页标志性内容出现（页头文案以 project-tasks.tsx 已交付口径为准）
     await expect
-      .element(screen.getByText('本项目的父需求与子任务（只读）'))
+      .element(
+        screen.getByText('本项目的父任务与子任务，子任务按阶段分组（只读）')
+      )
       .toBeInTheDocument()
     await expect
       .element(screen.getByRole('link', { name: /父需求甲/ }))
@@ -169,7 +203,9 @@ describe('projects 域路由接线（INFERA-119）', () => {
     await screen.getByRole('link', { name: '项目任务' }).first().click()
 
     await expect
-      .element(screen.getByText('本项目的父需求与子任务（只读）'))
+      .element(
+        screen.getByText('本项目的父任务与子任务，子任务按阶段分组（只读）')
+      )
       .toBeInTheDocument()
     expect(router.state.location.pathname).toBe('/projects/p1/tasks')
   })

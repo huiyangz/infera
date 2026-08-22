@@ -192,12 +192,12 @@ const COMPLEXITY_OPTIONS: {
 }[] = [
   {
     value: 'small',
-    label: '小需求',
+    label: '小任务',
     hint: '规格确认后直达测试生成与实现（7 阶段）',
   },
   {
     value: 'large',
-    label: '大需求',
+    label: '大任务',
     hint: '先做设计与任务拆解、逐门审批后实现（11 阶段）',
   },
 ]
@@ -274,7 +274,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
     onSuccess: (_d, opts) => {
       invalidateAfterDecision()
       if (opts?.split?.length)
-        toast.success(`已拆分为 ${opts.split.length} 个子需求，流水线调度中`)
+        toast.success(`已拆分为 ${opts.split.length} 个子任务，流水线调度中`)
       else if (opts?.tasks?.length)
         toast.success(`已按 ${opts.tasks.length} 项任务清单开始实现`)
       else toast.success('已批准，流水线继续')
@@ -430,12 +430,12 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                   <h3 className='text-sm font-medium'>交付模式</h3>
                   {data.complexity_suggestion ? (
                     <span className='text-xs text-muted-foreground'>
-                      AI 建议：{suggestion === 'large' ? '大需求' : '小需求'}
+                      AI 建议：{suggestion === 'large' ? '大任务' : '小任务'}
                       {overridden && '（已改判）'}
                     </span>
                   ) : (
                     <span className='text-xs text-muted-foreground'>
-                      AI 未给出建议，默认小需求
+                      AI 未给出建议，默认小任务
                     </span>
                   )}
                 </div>
@@ -461,7 +461,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                   <div key={i} className='flex items-center gap-2'>
                     <Input
                       className='w-40 shrink-0'
-                      placeholder='子需求标题'
+                      placeholder='子任务标题'
                       value={r.title}
                       onChange={(e) =>
                         setSplitRows(
@@ -510,7 +510,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                       variant='ghost'
                       size='icon'
                       className='shrink-0'
-                      aria-label='删除该子需求'
+                      aria-label='删除该子任务'
                       onClick={() =>
                         setSplitRows(splitRows.filter((_, j) => j !== i))
                       }
@@ -529,7 +529,7 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                     ])
                   }
                 >
-                  <Plus /> 添加子需求
+                  <Plus /> 添加子任务
                 </Button>
               </div>
             )}

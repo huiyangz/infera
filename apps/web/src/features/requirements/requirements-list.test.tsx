@@ -108,7 +108,7 @@ describe('RequirementsList 需求列表', () => {
   it('空列表呈现引导空态', async () => {
     const screen = await mount()
     await expect
-      .element(screen.getByText('还没有需求'))
+      .element(screen.getByText('还没有任务'))
       .toBeInTheDocument()
   })
 
@@ -122,19 +122,19 @@ describe('RequirementsList 需求列表', () => {
   })
 })
 
-describe('发起需求表单', () => {
+describe('发起任务表单', () => {
   it('标题必填：空时提交禁用', async () => {
     const screen = await mount()
-    await screen.getByRole('button', { name: '发起需求' }).click()
+    await screen.getByRole('button', { name: '发起任务' }).click()
     await expect
-      .element(screen.getByRole('button', { name: '提交需求' }))
+      .element(screen.getByRole('button', { name: '提交任务' }))
       .toBeDisabled()
   })
 
   it('提交契约：全字段 + 验收人按分隔符切分为数组，成功后关闭对话框', async () => {
     vi.mocked(createRequirement).mockResolvedValue(item({}))
     const screen = await mount()
-    await screen.getByRole('button', { name: '发起需求' }).click()
+    await screen.getByRole('button', { name: '发起任务' }).click()
     await screen.getByLabelText('标题').fill('深色模式')
     await screen.getByLabelText('描述').fill('全站适配深色主题')
     await screen
@@ -143,7 +143,7 @@ describe('发起需求表单', () => {
     await screen.getByLabelText('来源').fill('web')
     await screen.getByLabelText('优先级').fill('P1')
     await screen.getByLabelText('验收人').fill('张三、李四, 王五')
-    await screen.getByRole('button', { name: '提交需求' }).click()
+    await screen.getByRole('button', { name: '提交任务' }).click()
     await vi.waitFor(() =>
       expect(createRequirement).toHaveBeenCalledWith({
         title: '深色模式',

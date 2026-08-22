@@ -108,7 +108,7 @@ export function RequirementDetailPage({
           <div className='flex w-full items-center gap-1 text-sm text-muted-foreground'>
             <ChevronLeft className='size-4' />
             <Link to='/requirements' className='hover:text-foreground'>
-              返回需求
+              返回任务
             </Link>
           </div>
         </Header>
@@ -116,7 +116,7 @@ export function RequirementDetailPage({
           <Card>
             <CardContent className='py-8 text-center text-sm text-muted-foreground'>
               {error instanceof ApiError && error.status === 404
-                ? '需求不存在或已删除'
+                ? '任务不存在或已删除'
                 : `加载失败：${error?.message ?? '未知错误'}`}
             </CardContent>
           </Card>
@@ -133,7 +133,7 @@ export function RequirementDetailPage({
           <div className='flex items-center gap-1 text-sm text-muted-foreground'>
             <ChevronLeft className='size-4' />
             <Link to='/requirements' className='hover:text-foreground'>
-              返回需求
+              返回任务
             </Link>
           </div>
           <span className='text-sm text-muted-foreground'>/</span>

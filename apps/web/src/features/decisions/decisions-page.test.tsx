@@ -136,7 +136,7 @@ describe('DecisionsPage 需要决策列表', () => {
   it('空列表呈现空态', async () => {
     const screen = await mount()
     await expect
-      .element(screen.getByText('当前没有等待决策的需求'))
+      .element(screen.getByText('当前没有等待决策的任务'))
       .toBeInTheDocument()
   })
 })

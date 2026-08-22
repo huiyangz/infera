@@ -60,7 +60,7 @@ type StageState =
 
 /** 后端真实事件词表（见 server engine）；未知事件回退原文。 */
 const EVENT_LABEL: Record<string, string> = {
-  delivery_created: '需求创建',
+  delivery_created: '任务创建',
   workspace_ready: '工作区就绪',
   stage_started: '阶段开始',
   gate_pending: '进入门禁',
@@ -79,8 +79,8 @@ const EVENT_LABEL: Record<string, string> = {
   review_findings: '门禁前置审查产出意见',
   pr_failed: 'PR 开具失败',
   persist_failed: '产出持久化失败',
-  split: '需求拆分',
-  merge_done: '子需求已合并',
+  split: '任务拆分',
+  merge_done: '子任务已合并',
   merge_conflict: '合并冲突',
   merge_queued: '合并排队中',
   merge_skipped: '跳过合并',
@@ -90,9 +90,9 @@ const EVENT_LABEL: Record<string, string> = {
 
 /** 拆分父被跳过阶段的说明（阶段档案区展示） */
 const SPLIT_SKIP_HINT: Record<string, string> = {
-  tasks: '拆分执行：任务拆解由子需求各自完成，父不做任务拆解',
-  tasks_approval: '拆分执行：任务清单由子需求各自审批，父直接合并子分支',
-  test_gen: '拆分执行：子需求各自生成测试，父在合并后统一跑单元测试',
+  tasks: '拆分执行：任务拆解由子任务各自完成，父不做任务拆解',
+  tasks_approval: '拆分执行：任务清单由子任务各自审批，父直接合并子分支',
+  test_gen: '拆分执行：子任务各自生成测试，父在合并后统一跑单元测试',
 }
 
 /**
@@ -350,7 +350,7 @@ export function DeliveryDetail({
             <CardHeader className='pb-0'>
               <CardTitle className='text-sm font-medium'>合并冲突</CardTitle>
               <CardDescription>
-                子需求分支与父分支冲突，需人工解决后推送，再点「继续」恢复流水线
+                子任务分支与父分支冲突，需人工解决后推送，再点「继续」恢复流水线
               </CardDescription>
             </CardHeader>
             <CardContent className='space-y-3'>
@@ -460,7 +460,7 @@ export function DeliveryDetail({
                         {idle
                           ? delivery.merge_state === 'conflict'
                             ? '合并冲突'
-                            : `等待子需求 ${kidsDone}/${children.length}`
+                            : `等待子任务 ${kidsDone}/${children.length}`
                           : STAGE_STATUS_TEXT[state]}
                       </div>
                     </div>
@@ -566,13 +566,13 @@ export function DeliveryDetail({
           </Card>
         )}
 
-        {/* 子需求清单（拆分父专属） */}
+        {/* 子任务清单（拆分父专属） */}
         {delivery.split_mode && children.length > 0 && (
           <Card className={embedded ? 'gap-3 py-4' : undefined}>
             <CardHeader className='pb-0'>
               <div className='flex items-center justify-between'>
                 <CardTitle className='text-sm font-medium'>
-                  子需求清单
+                  子任务清单
                 </CardTitle>
                 <span className='text-xs text-muted-foreground'>
                   {kidsDone} / {children.length} 完成
@@ -651,7 +651,7 @@ export function DeliveryDetail({
                       {state === 'skipped' ? (
                         <p className='mt-1.5 pl-6 text-xs leading-relaxed text-muted-foreground'>
                           {SPLIT_SKIP_HINT[s] ??
-                            '拆分执行：该阶段由子需求各自完成'}
+                            '拆分执行：该阶段由子任务各自完成'}
                         </p>
                       ) : (
                         state !== 'pending' && (

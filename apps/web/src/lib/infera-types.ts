@@ -226,14 +226,14 @@ export const STAGE_META: Record<string, { label: string; hint: string }> = {
   intake: { label: '任务受理', hint: '记录任务原文，建立交付档案' },
   spec: {
     label: '规格生成',
-    hint: 'Spec Agent 依据需求与仓库代码撰写规格说明',
+    hint: 'Spec Agent 依据任务与仓库代码撰写规格说明',
   },
   spec_approval: {
     label: '规格审批',
     hint: '人工门禁：确认规格无误后流水线继续',
   },
   test_gen: { label: '测试生成', hint: 'Test Agent 依据规格生成测试用例' },
-  code_gen: { label: '实现', hint: 'Coder Agent 在仓库工作区内实现需求' },
+  code_gen: { label: '实现', hint: 'Coder Agent 在仓库工作区内实现任务' },
   unit_test: {
     label: '单元测试',
     hint: '在容器中运行测试，失败自动回环至实现',

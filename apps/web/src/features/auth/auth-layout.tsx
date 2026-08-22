@@ -31,12 +31,12 @@ export function AuthLayout({ children }: AuthLayoutProps) {
             className='mt-4 text-5xl font-normal leading-[1.05] xl:text-6xl'
             style={{ letterSpacing: '-1.2px' }}
           >
-            你提需求，
+            你提任务，
             <br />
             Agent 交付。
           </h2>
           <p className='mt-6 max-w-sm text-base leading-relaxed text-[#676f7b]'>
-            从一句话需求到合并请求：规格、测试、实现、审查由
+            从一句话任务到合并请求：规格、测试、实现、审查由
             agent 流水线全程推进，人只做关键决策。
           </p>
         </div>

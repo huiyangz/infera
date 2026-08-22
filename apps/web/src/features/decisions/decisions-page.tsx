@@ -30,7 +30,7 @@ export function DecisionsPage() {
               需要决策
             </h1>
             <p className='text-sm text-muted-foreground'>
-              全项目停在人工审批门的需求，点行进入详情处理后流水线继续
+              全项目停在人工审批门的任务，点行进入详情处理后流水线继续
             </p>
           </div>
         </div>
@@ -45,9 +45,9 @@ export function DecisionsPage() {
               <CircleSlash2 className='size-6 text-muted-foreground' />
             </div>
             <div>
-              <p className='font-medium'>当前没有等待决策的需求</p>
+              <p className='font-medium'>当前没有等待决策的任务</p>
               <p className='mt-1 text-sm text-muted-foreground'>
-                需求停在审批门时会出现在这里
+                任务停在审批门时会出现在这里
               </p>
             </div>
           </div>
@@ -57,7 +57,7 @@ export function DecisionsPage() {
               <thead>
                 <tr className='border-b bg-muted/50 text-left'>
                   <th className='px-4 py-2 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
-                    需求
+                    任务
                   </th>
                   <th className='px-4 py-2 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
                     项目

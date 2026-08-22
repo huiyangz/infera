@@ -97,7 +97,7 @@ describe('MulticaSyncButton 同步入口', () => {
     await vi.waitFor(() => expect(triggerMulticaSync).toHaveBeenCalledTimes(1))
     await vi.waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith(
-        expect.stringContaining('导入 2 个项目 / 5 条需求')
+        expect.stringContaining('导入 2 个项目 / 5 条任务')
       )
     )
     expect(toastSuccess).toHaveBeenCalledWith(
@@ -117,7 +117,7 @@ describe('MulticaSyncButton 同步入口', () => {
       .element(screen.getByText(/上次同步/))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText(/导入 2 个项目 \/ 5 条需求/))
+      .element(screen.getByText(/导入 2 个项目 \/ 5 条任务/))
       .toBeInTheDocument()
   })
 

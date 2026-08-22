@@ -141,7 +141,7 @@ export const NODE_SEQUENCE: readonly FlowNode[] = [
 
 /** 大节点 → 中文标签；未知节点回退原文，永不崩 */
 export const NODE_META: Record<string, { label: string; hint: string }> = {
-  intake: { label: '需求受理', hint: '需求已录入，尚未派发' },
+  intake: { label: '任务受理', hint: '任务已录入，尚未派发' },
   dispatched: { label: '已派发', hint: '已交由 Agent 团队执行' },
   in_progress: { label: '执行中', hint: 'Agent 正在实现' },
   in_review: { label: '待验收', hint: '实现完成，等待验收' },
