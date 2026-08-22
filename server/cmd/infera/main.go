@@ -19,9 +19,11 @@ import (
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/mcp"
+	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/syncsvc"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
 )
@@ -125,6 +127,20 @@ func main() {
 	if reqSvc != nil {
 		srv.SetRequirements(reqSvc)
 		log.Printf("flow: 需求流转已装配（闸门轮询间隔 %s，合并策略 SettingsPolicy）", cfg.GatePollInterval)
+	}
+
+	// Multica 同步装配（INFERA-80 T03）：凭据三键齐 → 构造 client 注入同步服务。
+	// 凭据只经 env → config → multica.New（token 只进 client 内存），不落库不进仓。
+	// 三键不齐 = 未接入（不装配，同步路由 503）；不全配置时 assembleFlow 已用
+	// 同一组键显式报错过，这里错误只降级不装配（裸开发启动不受影响）。
+	if cfg.MulticaServerURL != "" && cfg.MulticaToken != "" && cfg.MulticaWorkspaceID != "" {
+		mcSync, err := multica.New(cfg.MulticaServerURL, cfg.MulticaToken, cfg.MulticaWorkspaceID)
+		if err != nil {
+			log.Printf("multica sync: %v（同步端点保持 503）", err)
+		} else {
+			srv.SetMulticaSync(syncsvc.New(mcSync, st))
+			log.Printf("multica sync: 已装配（POST/GET /api/multica/sync）")
+		}
 	}
 
 	// 优雅停止（T07）：SIGINT/SIGTERM → HTTP Shutdown（10s 排空在途请求）→

@@ -37,6 +37,10 @@ type Server struct {
 	req    RequirementsAPI // 需求编排服务（可选：未装配 → 需求路由 503）
 	g      *git.Git        // 可选：创建项目时做 LsRemote 可达性校验
 
+	// multicaSync 同步服务（可选：未装配 → 同步路由 503）。凭据在装配方
+	// （main）从 env 构造 client 后注入，Server 不持有凭据。
+	multicaSync MulticaSyncAPI
+
 	// cookieSecure session cookie 的 Secure 属性：HTTPS 终端开启（防明文泄露），
 	// 本地 http 开发保持关闭（否则浏览器丢弃 cookie）。main 按 env 装配。
 	cookieSecure bool
@@ -117,6 +121,9 @@ func (s *Server) Mux() http.Handler {
 		r.Get("/api/requirements/{id}/pr-review", s.handleRequirementPRReview)
 		r.Get("/api/projects/{id}/merge-policy", s.handleGetMergePolicy)
 		r.Put("/api/projects/{id}/merge-policy", s.handleSetMergePolicy)
+		// Multica 同步面（INFERA-80 T03）：POST 触发全量同步 / GET 最近一次结果
+		r.Post("/api/multica/sync", s.handleMulticaSyncTrigger)
+		r.Get("/api/multica/sync", s.handleMulticaSyncStatus)
 	})
 	return r
 }
@@ -150,6 +157,8 @@ func errorCode(status int) string {
 		return "rate_limited"
 	case http.StatusServiceUnavailable:
 		return "unavailable"
+	case http.StatusBadGateway:
+		return "bad_gateway"
 	default:
 		return "internal"
 	}
