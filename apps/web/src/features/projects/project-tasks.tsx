@@ -27,11 +27,14 @@ import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
- * 项目任务列表页（L202608222116-1-T02）：父任务卡片 + 子任务按阶段分组的
- * 纵向列表，对齐参考图形态——「子任务 n/n」进度头、「阶段 N」分组标题、
- * 缩进的单行子任务行（状态图标 + 粗体 issue key）。唯一数据源
- * GET /api/projects/{id}/task-groups（契约冻结于 server/internal/api/taskgroups.go）；
- * 只读，每条可点击进入任务详情。口径统一为「任务/父任务/子任务」。
+ * 项目任务列表页（INFERA-173 左右分栏 master-detail）：左栏为父级任务列表
+ * （每个父任务一条，含无子任务的独立任务；点击选中，aria-current 高亮），
+ * 右栏仅渲染选中父任务的父子任务树——父卡片 + 子任务按阶段分组的纵向列表
+ * （「子任务 n/n」进度头、「阶段 N」分组标题（stage 0 =「无阶段」）、
+ * 缩进的单行子任务行：状态图标 + 粗体 issue key）。默认选中第一个父任务。
+ * 唯一数据源 GET /api/projects/{id}/task-groups（契约冻结于
+ * server/internal/api/taskgroups.go）；只读，每条可点击进入任务详情。
+ * 口径统一为「任务/父任务/子任务」。
  */
 export function ProjectTasks({ projectId }: { projectId: string }) {
   const { data: proj } = useQuery({
@@ -42,8 +45,13 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
     queryKey: ['project-task-groups', projectId],
     queryFn: () => listProjectTaskGroups(projectId),
   })
-  // 每个父任务卡片的子任务折叠态（默认展开）
+  // 选中父任务 id（null = 未选择，回退列表第一项）；每个父任务卡片的
+  // 子任务折叠态（默认展开）
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+
+  const rows = groups ?? []
+  const selected = rows.find((g) => g.id === selectedId) ?? rows[0] ?? null
 
   return (
     <>
@@ -70,42 +78,91 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
         </div>
       </Header>
 
-      <div className='mx-auto w-full max-w-4xl space-y-4 p-6'>
+      <div className='mx-auto w-full max-w-6xl p-6'>
         {isLoading ? (
           <div className='space-y-4'>
             <Skeleton className='h-24 w-full rounded-lg' />
             <Skeleton className='h-24 w-full rounded-lg' />
           </div>
-        ) : !groups?.length ? (
+        ) : !rows.length ? (
           <div className='flex flex-col items-center gap-2 p-16 text-center'>
             <Inbox className='size-5 text-muted-foreground' />
             <p className='text-sm text-muted-foreground'>还没有任务</p>
           </div>
         ) : (
-          groups.map((g) => {
-            const isCollapsed = collapsed.has(g.id)
-            return (
-              <ParentTaskCard
-                key={g.id}
-                g={g}
-                expanded={!isCollapsed}
-                onToggle={
-                  g.child_total
-                    ? () =>
-                        setCollapsed((prev) => {
-                          const next = new Set(prev)
-                          if (next.has(g.id)) next.delete(g.id)
-                          else next.add(g.id)
-                          return next
-                        })
-                    : undefined
-                }
-              />
-            )
-          })
+          <div className='flex flex-col gap-6 lg:flex-row'>
+            {/* 左栏：父任务列表（master）。窄屏堆叠为上列表下详情 */}
+            <aside className='w-full shrink-0 lg:w-72 lg:border-e lg:pe-6'>
+              <ul className='space-y-1'>
+                {rows.map((g) => (
+                  <li key={g.id}>
+                    <ParentListItem
+                      g={g}
+                      selected={selected?.id === g.id}
+                      onSelect={() => setSelectedId(g.id)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </aside>
+            {/* 右栏：选中父任务的父子任务树（detail），只含该父任务及其子任务 */}
+            <div className='min-w-0 flex-1'>
+              {selected && (
+                <ParentTaskCard
+                  g={selected}
+                  expanded={!collapsed.has(selected.id)}
+                  onToggle={
+                    selected.child_total
+                      ? () =>
+                          setCollapsed((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(selected.id)) next.delete(selected.id)
+                            else next.add(selected.id)
+                            return next
+                          })
+                      : undefined
+                  }
+                />
+              )}
+            </div>
+          </div>
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * 左栏父任务列表项：标题 + 子任务进度计数（无子任务的独立任务不显示计数）。
+ * 选中态以 aria-current + 背景高亮标识；状态/阶段/来源等信息由右栏选中
+ * 卡片承载，列表保持最简墨水（DESIGN.md 单色语言）。
+ */
+function ParentListItem({
+  g,
+  selected,
+  onSelect,
+}: {
+  g: TaskGroupRow
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type='button'
+      aria-current={selected ? 'true' : undefined}
+      onClick={onSelect}
+      className={cn(
+        'flex w-full flex-col gap-1 rounded-md px-3 py-2 text-start transition-colors hover:bg-accent/50',
+        selected ? 'bg-accent' : undefined
+      )}
+    >
+      <span className='truncate text-sm'>{g.title}</span>
+      {g.child_total > 0 && (
+        <span className='text-xs tabular-nums text-muted-foreground'>
+          子任务 {g.child_completed}/{g.child_total}
+        </span>
+      )}
+    </button>
   )
 }
 
