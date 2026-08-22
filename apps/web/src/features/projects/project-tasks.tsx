@@ -1,9 +1,18 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ChevronDown, ChevronRight, Inbox } from 'lucide-react'
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
+  ChevronDown,
+  ChevronRight,
+  Inbox,
+  LoaderCircle,
+} from 'lucide-react'
 import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
 import {
+  type DeliveryStatus,
   type TaskChild,
   type TaskGroupRow,
   type TaskStageGroup,
@@ -17,10 +26,11 @@ import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
- * 项目任务列表页（L202608221704-2-T02）：父任务卡片 + 子任务按阶段分组，
- * Multica 式父子展示。唯一数据源 GET /api/projects/{id}/task-groups
- * （契约冻结于 server/internal/api/taskgroups.go）；只读，每条可点击进入
- * 任务详情。口径统一为「任务/父任务/子任务」，界面不出现「需求」。
+ * 项目任务列表页（L202608222116-1-T02）：父任务卡片 + 子任务按阶段分组的
+ * 纵向列表，对齐参考图形态——「子任务 n/n」进度头、「阶段 N」分组标题、
+ * 缩进的单行子任务行（状态图标 + 粗体 issue key）。唯一数据源
+ * GET /api/projects/{id}/task-groups（契约冻结于 server/internal/api/taskgroups.go）；
+ * 只读，每条可点击进入任务详情。口径统一为「任务/父任务/子任务」。
  */
 export function ProjectTasks({ projectId }: { projectId: string }) {
   const { data: proj } = useQuery({
@@ -98,7 +108,7 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
   )
 }
 
-/** 来源标识小徽：multica 同步行专用 */
+/** 来源标识小徽：multica 同步行专用（父卡片；子任务行以粗体 key 标识来源） */
 function MulticaChip() {
   return (
     <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
@@ -109,7 +119,7 @@ function MulticaChip() {
 
 /**
  * 父任务卡片：卡片头（标题链接 + 状态徽标 + 阶段/负责人/时间）+
- * 子任务区（进度条 + 按阶段分组的子任务列表），可整卡收起子任务。
+ * 子任务区（「子任务 n/n」进度头 + 按阶段分组的缩进行列表），可整卡收起子任务。
  */
 function ParentTaskCard({
   g,
@@ -182,37 +192,44 @@ function ParentTaskCard({
 
       {hasChildren && (
         <div className='border-t px-4 py-3'>
-          {/* 子任务进度：hairline 轨道 + 墨色填充（DESIGN.md 单色语言） */}
-          <div className='flex items-center gap-3'>
-            <div className='h-1 min-w-16 flex-1 overflow-hidden rounded-full bg-muted'>
-              <div
-                className='h-full rounded-full bg-foreground'
-                style={{
-                  width: `${Math.round((g.child_completed / g.child_total) * 100)}%`,
-                }}
-              />
-            </div>
-            <span className='shrink-0 text-xs tabular-nums text-muted-foreground'>
-              子任务 {g.child_completed}/{g.child_total}
+          {/* 子任务进度头：标签 + n/n 计数；hairline 轨道 + 墨色填充（DESIGN.md 单色语言） */}
+          <div className='flex items-baseline justify-between'>
+            <span className='text-xs font-medium'>子任务</span>
+            <span className='text-xs tabular-nums text-muted-foreground'>
+              {g.child_completed}/{g.child_total}
             </span>
+          </div>
+          <div className='mt-2 h-1 overflow-hidden rounded-full bg-muted'>
+            <div
+              className='h-full rounded-full bg-foreground'
+              style={{
+                width: `${Math.round((g.child_completed / g.child_total) * 100)}%`,
+              }}
+            />
           </div>
 
           {expanded &&
-            g.stages.map((s) => <StageGroup key={s.stage} group={s} />)}
+            g.stages.map((s, i) => (
+              <StageGroup key={s.stage} group={s} separated={i > 0} />
+            ))}
         </div>
       )}
     </article>
   )
 }
 
-/** 一个阶段（批次）组：组头（阶段号 + 任务计数）+ 组内子任务行列表 */
-function StageGroup({ group }: { group: TaskStageGroup }) {
+/** 一个阶段（批次）组：组头（「阶段 N」标题）+ 组内缩进的子任务行列表 */
+function StageGroup({
+  group,
+  separated,
+}: {
+  group: TaskStageGroup
+  separated?: boolean
+}) {
   return (
-    <section className='mt-3'>
-      <h4 className='text-[11px] font-medium tracking-wide text-muted-foreground'>
-        阶段 {group.stage} · {group.tasks.length} 个子任务
-      </h4>
-      <ul className='mt-1.5 overflow-hidden rounded-md border'>
+    <section className={cn('mt-3', separated && 'border-t pt-3')}>
+      <h4 className='text-xs font-medium'>阶段 {group.stage}</h4>
+      <ul className='mt-1 space-y-0.5'>
         {group.tasks.map((t) => (
           <li key={t.id}>
             <ChildTaskRow d={t} />
@@ -223,38 +240,72 @@ function StageGroup({ group }: { group: TaskStageGroup }) {
   )
 }
 
-/** 子任务行：列表行式（hairline 分隔），状态徽标 + 阶段位 + 时间 */
+/**
+ * 子任务行：单行式（对齐参考图）——状态图标 + 粗体 issue key + 标题 +
+ * 相对时间；行内容缩进于阶段标题之下（ps-6）。
+ */
 function ChildTaskRow({ d }: { d: TaskChild }) {
-  const assignee = assigneeLabel(d.assignee)
+  const key = d.multica_issue_key
   return (
     <Link
       to='/deliveries/$id'
       params={{ id: d.id }}
-      className={cn(
-        'flex items-center justify-between gap-2 border-b px-3 py-2 text-start',
-        'transition-colors last:border-b-0 hover:bg-accent/50'
-      )}
+      className='flex items-center gap-2 rounded-md px-2 py-1.5 ps-6 transition-colors hover:bg-accent/50'
     >
-      <span className='flex min-w-0 flex-col gap-0.5'>
-        <span className='flex min-w-0 items-center gap-1.5'>
-          {d.multica_issue_id && <MulticaChip />}
-          <span className='truncate text-xs font-medium'>{d.title}</span>
-        </span>
-        <span className='flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground'>
-          {/* 有 current_stage 展示阶段 label；同步镜像以 issue key 顶替 */}
-          <span>
-            {stageLabel(d.current_stage) || d.multica_issue_key || '—'}
-          </span>
-          {d.pending_gate && <span>· 待审批</span>}
-          {assignee && <span className='truncate'>· {assignee}</span>}
-        </span>
+      <TaskStatusIcon status={d.status} />
+      <span
+        className={cn(
+          'min-w-0 flex-1 truncate text-xs',
+          key ? 'text-muted-foreground' : undefined
+        )}
+      >
+        {key && (
+          <span className='font-medium text-foreground'>{key}&nbsp;</span>
+        )}
+        <span>{d.title}</span>
+        {d.pending_gate && <span> · 待审批</span>}
       </span>
-      <span className='flex shrink-0 items-center gap-2'>
-        <span className='text-[11px] tabular-nums text-muted-foreground'>
-          {timeAgo(d.updated_at)}
-        </span>
-        <StatusBadge status={d.status} />
+      <span className='shrink-0 text-[11px] tabular-nums text-muted-foreground'>
+        {timeAgo(d.updated_at)}
       </span>
     </Link>
+  )
+}
+
+/**
+ * 子任务行状态图标（单色语言，语义与 StatusBadge 一致）：
+ * 已完成=墨色实勾；进行中=旋转加载圈；已阻塞=墨色警示圈；未启动=灰虚线圈。
+ */
+function TaskStatusIcon({ status }: { status: DeliveryStatus }) {
+  if (status === 'completed')
+    return (
+      <CircleCheck
+        role='img'
+        aria-label='已完成'
+        className='size-3.5 shrink-0 text-foreground'
+      />
+    )
+  if (status === 'active')
+    return (
+      <LoaderCircle
+        role='img'
+        aria-label='进行中'
+        className='size-3.5 shrink-0 animate-spin text-foreground'
+      />
+    )
+  if (status === 'blocked')
+    return (
+      <CircleAlert
+        role='img'
+        aria-label='已阻塞'
+        className='size-3.5 shrink-0 text-foreground'
+      />
+    )
+  return (
+    <CircleDashed
+      role='img'
+      aria-label='未启动'
+      className='size-3.5 shrink-0 text-muted-foreground'
+    />
   )
 }
