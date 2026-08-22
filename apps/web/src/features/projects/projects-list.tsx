@@ -54,7 +54,6 @@ function ProjectCard({
           <Link
             to='/projects/$id'
             params={{ id: proj.id }}
-            search={{ d: undefined }}
             className='after:absolute after:inset-0'
           >
             {proj.name}
@@ -91,7 +90,6 @@ function ProjectCard({
               <Link
                 to='/projects/$id'
                 params={{ id: proj.id }}
-                search={{ d: undefined }}
                 className='after:absolute after:inset-0'
               >
                 {s.pending} 个待审批

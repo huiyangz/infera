@@ -74,7 +74,7 @@ describe('SearchProvider and CommandMenu', () => {
     await expect.element(getByText('Dark')).toBeInTheDocument()
     await expect.element(getByText('System')).toBeInTheDocument()
     await expect.element(getByText('项目')).toBeInTheDocument()
-    await expect.element(getByText('Agent')).toBeInTheDocument()
+    await expect.element(getByText('需要决策')).toBeInTheDocument()
   })
 
   it('does not show the dialog content when search is closed', async () => {
@@ -110,9 +110,9 @@ describe('SearchProvider and CommandMenu', () => {
 
     await openCommandPalette(screen)
 
-    await userEvent.click(screen.getByText('Agent'))
+    await userEvent.click(screen.getByText('需要决策'))
 
-    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/agents' })
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: '/decisions' })
     await expect
       .element(screen.getByPlaceholder(COMMAND_MENU_PLACEHOLDER))
       .not.toBeInTheDocument()

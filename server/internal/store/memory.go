@@ -140,6 +140,64 @@ func (m *Memory) ProjectStats(ctx context.Context, id string) (ProjectStats, err
 	return s, nil
 }
 
+// RequirementStats 项目维度需求统计（语义与 Pg 一致）：ByStatus 恒含四个
+// 固定键；PendingDecisions 只数 pending_gate 非空且未完结的行；项目不存在
+// → ErrNotFound。
+func (m *Memory) RequirementStats(ctx context.Context, id string) (RequirementStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.projects[id]
+	if !ok {
+		return RequirementStats{}, ErrNotFound
+	}
+	s := RequirementStats{
+		ProjectID:    id,
+		ByStatus:     map[string]int{"active": 0, "queued": 0, "completed": 0, "blocked": 0},
+		LastSyncedAt: p.MulticaSyncedAt,
+	}
+	for _, d := range m.deliveries {
+		if d.ProjectID != id {
+			continue
+		}
+		s.RequirementTotal++
+		if _, known := s.ByStatus[d.Status]; known {
+			s.ByStatus[d.Status]++
+		}
+		if d.Status == "completed" {
+			s.Delivered++
+		}
+		if d.PendingGate != "" && d.Status != "completed" {
+			s.PendingDecisions++
+		}
+	}
+	return s, nil
+}
+
+// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空且未
+// 完结），带 ProjectName，按 updated_at 降序（语义与 Pg 一致）。
+func (m *Memory) ListPendingDecisions(_ context.Context) ([]PendingDecision, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PendingDecision, 0)
+	for _, d := range m.deliveries {
+		if d.PendingGate == "" || d.Status == "completed" {
+			continue
+		}
+		row := PendingDecision{
+			ID: d.ID, ProjectID: d.ProjectID, Title: d.Title, Status: d.Status,
+			PendingGate: d.PendingGate, CurrentStage: d.CurrentStage,
+			MulticaIssueKey: d.MulticaIssueKey, Assignee: d.Assignee, Priority: d.Priority,
+			CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		}
+		if p, ok := m.projects[d.ProjectID]; ok {
+			row.ProjectName = p.Name
+		}
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b PendingDecision) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
+	return out, nil
+}
+
 // deliveries
 
 func (m *Memory) CreateDelivery(ctx context.Context, d *Delivery) error {

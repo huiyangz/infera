@@ -315,12 +315,11 @@ export function DeliveryDetail({
               <div className='flex items-center gap-1 text-sm text-muted-foreground'>
                 <ChevronLeft className='size-4' />
                 <Link
-                  to='/projects/$id'
+                  to='/projects/$id/tasks'
                   params={{ id: delivery.project_id }}
-                  search={{ d: deliveryId }}
                   className='hover:text-foreground'
                 >
-                  返回项目
+                  返回项目任务
                 </Link>
               </div>
               <h1 className='mt-1 truncate text-lg font-semibold tracking-[-0.2px]'>
@@ -585,9 +584,8 @@ export function DeliveryDetail({
                 <div key={c.id}>
                   {i > 0 && <Separator className='my-3' />}
                   <Link
-                    to='/projects/$id'
-                    params={{ id: delivery.project_id }}
-                    search={{ d: c.id }}
+                    to='/deliveries/$id'
+                    params={{ id: c.id }}
                     className='flex items-center justify-between gap-3 rounded-md px-1 py-1 transition-colors hover:bg-accent/50'
                   >
                     <span className='flex min-w-0 items-center gap-2'>

@@ -11,7 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
-import { Route as AuthenticatedAgentsRouteImport } from './routes/_authenticated/agents'
+import { Route as AuthenticatedDecisionsRouteImport } from './routes/_authenticated/decisions'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
 import { Route as errors404RouteImport } from './routes/(errors)/404'
@@ -24,6 +24,7 @@ import { Route as AuthenticatedProjectsIdRouteImport } from './routes/_authentic
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedDeliveriesIdRouteImport } from './routes/_authenticated/deliveries/$id'
 import { Route as AuthenticatedDeliveriesIdIndexRouteImport } from './routes/_authenticated/deliveries/$id/index'
+import { Route as AuthenticatedProjectsIdTasksRouteImport } from './routes/_authenticated/projects/$id/tasks'
 import { Route as AuthenticatedDeliveriesIdGateRouteImport } from './routes/_authenticated/deliveries/$id/gate'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -35,9 +36,9 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedAgentsRoute = AuthenticatedAgentsRouteImport.update({
-  id: '/agents',
-  path: '/agents',
+const AuthenticatedDecisionsRoute = AuthenticatedDecisionsRouteImport.update({
+  id: '/decisions',
+  path: '/decisions',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const errors503Route = errors503RouteImport.update({
@@ -105,6 +106,12 @@ const AuthenticatedDeliveriesIdIndexRoute =
     path: '/',
     getParentRoute: () => AuthenticatedDeliveriesIdRoute,
   } as any)
+const AuthenticatedProjectsIdTasksRoute =
+  AuthenticatedProjectsIdTasksRouteImport.update({
+    id: '/tasks',
+    path: '/tasks',
+    getParentRoute: () => AuthenticatedProjectsIdRoute,
+  } as any)
 const AuthenticatedDeliveriesIdGateRoute =
   AuthenticatedDeliveriesIdGateRouteImport.update({
     id: '/gate',
@@ -120,13 +127,14 @@ export interface FileRoutesByFullPath {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
-  '/agents': typeof AuthenticatedAgentsRoute
+  '/decisions': typeof AuthenticatedDecisionsRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
-  '/projects/$id': typeof AuthenticatedProjectsIdRoute
+  '/projects/$id': typeof AuthenticatedProjectsIdRouteWithChildren
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/requirements/': typeof AuthenticatedRequirementsIndexRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -136,13 +144,14 @@ export interface FileRoutesByTo {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
-  '/agents': typeof AuthenticatedAgentsRoute
+  '/decisions': typeof AuthenticatedDecisionsRoute
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
-  '/projects/$id': typeof AuthenticatedProjectsIdRoute
+  '/projects/$id': typeof AuthenticatedProjectsIdRouteWithChildren
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/requirements': typeof AuthenticatedRequirementsIndexRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRoutesById {
@@ -154,14 +163,15 @@ export interface FileRoutesById {
   '/(errors)/404': typeof errors404Route
   '/(errors)/500': typeof errors500Route
   '/(errors)/503': typeof errors503Route
-  '/_authenticated/agents': typeof AuthenticatedAgentsRoute
+  '/_authenticated/decisions': typeof AuthenticatedDecisionsRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
-  '/_authenticated/projects/$id': typeof AuthenticatedProjectsIdRoute
+  '/_authenticated/projects/$id': typeof AuthenticatedProjectsIdRouteWithChildren
   '/_authenticated/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/_authenticated/requirements/': typeof AuthenticatedRequirementsIndexRoute
   '/_authenticated/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/_authenticated/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/_authenticated/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -174,13 +184,14 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
-    | '/agents'
+    | '/decisions'
     | '/deliveries/$id'
     | '/errors/$error'
     | '/projects/$id'
     | '/requirements/$id'
     | '/requirements/'
     | '/deliveries/$id/gate'
+    | '/projects/$id/tasks'
     | '/deliveries/$id/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -190,13 +201,14 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
-    | '/agents'
+    | '/decisions'
     | '/'
     | '/errors/$error'
     | '/projects/$id'
     | '/requirements/$id'
     | '/requirements'
     | '/deliveries/$id/gate'
+    | '/projects/$id/tasks'
     | '/deliveries/$id'
   id:
     | '__root__'
@@ -207,7 +219,7 @@ export interface FileRouteTypes {
     | '/(errors)/404'
     | '/(errors)/500'
     | '/(errors)/503'
-    | '/_authenticated/agents'
+    | '/_authenticated/decisions'
     | '/_authenticated/'
     | '/_authenticated/deliveries/$id'
     | '/_authenticated/errors/$error'
@@ -215,6 +227,7 @@ export interface FileRouteTypes {
     | '/_authenticated/requirements/$id'
     | '/_authenticated/requirements/'
     | '/_authenticated/deliveries/$id/gate'
+    | '/_authenticated/projects/$id/tasks'
     | '/_authenticated/deliveries/$id/'
   fileRoutesById: FileRoutesById
 }
@@ -244,11 +257,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/agents': {
-      id: '/_authenticated/agents'
-      path: '/agents'
-      fullPath: '/agents'
-      preLoaderRoute: typeof AuthenticatedAgentsRouteImport
+    '/_authenticated/decisions': {
+      id: '/_authenticated/decisions'
+      path: '/decisions'
+      fullPath: '/decisions'
+      preLoaderRoute: typeof AuthenticatedDecisionsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/(errors)/503': {
@@ -335,6 +348,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDeliveriesIdIndexRouteImport
       parentRoute: typeof AuthenticatedDeliveriesIdRoute
     }
+    '/_authenticated/projects/$id/tasks': {
+      id: '/_authenticated/projects/$id/tasks'
+      path: '/tasks'
+      fullPath: '/projects/$id/tasks'
+      preLoaderRoute: typeof AuthenticatedProjectsIdTasksRouteImport
+      parentRoute: typeof AuthenticatedProjectsIdRoute
+    }
     '/_authenticated/deliveries/$id/gate': {
       id: '/_authenticated/deliveries/$id/gate'
       path: '/gate'
@@ -361,22 +381,36 @@ const AuthenticatedDeliveriesIdRouteWithChildren =
     AuthenticatedDeliveriesIdRouteChildren,
   )
 
+interface AuthenticatedProjectsIdRouteChildren {
+  AuthenticatedProjectsIdTasksRoute: typeof AuthenticatedProjectsIdTasksRoute
+}
+
+const AuthenticatedProjectsIdRouteChildren: AuthenticatedProjectsIdRouteChildren =
+  {
+    AuthenticatedProjectsIdTasksRoute: AuthenticatedProjectsIdTasksRoute,
+  }
+
+const AuthenticatedProjectsIdRouteWithChildren =
+  AuthenticatedProjectsIdRoute._addFileChildren(
+    AuthenticatedProjectsIdRouteChildren,
+  )
+
 interface AuthenticatedRouteRouteChildren {
-  AuthenticatedAgentsRoute: typeof AuthenticatedAgentsRoute
+  AuthenticatedDecisionsRoute: typeof AuthenticatedDecisionsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedDeliveriesIdRoute: typeof AuthenticatedDeliveriesIdRouteWithChildren
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
-  AuthenticatedProjectsIdRoute: typeof AuthenticatedProjectsIdRoute
+  AuthenticatedProjectsIdRoute: typeof AuthenticatedProjectsIdRouteWithChildren
   AuthenticatedRequirementsIdRoute: typeof AuthenticatedRequirementsIdRoute
   AuthenticatedRequirementsIndexRoute: typeof AuthenticatedRequirementsIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
-  AuthenticatedAgentsRoute: AuthenticatedAgentsRoute,
+  AuthenticatedDecisionsRoute: AuthenticatedDecisionsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedDeliveriesIdRoute: AuthenticatedDeliveriesIdRouteWithChildren,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
-  AuthenticatedProjectsIdRoute: AuthenticatedProjectsIdRoute,
+  AuthenticatedProjectsIdRoute: AuthenticatedProjectsIdRouteWithChildren,
   AuthenticatedRequirementsIdRoute: AuthenticatedRequirementsIdRoute,
   AuthenticatedRequirementsIndexRoute: AuthenticatedRequirementsIndexRoute,
 }

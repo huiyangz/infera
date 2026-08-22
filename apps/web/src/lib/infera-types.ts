@@ -74,6 +74,25 @@ export interface ProjectStats {
   last_activity: string
 }
 
+/**
+ * 项目维度需求统计（契约冻结于 INFERA-108 T01：
+ * GET /api/projects/{id}/stats ← server/internal/store store.RequirementStats）。
+ * by_status 恒含四个固定键（无行时为 0）；last_synced_at null = 从未同步。
+ */
+export interface RequirementStats {
+  project_id: string
+  requirement_total: number
+  by_status: {
+    active: number
+    queued: number
+    completed: number
+    blocked: number
+  }
+  pending_decisions: number
+  delivered: number
+  last_synced_at: string | null
+}
+
 export interface Project {
   id: string
   name: string

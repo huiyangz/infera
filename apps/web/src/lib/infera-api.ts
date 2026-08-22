@@ -11,6 +11,7 @@ import type {
   PipelineInfo,
   Project,
   ProjectPipeline,
+  RequirementStats,
   TaskSpec,
 } from './infera-types'
 
@@ -100,43 +101,16 @@ export async function patchProjectPinned(
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
   return json(await fetch(`/api/projects/${id}/deliveries`))
 }
+/** 项目维度需求统计（T01 冻结契约，形状见 RequirementStats） */
+export async function getProjectStats(id: string): Promise<RequirementStats> {
+  return json(await fetch(`/api/projects/${id}/stats`))
+}
 
 // —— agent 编排 ——
+// Agent 注册/管理页已下线（INFERA-110）：后端 /api/agents 保留，前端仅剩
+// 编排绑定处的只读 listAgents；CRUD 由人在 Multica 后端直接操作。
 export async function listAgents(): Promise<Agent[]> {
   return json(await fetch('/api/agents'))
-}
-export async function createAgent(input: {
-  name: string
-  runner: Agent['runner']
-  config: Record<string, unknown>
-}): Promise<Agent> {
-  return json(
-    await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    })
-  )
-}
-/** PATCH 局部更新；config 非 nil 即整体替换 */
-export async function updateAgent(
-  id: string,
-  input: {
-    name: string
-    runner: Agent['runner']
-    config: Record<string, unknown>
-  }
-): Promise<Agent> {
-  return json(
-    await fetch(`/api/agents/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    })
-  )
-}
-export async function deleteAgent(id: string): Promise<void> {
-  json(await fetch(`/api/agents/${id}`, { method: 'DELETE' }))
 }
 export async function getPipeline(): Promise<PipelineInfo> {
   return json(await fetch('/api/pipeline'))
