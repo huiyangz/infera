@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tokfinity/infera/internal/db"
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
 // pgStore 取会话专属测试库（TEST_DATABASE_URL，与 store 包同约定：未设置跳过）。
@@ -33,7 +33,7 @@ func pgStore(t *testing.T) store.Store {
 	return store.NewPg(pool)
 }
 
-// findByExtID 在任意 Store 上按 multica issue ID 找已落库的 delivery。
+// findByExtID 在任意 Store 上按 上游 issue ID 找已落库的 delivery。
 func findByExtID(t *testing.T, st store.Store, extID string) *store.Delivery {
 	t.Helper()
 	ctx := context.Background()
@@ -43,7 +43,7 @@ func findByExtID(t *testing.T, st store.Store, extID string) *store.Delivery {
 		ds, err := st.ListProjectDeliveries(ctx, p.ID)
 		require.NoError(t, err)
 		for _, d := range ds {
-			if d.MulticaIssueID == extID {
+			if d.ExternalIssueID == extID {
 				return &d
 			}
 		}
@@ -59,8 +59,8 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	st := pgStore(t)
 	ctx := context.Background()
 	f := &fakeFetch{
-		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
-		issues: []multica.Issue{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues: []tasksource.Issue{
 			{
 				ID: "m-iss-1", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
 				Priority: "urgent", Description: ptr("父描述"), ProjectID: ptr("m-prj-1"),
@@ -81,7 +81,7 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	parent := findByExtID(t, st, "m-iss-1")
 	require.NotNil(t, parent)
 	require.Equal(t, "queued", parent.Status)
-	require.NotNil(t, parent.MulticaSyncedAt)
+	require.NotNil(t, parent.ExternalSyncedAt)
 	child := findByExtID(t, st, "m-iss-2")
 	require.NotNil(t, child)
 	require.Equal(t, "completed", child.Status)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 启动 infera 本地开发：后端(:8080) + 前端(vite :5173，/api 代理到 8080)。
 # 前置：postgres 已起（docker compose up -d）；迁移在启动时自动执行（v1 起）。
-# 需求流转（发起需求/闸门卡/合并策略）：.env 配齐 MULTICA_* 六键 + GITHUB_TOKEN
-# 即装配并启动闸门轮询（缺省未接入，需求 API 503）；配置说明见 .env.example
-# 与 docs/requirements-flow.md。
+# 需求流转（发起需求/闸门卡/合并策略）：.env 配齐 TASK_SYNC_* 六键 + GITHUB_TOKEN
+# 即装配并启动闸门轮询与任务自动同步（缺省未接入，同步/需求 API 503）；
+# 配置说明见 .env.example 与 docs/requirements-flow.md。
 # agent 默认本地进程模式；AGENT_BACKEND=docker 切容器。换 agent（如 pi）改 AGENT_CMD。
 # 前端需要 pnpm；npm 不可用（依赖装在 pnpm store）。
 set -euo pipefail

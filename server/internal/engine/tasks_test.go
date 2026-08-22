@@ -351,4 +351,3 @@ func TestTasksPromptIncludesDesign(t *testing.T) {
 	require.Contains(t, prompt, "# 规格正文")
 	require.Contains(t, prompt, "设计文档（约束参考）：\n# 设计正文")
 }
-

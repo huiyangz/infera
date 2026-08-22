@@ -21,19 +21,38 @@ type Config struct {
 	TestCmd      string // unit_test 命令（本地模式）
 
 	// 需求流转（flow 契约，INFERA-11 T01）：闸门轮询间隔与派发目标项目。
-	GatePollInterval time.Duration // 默认 30s，上限 60s（AC-3：状态变化 2 分钟内反映）
-	MulticaProjectID string        // 派发目标 Multica 项目（reqservice 装配期必填）
+	GatePollInterval  time.Duration // 默认 30s，上限 60s（AC-3：状态变化 2 分钟内反映）
+	TaskSyncProjectID string        // 派发目标 上游项目（reqservice 装配期必填）
 
 	// 装配期定位（T07）：reqservice.Options 的派发指派与深链段。
-	MulticaTechLeadAgentID string // 派发指派的 Tech Lead agent id（装配期必填）
-	MulticaWorkspaceSlug   string // 深链工作区段，如 infera（装配期必填）
+	TaskSyncTechLeadAgentID string // 派发指派的 Tech Lead agent id（装配期必填）
+	TaskSyncWorkspaceSlug   string // 深链工作区段，如 infera（装配期必填）
 
-	// Multica 接入（空 = 未接入）。三项均不内置默认值：ServerURL 尤其不能回落
-	// 到云端 api.multica.ai（本机默认 profile 指向云端是已实证的坑）——缺失交给
-	// multica.New 显式报错，宁可不启不用错误地址。
-	MulticaServerURL   string
-	MulticaToken       string
-	MulticaWorkspaceID string
+	// 任务源接入（空 = 未接入）。三项均不内置默认值——缺失交给
+	// tasksource.New 显式报错，宁可不启不用错误地址。
+	TaskSyncServerURL   string
+	TaskSyncToken       string
+	TaskSyncWorkspaceID string
+
+	// TaskSyncInterval 任务同步周期轮询间隔（默认 60s；0 = 关闭周期轮询，
+	// 启动同步仍执行）。同步失败记录错误继续轮询，不影响服务运行。
+	TaskSyncInterval time.Duration
+}
+
+// 任务同步 env 键。旧键（历史 .env 兼容）只在 taskSyncEnv 一处出现——
+// 除本常量与该回退函数外，全仓不得再引用旧键名。
+const (
+	taskSyncEnvPrefix = "TASK_SYNC_"
+	legacyEnvPrefix   = "MULTICA_"
+)
+
+// taskSyncEnv 读一个任务同步配置键：新键 TASK_SYNC_* 优先，缺失回退旧键
+// （现有 .env 不中断；新键一旦出现即以新键为准）。
+func taskSyncEnv(suffix string) string {
+	if v := os.Getenv(taskSyncEnvPrefix + suffix); v != "" {
+		return v
+	}
+	return os.Getenv(legacyEnvPrefix + suffix)
 }
 
 // devDatabaseURL 开发回落值：docker-compose 的本地 postgres（127.0.0.1:5433）。
@@ -59,6 +78,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	taskSyncInterval, err := loadTaskSyncInterval()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		Addr:         addr,
 		DatabaseURL:  dbURL,
@@ -71,15 +94,16 @@ func Load() (Config, error) {
 		RepoWorkRoot: getenv("REPO_WORK_ROOT", "/tmp/infera-workdirs"),
 		TestCmd:      getenv("TEST_CMD", "true"),
 
-		MulticaServerURL:   os.Getenv("MULTICA_SERVER_URL"),
-		MulticaToken:       os.Getenv("MULTICA_TOKEN"),
-		MulticaWorkspaceID: os.Getenv("MULTICA_WORKSPACE_ID"),
+		TaskSyncServerURL:   taskSyncEnv("SERVER_URL"),
+		TaskSyncToken:       taskSyncEnv("TOKEN"),
+		TaskSyncWorkspaceID: taskSyncEnv("WORKSPACE_ID"),
 
-		GatePollInterval: gatePoll,
-		MulticaProjectID: os.Getenv("MULTICA_PROJECT_ID"),
+		GatePollInterval:  gatePoll,
+		TaskSyncInterval:  taskSyncInterval,
+		TaskSyncProjectID: taskSyncEnv("PROJECT_ID"),
 
-		MulticaTechLeadAgentID: os.Getenv("MULTICA_TECH_LEAD_AGENT_ID"),
-		MulticaWorkspaceSlug:   os.Getenv("MULTICA_WORKSPACE_SLUG"),
+		TaskSyncTechLeadAgentID: taskSyncEnv("TECH_LEAD_AGENT_ID"),
+		TaskSyncWorkspaceSlug:   taskSyncEnv("WORKSPACE_SLUG"),
 	}, nil
 }
 
@@ -97,6 +121,27 @@ func loadGatePollInterval() (time.Duration, error) {
 	}
 	if d <= 0 || d > 60*time.Second {
 		return 0, fmt.Errorf("GATE_POLL_INTERVAL %s 超出 (0, 60s]", d)
+	}
+	return d, nil
+}
+
+// loadTaskSyncInterval 解析周期轮询间隔：默认 60s；"0"/"0s" = 关闭周期轮询
+// （启动同步仍执行）；非法 duration 与负值配置期直接报错——静默接受只会
+// 把配置错误推迟到运行期。
+func loadTaskSyncInterval() (time.Duration, error) {
+	raw := taskSyncEnv("INTERVAL")
+	if raw == "" {
+		return 60 * time.Second, nil
+	}
+	if raw == "0" { // 无单位零值同样视为显式关闭
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("TASK_SYNC_INTERVAL %q 不是合法 duration: %w", raw, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("TASK_SYNC_INTERVAL %s 为负", d)
 	}
 	return d, nil
 }

@@ -4,7 +4,7 @@
 
 **Goal:** 让流水线上的 4 个专职 Agent（Spec / Test / Coder / Reviewer）能在 Docker 容器里真正跑起来——stage 推进到对应节点时，系统选 Agent、起容器、跑 Claude Code、把产出写进 timeline。把 P1 的 stub advance 换成真执行。
 
-**Architecture:** 抽象一个 `Backend` 接口（借鉴 multica 的 `server/pkg/agent/agent.go`），`FakeBackend` 用于测试、`DockerBackend` 是真实实现（Docker SDK 起容器跑 Claude Code CLI）。Agent 配置存 `agent_configs` 表（P1 已建），预置 4 个。`ExecuteService` 负责按 stage 选 Agent、调 Backend、写 timeline。P2 不做 loop（P3）和真仓库同步（P4）——Agent 在容器的工作目录里跑，产出文本写进 timeline，验证"能跑"。
+**Architecture:** 抽象一个 `Backend` 接口（借鉴既有 Agent 编排平台的 `server/pkg/agent/agent.go`），`FakeBackend` 用于测试、`DockerBackend` 是真实实现（Docker SDK 起容器跑 Claude Code CLI）。Agent 配置存 `agent_configs` 表（P1 已建），预置 4 个。`ExecuteService` 负责按 stage 选 Agent、调 Backend、写 timeline。P2 不做 loop（P3）和真仓库同步（P4）——Agent 在容器的工作目录里跑，产出文本写进 timeline，验证"能跑"。
 
 **Tech Stack:** Go · github.com/docker/docker SDK · Claude Code CLI（`claude -p`，headless）· testify · Docker（本地 daemon）
 

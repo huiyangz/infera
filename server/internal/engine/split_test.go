@@ -199,7 +199,7 @@ func TestContinueOnParkedSplitParentRoutesToMerge(t *testing.T) {
 
 // --- INFERA-146 回归：无阶段（wave 0）子任务不得干扰批次调度 ---
 //
-// wave 0 = multica 同步镜像无阶段子任务（见 syncsvc 字段约定）。startDueWaves
+// wave 0 = 任务同步镜像无阶段子任务（见 syncsvc 字段约定）。startDueWaves
 // 以 nextWave==0 作「无 queued 批次」哨兵，且前序检查按 Wave<nextWave 判定；
 // wave 0 的 queued 镜像若混入扫描会（a）误触哨兵静默禁用调度、（b）被当成
 // 永不完成的「前序批次」卡死后续批次。引擎自身拆分的孩子恒 wave>=1

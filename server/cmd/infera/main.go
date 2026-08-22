@@ -19,11 +19,9 @@ import (
 	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/git"
 	"github.com/tokfinity/infera/internal/mcp"
-	"github.com/tokfinity/infera/internal/multica"
 	"github.com/tokfinity/infera/internal/orchestration"
 	"github.com/tokfinity/infera/internal/persist"
 	"github.com/tokfinity/infera/internal/store"
-	"github.com/tokfinity/infera/internal/syncsvc"
 	"github.com/tokfinity/infera/internal/testrunner"
 	"github.com/tokfinity/infera/internal/workspace"
 )
@@ -119,7 +117,7 @@ func main() {
 	}
 
 	// 需求流转装配（T07）：reqservice 注入 router（未装配时需求路由 503）、
-	// gatepoll 后台轮询随进程生命周期启停。未配置 MULTICA_* 时不装配不启动。
+	// gatepoll 后台轮询随进程生命周期启停。未配置 TASK_SYNC_* 时不装配不启动。
 	reqSvc, poller, err := assembleFlow(pool, cfg)
 	if err != nil {
 		log.Fatalf("需求流转装配: %v", err)
@@ -129,18 +127,14 @@ func main() {
 		log.Printf("flow: 需求流转已装配（闸门轮询间隔 %s，合并策略 SettingsPolicy）", cfg.GatePollInterval)
 	}
 
-	// Multica 同步装配（INFERA-80 T03）：凭据三键齐 → 构造 client 注入同步服务。
-	// 凭据只经 env → config → multica.New（token 只进 client 内存），不落库不进仓。
-	// 三键不齐 = 未接入（不装配，同步路由 503）；不全配置时 assembleFlow 已用
-	// 同一组键显式报错过，这里错误只降级不装配（裸开发启动不受影响）。
-	if cfg.MulticaServerURL != "" && cfg.MulticaToken != "" && cfg.MulticaWorkspaceID != "" {
-		mcSync, err := multica.New(cfg.MulticaServerURL, cfg.MulticaToken, cfg.MulticaWorkspaceID)
-		if err != nil {
-			log.Printf("multica sync: %v（同步端点保持 503）", err)
-		} else {
-			srv.SetMulticaSync(syncsvc.New(mcSync, st))
-			log.Printf("multica sync: 已装配（POST/GET /api/multica/sync）")
-		}
+	// 任务同步装配（INFERA-80 T03 / INFERA-169）：凭据三键齐 → 注入同步服务
+	// 并启动自动同步（启动即同步一轮 + 按 TASK_SYNC_INTERVAL 周期轮询，失败
+	// 记录错误继续）。凭据只经 env → config → tasksource.New（token 只进
+	// client 内存），不落库不进仓。三键不齐 = 未接入（同步路由 503）；半配
+	// 时 assembleFlow 已用同一组键显式报错过，这里错误只降级不装配。
+	syncSvc, syncSched, err := assembleTaskSync(cfg, st)
+	if err != nil {
+		log.Printf("task sync: %v（同步端点保持 503）", err)
 	}
 
 	// 优雅停止（T07）：SIGINT/SIGTERM → HTTP Shutdown（10s 排空在途请求）→
@@ -149,6 +143,18 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: root}
+	if syncSvc != nil {
+		srv.SetTaskSync(syncSvc)
+		if err := syncSched.Start(ctx); err != nil {
+			log.Printf("task sync: 调度器启动: %v（周期轮询不可用，手动触发仍可用）", err)
+		} else {
+			intervalDesc := cfg.TaskSyncInterval.String()
+			if cfg.TaskSyncInterval == 0 {
+				intervalDesc = "0（仅启动同步，周期轮询关闭）"
+			}
+			log.Printf("task sync: 已装配（POST/GET /api/task-sync、GET /api/task-sync/status，自动同步间隔 %s）", intervalDesc)
+		}
+	}
 	if poller != nil {
 		if err := poller.Start(ctx); err != nil {
 			log.Fatalf("gatepoll 启动: %v", err)
@@ -170,6 +176,9 @@ func main() {
 	}
 	if poller != nil {
 		poller.Stop()
+	}
+	if syncSched != nil {
+		syncSched.Stop()
 	}
 	pool.Close()
 	log.Printf("infera 已停止")

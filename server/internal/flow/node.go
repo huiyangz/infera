@@ -33,10 +33,10 @@ func isActive(n Node) bool {
 	return false
 }
 
-// NodeFromMulticaStatus 把 Multica 父 issue 状态映射为大节点。
+// NodeFromExternalStatus 把 上游父 issue 状态映射为大节点。
 // 只认四个业务状态（字面、大小写敏感）；blocked / backlog / cancelled /
 // 未知状态无映射——由调用方保持原节点（不推进）。
-func NodeFromMulticaStatus(status string) (Node, bool) {
+func NodeFromExternalStatus(status string) (Node, bool) {
 	switch status {
 	case "todo":
 		return NodeDispatched, true
@@ -53,7 +53,7 @@ func NodeFromMulticaStatus(status string) (Node, bool) {
 // CanTransition 报告 from→to 是否为合法跃迁。
 //
 // 冻结规则（契约，下游只读消费）：
-//   - 主链只进不退，允许跨级（一个轮询窗口内 Multica 状态可能连跳，
+//   - 主链只进不退，允许跨级（一个轮询窗口内 上游状态可能连跳，
 //     禁跨级会卡死推进）；
 //   - needs_decision 从任意活跃节点进入，可回到任意活跃节点或直达
 //     delivered（决策后的去向由执行态决定）；
@@ -75,11 +75,11 @@ func CanTransition(from, to Node) bool {
 	return false
 }
 
-// Advance 用 Multica 父 issue 状态推进当前大节点：
+// Advance 用 上游父 issue 状态推进当前大节点：
 // 不可映射（blocked/未知）、非法后退、目标等于当前——一律原样返回。
-// infera 是单一状态源：Multica 侧的状态回退不导致节点回退。
-func Advance(current Node, multicaStatus string) Node {
-	mapped, ok := NodeFromMulticaStatus(multicaStatus)
+// infera 是单一状态源：上游侧的状态回退不导致节点回退。
+func Advance(current Node, externalStatus string) Node {
+	mapped, ok := NodeFromExternalStatus(externalStatus)
 	if !ok || mapped == current || !CanTransition(current, mapped) {
 		return current
 	}

@@ -1,8 +1,8 @@
 // Package gatepoll 是闸门检测轮询器（INFERA-11 FR-3 / FR-6）：
-// 后台按分钟级间隔轮询在途需求，驱动 Multica 状态 → infera 大节点推进、
+// 后台按分钟级间隔轮询在途需求，驱动 上游状态 → infera 大节点推进、
 // 增量评论 → 闸门卡生成，并按项目合并策略档位执行自动合并。
 //
-// 本包不内嵌任何 AI：轮询与判定全部确定性。对 multica / github client 与
+// 本包不内嵌任何 AI：轮询与判定全部确定性。对 tasksource / github client 与
 // 持久层均通过窄接口（Go 鸭型）消费，单测用 fake，不碰真服务。
 package gatepoll
 
@@ -16,14 +16,14 @@ import (
 
 	"github.com/tokfinity/infera/internal/flow"
 	"github.com/tokfinity/infera/internal/github"
-	"github.com/tokfinity/infera/internal/multica"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
-// MulticaClient 是轮询器消费的 multica 薄 client 最小面（真 *multica.Client
+// TaskSourceClient 是轮询器消费的 tasksource 薄 client 最小面（真 *tasksource.Client
 // 结构化满足，无需适配器）。
-type MulticaClient interface {
-	GetIssue(ctx context.Context, idOrKey string) (multica.Issue, error)
-	ListCommentsSince(ctx context.Context, issueID string, cur multica.CommentCursor) ([]multica.Comment, multica.CommentCursor, error)
+type TaskSourceClient interface {
+	GetIssue(ctx context.Context, idOrKey string) (tasksource.Issue, error)
+	ListCommentsSince(ctx context.Context, issueID string, cur tasksource.CommentCursor) ([]tasksource.Comment, tasksource.CommentCursor, error)
 }
 
 // GitHubClient 是合并闸门消费的 github client 最小面。
@@ -75,7 +75,7 @@ const ruleTwoPayload = "需求已进入待验收（in_review），但尚未收�
 // 与测试直接驱动。
 type Poller struct {
 	store       Store
-	mc          MulticaClient
+	mc          TaskSourceClient
 	gh          GitHubClient
 	policy      MergePolicyResolver
 	interval    time.Duration
@@ -89,7 +89,7 @@ type Poller struct {
 
 // New 构造轮询器。interval 必须在 (0, 60s]——AC-3 要求状态变化 2 分钟内反映，
 // 超 60s 的间隔在构造期直接挡掉。
-func New(store Store, mc MulticaClient, gh GitHubClient, policy MergePolicyResolver, interval time.Duration) (*Poller, error) {
+func New(store Store, mc TaskSourceClient, gh GitHubClient, policy MergePolicyResolver, interval time.Duration) (*Poller, error) {
 	if interval <= 0 || interval > 60*time.Second {
 		return nil, errors.New("gatepoll: interval 必须在 (0, 60s]")
 	}
@@ -160,7 +160,7 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	var errs []error
 	for _, st := range inFlight {
 		if err := p.pollRequirement(ctx, st); err != nil {
-			log.Printf("gatepoll: 需求 %s 轮询失败: %v", st.Req.MulticaIssueKey, err)
+			log.Printf("gatepoll: 需求 %s 轮询失败: %v", st.Req.ExternalIssueKey, err)
 			errs = append(errs, fmt.Errorf("需求 %s: %w", st.Req.ID, err))
 		}
 	}
@@ -169,9 +169,9 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 
 // pollRequirement 轮询单个需求，一次完成：
 //
-//  1. GetIssue 读 Multica 父 issue 状态；
+//  1. GetIssue 读 上游父 issue 状态；
 //  2. 增量拉评论（游标重建自持久化的 LastCommentAt；AfterID 不持久化——
-//     服务端秒级截断会让锚点秒旧评论重发，按 multica.ListCommentsSince 的
+//     服务端秒级截断会让锚点秒旧评论重发，按 tasksource.ListCommentsSince 的
 //     调用方契约以评论 id 幂等去重，见 InsertCardIfNew）；
 //  3. 每条评论经 flow 解析器 → 闸门卡落库（含兜底一）；PR URL 首条存引用；
 //     决策事件同时把节点推进 needs_decision（卡与推进同事务，T08）；
@@ -194,9 +194,9 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 		return fmt.Errorf("读取 issue %s: %w", issueRef(req), err)
 	}
 
-	comments, next, err := p.mc.ListCommentsSince(ctx, req.MulticaIssueID, multica.CommentCursor{Since: cur.LastCommentAt})
+	comments, next, err := p.mc.ListCommentsSince(ctx, req.ExternalIssueID, tasksource.CommentCursor{Since: cur.LastCommentAt})
 	if err != nil {
-		return fmt.Errorf("增量拉评论 %s: %w", req.MulticaIssueID, err)
+		return fmt.Errorf("增量拉评论 %s: %w", req.ExternalIssueID, err)
 	}
 	for _, c := range comments {
 		ev := flow.ParseComment(flow.CommentInput{
@@ -231,11 +231,11 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 	}
 
 	newCur := flow.PollCursor{
-		RequirementID:  req.ID,
-		MulticaIssueID: req.MulticaIssueID,
-		LastCommentAt:  next.Since, // 直接用 client 返回的 next 游标，不自拼时间戳
-		LastStatus:     issue.Status,
-		SeenVerdict:    seenVerdict,
+		RequirementID:   req.ID,
+		ExternalIssueID: req.ExternalIssueID,
+		LastCommentAt:   next.Since, // 直接用 client 返回的 next 游标，不自拼时间戳
+		LastStatus:      issue.Status,
+		SeenVerdict:     seenVerdict,
 	}
 
 	// 兜底规则二在评论消费之后：同一轮到达的 verdict 先把 seenVerdict 置真，
@@ -250,7 +250,7 @@ func (p *Poller) pollRequirement(ctx context.Context, st InFlight) error {
 
 	// needs_decision 停驻（T08 接线）：节点只经用户决策动作
 	//（reqservice.Decide 按 flow.CanTransition 返回活跃节点/直达已交付）离开，
-	// 决策期间 Multica 状态推进挂起——不越权解围（infera 是单一状态源）。
+	// 决策期间 上游状态推进挂起——不越权解围（infera 是单一状态源）。
 	if req.Node != flow.NodeNeedsDecision {
 		req.Node = flow.Advance(req.Node, issue.Status)
 	}
@@ -296,7 +296,7 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 	ref, prOK := flow.ParsePRRef(req.PRURL)
 	if req.PRURL != "" && !prOK {
 		// flow.ExtractPRURL 产物不会走到这；存储被外改时的防御。
-		log.Printf("gatepoll: 需求 %s 的 PR 引用 %q 无法解析，自动合并跳过", req.MulticaIssueKey, req.PRURL)
+		log.Printf("gatepoll: 需求 %s 的 PR 引用 %q 无法解析，自动合并跳过", req.ExternalIssueKey, req.PRURL)
 		return nil
 	}
 
@@ -305,13 +305,13 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 			continue // FAIL 结论：拒绝并返工是人决策，不自动动作
 		}
 		if !prOK {
-			log.Printf("gatepoll: 需求 %s 无 PR 引用，PASS 合并卡留待人处理", req.MulticaIssueKey)
+			log.Printf("gatepoll: 需求 %s 无 PR 引用，PASS 合并卡留待人处理", req.ExternalIssueKey)
 			return nil
 		}
 		if policy.Mode == flow.MergeThreshold {
 			stats, err := p.gh.GetDiffStats(ctx, ref.Owner, ref.Repo, ref.Number)
 			if err != nil {
-				log.Printf("gatepoll: 需求 %s 拉 diff 统计: %v（下轮重试）", req.MulticaIssueKey, err)
+				log.Printf("gatepoll: 需求 %s 拉 diff 统计: %v（下轮重试）", req.ExternalIssueKey, err)
 				continue
 			}
 			if stats.Changes > policy.DiffLineThreshold {
@@ -320,14 +320,14 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 		}
 		pr, err := p.gh.GetPullRequest(ctx, ref.Owner, ref.Repo, ref.Number)
 		if err != nil {
-			log.Printf("gatepoll: 需求 %s 读 PR: %v（下轮重试）", req.MulticaIssueKey, err)
+			log.Printf("gatepoll: 需求 %s 读 PR: %v（下轮重试）", req.ExternalIssueKey, err)
 			continue
 		}
 		if pr.State != "open" {
 			if !pr.Merged {
 				// closed 未合并（被驳回后关闭）：不是已了结——卡保持待处理
 				// 转人工，不误置 delivered、不误记 merge 审计。
-				log.Printf("gatepoll: 需求 %s 的 PR 已关闭且未合并（疑似被驳回），PASS 合并卡转人工处理", req.MulticaIssueKey)
+				log.Printf("gatepoll: 需求 %s 的 PR 已关闭且未合并（疑似被驳回），PASS 合并卡转人工处理", req.ExternalIssueKey)
 				continue
 			}
 			// closed 且已合并：合并成功后收口丢失的收敛路径——视为已了结。
@@ -335,9 +335,9 @@ func (p *Poller) sweepAutoMerge(ctx context.Context, req *flow.Requirement, cur 
 		}
 		if _, err := p.gh.MergePullRequest(ctx, ref.Owner, ref.Repo, ref.Number, github.MergeInput{Method: p.mergeMethod}); err != nil {
 			if github.IsMergeBlocked(err) {
-				log.Printf("gatepoll: 需求 %s 自动合并暂被阻塞: %v（下轮重试）", req.MulticaIssueKey, err)
+				log.Printf("gatepoll: 需求 %s 自动合并暂被阻塞: %v（下轮重试）", req.ExternalIssueKey, err)
 			} else {
-				log.Printf("gatepoll: 需求 %s 自动合并硬失败，转人工: %v", req.MulticaIssueKey, err)
+				log.Printf("gatepoll: 需求 %s 自动合并硬失败，转人工: %v", req.ExternalIssueKey, err)
 			}
 			continue
 		}
@@ -364,8 +364,8 @@ func (p *Poller) completeMerge(ctx context.Context, cardID string, req *flow.Req
 
 // issueRef 返回 GetIssue 的定位符：优先 issue id，缺省回退 key。
 func issueRef(req flow.Requirement) string {
-	if req.MulticaIssueID != "" {
-		return req.MulticaIssueID
+	if req.ExternalIssueID != "" {
+		return req.ExternalIssueID
 	}
-	return req.MulticaIssueKey
+	return req.ExternalIssueKey
 }

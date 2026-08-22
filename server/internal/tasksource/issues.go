@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -104,7 +104,7 @@ func (c *Client) ListTaskRuns(ctx context.Context, issueID string) ([]TaskRun, e
 }
 
 // issuePageSize 是 GET /api/issues 的翻页页大小：服务端上限 100（limit>100
-// 会被压回 100，multica-src 实证），取满上限让拉全量的请求次数最少。
+// 会被压回 100，接入 spike 实证），取满上限让拉全量的请求次数最少。
 const issuePageSize = 100
 
 // maxIssuePages 是翻页不收敛防御的上限（100 页 × 100 条 = 1 万条 issue，
@@ -115,7 +115,7 @@ const maxIssuePages = 100
 // ListIssues 拉取当前 workspace 全部 issue（GET /api/issues?limit=100&offset=N
 // 逐页拉全，聚合保序返回）。
 //
-// 翻页协议（multica-src ListIssues 实证）：
+// 翻页协议（接入 spike ListIssues 实证）：
 //   - 服务端按 limit/offset 切页，limit 上限 100；排序键确定
 //     （position + created_at/id 决胜），跨页稳定不重不漏；
 //   - 响应 {"issues": [...], "total": N}，total 是同 WHERE 的 COUNT 真实值
@@ -131,7 +131,7 @@ func (c *Client) ListIssues(ctx context.Context) ([]Issue, error) {
 	lastTotal := 0
 	for page := 0; ; page++ {
 		if page >= maxIssuePages {
-			return nil, fmt.Errorf("multica: ListIssues 翻页不收敛：已拉 %d 页（%d 条）仍未满足 total=%d——服务端 offset 语义异常", page, len(all), lastTotal)
+			return nil, fmt.Errorf("tasksource: ListIssues 翻页不收敛：已拉 %d 页（%d 条）仍未满足 total=%d——服务端 offset 语义异常", page, len(all), lastTotal)
 		}
 		var resp struct {
 			Issues []Issue `json:"issues"`
@@ -168,7 +168,7 @@ func IsTerminal(status string) bool {
 // 尚无 run（agent 未派发）时继续等待；超过 maxWait 报错并带最后看到的状态。
 func (c *Client) WaitForTerminal(ctx context.Context, issueID string, interval, maxWait time.Duration) (TaskRun, error) {
 	if maxWait <= 0 {
-		return TaskRun{}, fmt.Errorf("multica: WaitForTerminal 要求显式设置 maxWait，got %s", maxWait)
+		return TaskRun{}, fmt.Errorf("tasksource: WaitForTerminal 要求显式设置 maxWait，got %s", maxWait)
 	}
 	if interval <= 0 {
 		interval = 5 * time.Second // spike 实测小任务最佳间隔
@@ -188,7 +188,7 @@ func (c *Client) WaitForTerminal(ctx context.Context, issueID string, interval, 
 			}
 		}
 		if !time.Now().Before(deadline) {
-			return TaskRun{}, fmt.Errorf("multica: 等待 issue %s 的 task 终态超时（%s，最后状态 %q）", issueID, maxWait, lastStatus)
+			return TaskRun{}, fmt.Errorf("tasksource: 等待 issue %s 的 task 终态超时（%s，最后状态 %q）", issueID, maxWait, lastStatus)
 		}
 		select {
 		case <-ctx.Done():

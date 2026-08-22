@@ -15,13 +15,13 @@ import (
 	"github.com/tokfinity/infera/internal/db"
 	"github.com/tokfinity/infera/internal/flow"
 	"github.com/tokfinity/infera/internal/github"
-	"github.com/tokfinity/infera/internal/multica"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
-// testEnv 是一个用例的全部依赖：真实测试 DB + fake multica/github client。
+// testEnv 是一个用例的全部依赖：真实测试 DB + fake tasksource/github client。
 type testEnv struct {
 	svc *Service
-	mc  *fakeMultica
+	mc  *fakeTaskSource
 	gh  *fakeGithub
 }
 
@@ -44,29 +44,29 @@ func newEnv(t *testing.T) *testEnv {
 	_, _ = pool.Exec(context.Background(),
 		`TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 
-	mc := &fakeMultica{issue: multica.Issue{ID: "m-issue-1", Identifier: "INFERA-31", Status: "backlog"}}
+	mc := &fakeTaskSource{issue: tasksource.Issue{ID: "m-issue-1", Identifier: "INFERA-31", Status: "backlog"}}
 	gh := &fakeGithub{}
 	svc, err := New(pool, mc, gh, Options{
-		MulticaProjectID:     "proj-1",
-		TechLeadAgentID:      "lead-1",
-		MulticaServerURL:     "http://localhost:8088",
-		MulticaWorkspaceSlug: "infera",
+		TaskSyncProjectID:     "proj-1",
+		TechLeadAgentID:       "lead-1",
+		TaskSyncServerURL:     "http://localhost:8088",
+		TaskSyncWorkspaceSlug: "infera",
 	})
 	require.NoError(t, err)
 	return &testEnv{svc: svc, mc: mc, gh: gh}
 }
 
-// fakeMultica 记录全部调用，可按需注入错误。
-type fakeMultica struct {
+// fakeTaskSource 记录全部调用，可按需注入错误。
+type fakeTaskSource struct {
 	mu sync.Mutex
 
-	issue multica.Issue // CreateIssue 的返回
+	issue tasksource.Issue // CreateIssue 的返回
 
 	createErr error
 	assignErr error
 	postErr   error
 
-	created  []multica.CreateIssueInput
+	created  []tasksource.CreateIssueInput
 	assigned []struct {
 		issueID string
 		agentID string
@@ -78,17 +78,17 @@ type fakeMultica struct {
 	setStatused []string
 }
 
-func (f *fakeMultica) CreateIssue(ctx context.Context, in multica.CreateIssueInput) (multica.Issue, error) {
+func (f *fakeTaskSource) CreateIssue(ctx context.Context, in tasksource.CreateIssueInput) (tasksource.Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, in)
 	if f.createErr != nil {
-		return multica.Issue{}, f.createErr
+		return tasksource.Issue{}, f.createErr
 	}
 	return f.issue, nil
 }
 
-func (f *fakeMultica) AssignAgent(ctx context.Context, issueID, agentID string) error {
+func (f *fakeTaskSource) AssignAgent(ctx context.Context, issueID, agentID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.assigned = append(f.assigned, struct {
@@ -98,7 +98,7 @@ func (f *fakeMultica) AssignAgent(ctx context.Context, issueID, agentID string) 
 	return f.assignErr
 }
 
-func (f *fakeMultica) PostComment(ctx context.Context, issueID, content string) (multica.Comment, error) {
+func (f *fakeTaskSource) PostComment(ctx context.Context, issueID, content string) (tasksource.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.posted = append(f.posted, struct {
@@ -106,12 +106,12 @@ func (f *fakeMultica) PostComment(ctx context.Context, issueID, content string) 
 		content string
 	}{issueID, content})
 	if f.postErr != nil {
-		return multica.Comment{}, f.postErr
+		return tasksource.Comment{}, f.postErr
 	}
-	return multica.Comment{ID: "cmt-1", Content: content}, nil
+	return tasksource.Comment{ID: "cmt-1", Content: content}, nil
 }
 
-func (f *fakeMultica) SetStatus(ctx context.Context, issueID, status string, suppressRun bool) error {
+func (f *fakeTaskSource) SetStatus(ctx context.Context, issueID, status string, suppressRun bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.setStatused = append(f.setStatused, status)
@@ -198,7 +198,7 @@ func seedCard(t *testing.T, env *testEnv, reqID string, kind flow.GateKind) stri
 // envPool 取回 Service 持有的连接池（seed / 断言用）。
 func envPool(env *Service) *pgxpool.Pool { return env.pool }
 
-func TestCreateDispatchesToMultica(t *testing.T) {
+func TestCreateDispatchesToUpstream(t *testing.T) {
 	env := newEnv(t)
 	ctx := context.Background()
 
@@ -213,56 +213,56 @@ func TestCreateDispatchesToMultica(t *testing.T) {
 	got, err := env.svc.Create(ctx, in)
 	require.NoError(t, err)
 
-	// Multica 侧：固定 project 建 issue（backlog 起步，不触发 run）→ 指派 Tech Lead
+	// 上游侧：固定 project 建 issue（backlog 起步，不触发 run）→ 指派 Tech Lead
 	// （AssignAgent 置 todo 唤醒 agent）。
 	require.Len(t, env.mc.created, 1)
 	require.Equal(t, "proj-1", env.mc.created[0].ProjectID)
 	require.Equal(t, "支持需求流转", env.mc.created[0].Title)
 	require.Equal(t, "backlog", env.mc.created[0].Status)
-	require.Empty(t, env.mc.created[0].Description, "需求描述不下发 Multica（FR-2）")
+	require.Empty(t, env.mc.created[0].Description, "需求描述不下发上游平台（FR-2）")
 	require.Len(t, env.mc.assigned, 1)
 	require.Equal(t, "m-issue-1", env.mc.assigned[0].issueID)
 	require.Equal(t, "lead-1", env.mc.assigned[0].agentID)
 
 	// infera 侧落库：映射 + 大节点=已派发 + 业务元数据只存本地。
 	require.NotEmpty(t, got.ID)
-	require.Equal(t, "m-issue-1", got.MulticaIssueID)
-	require.Equal(t, "INFERA-31", got.MulticaIssueKey)
+	require.Equal(t, "m-issue-1", got.ExternalIssueID)
+	require.Equal(t, "INFERA-31", got.ExternalIssueKey)
 	require.Equal(t, flow.NodeDispatched, got.Node)
 	require.Equal(t, "业务描述", got.Description)
 	require.Equal(t, "AC-1 全流程零跳出", got.AcceptanceCriteria)
 	require.Equal(t, "内部", got.Source)
 	require.Equal(t, "high", got.Priority)
 	require.Equal(t, []string{"张三"}, got.Acceptors)
-	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", got.MulticaIssueURL)
+	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", got.ExternalIssueURL)
 }
 
 func TestNewValidatesOptions(t *testing.T) {
 	pool := envPool(newEnv(t).svc)
 	base := Options{
-		MulticaProjectID:     "proj-1",
-		TechLeadAgentID:      "lead-1",
-		MulticaServerURL:     "http://localhost:8088",
-		MulticaWorkspaceSlug: "infera",
+		TaskSyncProjectID:     "proj-1",
+		TechLeadAgentID:       "lead-1",
+		TaskSyncServerURL:     "http://localhost:8088",
+		TaskSyncWorkspaceSlug: "infera",
 	}
 	cases := []struct {
 		name string
 		mut  func(*Options)
 	}{
-		{"缺项目", func(o *Options) { o.MulticaProjectID = "" }},
+		{"缺项目", func(o *Options) { o.TaskSyncProjectID = "" }},
 		{"缺 Tech Lead", func(o *Options) { o.TechLeadAgentID = "" }},
-		{"缺 ServerURL", func(o *Options) { o.MulticaServerURL = "" }},
-		{"缺 workspace slug", func(o *Options) { o.MulticaWorkspaceSlug = "" }},
+		{"缺 ServerURL", func(o *Options) { o.TaskSyncServerURL = "" }},
+		{"缺 workspace slug", func(o *Options) { o.TaskSyncWorkspaceSlug = "" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := base
 			tc.mut(&opts)
-			_, err := New(pool, &fakeMultica{}, &fakeGithub{}, opts)
+			_, err := New(pool, &fakeTaskSource{}, &fakeGithub{}, opts)
 			require.Error(t, err)
 		})
 	}
-	_, err := New(nil, &fakeMultica{}, &fakeGithub{}, base)
+	_, err := New(nil, &fakeTaskSource{}, &fakeGithub{}, base)
 	require.Error(t, err)
 }
 
@@ -270,19 +270,19 @@ func TestCreateRejectsEmptyTitle(t *testing.T) {
 	env := newEnv(t)
 	_, err := env.svc.Create(context.Background(), CreateInput{Title: "  "})
 	require.ErrorIs(t, err, ErrInvalid)
-	require.Empty(t, env.mc.created, "校验失败不应触碰 Multica")
+	require.Empty(t, env.mc.created, "校验失败不应触碰上游平台")
 }
 
-func TestCreateMulticaFailureLeavesNoRow(t *testing.T) {
+func TestCreateUpstreamFailureLeavesNoRow(t *testing.T) {
 	env := newEnv(t)
 	env.mc.createErr = errors.New("boom")
 	_, err := env.svc.Create(context.Background(), CreateInput{Title: "t"})
-	require.ErrorContains(t, err, "multica 建卡失败")
+	require.ErrorContains(t, err, "上游建卡失败")
 
 	var n int
 	require.NoError(t, envPool(env.svc).QueryRow(context.Background(),
 		`SELECT count(*) FROM requirements`).Scan(&n))
-	require.Zero(t, n, "Multica 失败不得落库")
+	require.Zero(t, n, "上游失败不得落库")
 }
 
 func TestCreateAssignFailureParksIssue(t *testing.T) {
@@ -316,7 +316,7 @@ func TestGetReturnsPendingCardsAndDeepLinks(t *testing.T) {
 	detail, err := env.svc.Get(ctx, created.ID)
 	require.NoError(t, err)
 	require.Equal(t, created.ID, detail.ID)
-	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", detail.MulticaIssueURL)
+	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", detail.ExternalIssueURL)
 	require.Len(t, detail.PendingCards, 2)
 	kinds := []flow.GateKind{detail.PendingCards[0].Kind, detail.PendingCards[1].Kind}
 	require.Contains(t, kinds, flow.GateApproval)
@@ -354,7 +354,7 @@ func TestListRequirements(t *testing.T) {
 	require.Equal(t, first.ID, rows[1].ID)
 	require.Equal(t, 1, rows[0].PendingCardCount)
 	require.Equal(t, 0, rows[1].PendingCardCount)
-	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", rows[0].MulticaIssueURL)
+	require.Equal(t, "http://localhost:8088/infera/issues/m-issue-1", rows[0].ExternalIssueURL)
 	require.Equal(t, []string{"a"}, rows[0].Acceptors)
 }
 
@@ -426,7 +426,7 @@ func TestApproveUnknownCard(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
-func TestApproveMulticaFailureKeepsCardPending(t *testing.T) {
+func TestApproveUpstreamFailureKeepsCardPending(t *testing.T) {
 	env := newEnv(t)
 	ctx := context.Background()
 	created, err := env.svc.Create(ctx, CreateInput{Title: "r"})
@@ -766,7 +766,7 @@ func nodeOf(t *testing.T, env *testEnv, reqID string) string {
 // TestDecideReturnsFromNeedsDecisionToActiveNode：重试/跳过/自定义都是
 // "继续执行"的决策——卡 resolved + 节点回活跃节点（执行中）。
 // 返回活跃节点的选择依据：决策打断的是执行，处理后恢复即执行；节点与
-// Multica 执行态的偏差由后续轮询按父 issue 状态自行校正（单一状态源，
+// 上游执行态的偏差由后续轮询按父 issue 状态自行校正（单一状态源，
 // 一轮内收敛），决策动作不越权猜测执行态。
 func TestDecideReturnsFromNeedsDecisionToActiveNode(t *testing.T) {
 	for _, choice := range []string{DecisionRetry, DecisionSkip, DecisionCustom} {
@@ -894,7 +894,8 @@ func TestDecidePostFailureKeepsNeedsDecision(t *testing.T) {
 }
 
 // seedProject 落一行项目（project_settings 的 FK 目标）。
-func seedProject(t *testing.T, env *testEnv) string {	t.Helper()
+func seedProject(t *testing.T, env *testEnv) string {
+	t.Helper()
 	var id string
 	err := envPool(env.svc).QueryRow(context.Background(),
 		`INSERT INTO projects (id, name) VALUES (gen_random_uuid(), 'demo') RETURNING id::text`).Scan(&id)

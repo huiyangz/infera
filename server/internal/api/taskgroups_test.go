@@ -31,7 +31,7 @@ func seedTaskGroups(t *testing.T, st *store.Memory) (parent, w1done, w2synced, p
 	require.NoError(t, st.CreateDelivery(ctx, &w1active))
 	time.Sleep(2 * time.Millisecond)
 	w2synced = store.Delivery{ProjectID: p.ID, ParentID: parent.ID, Wave: 2, Title: "子任务C", Status: "queued",
-		MulticaIssueID: "mi-9", MulticaIssueKey: "INFERA-9", Assignee: "小鱼儿", Priority: "high"}
+		ExternalIssueID: "mi-9", ExternalIssueKey: "INFERA-9", Assignee: "小鱼儿", Priority: "high"}
 	require.NoError(t, st.CreateDelivery(ctx, &w2synced))
 	time.Sleep(2 * time.Millisecond)
 	plain = store.Delivery{ProjectID: p.ID, Title: "普通需求", Status: "active"}
@@ -53,8 +53,8 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 	// 顶层行键集冻结：Delivery 全字段内联 + 分组三键（parent_id 区分父子归属）。
 	deliveryKeys := []string{"id", "project_id", "title", "description", "status", "current_stage", "pending_gate",
 		"fail_count", "base_commit", "reject_reason", "workspace_ready", "parent_id", "wave", "split_mode",
-		"merge_state", "complexity", "multica_issue_id", "multica_issue_key", "assignee", "priority",
-		"multica_synced_at", "created_at", "updated_at"}
+		"merge_state", "complexity", "external_issue_id", "external_issue_key", "assignee", "priority",
+		"external_synced_at", "created_at", "updated_at"}
 	require.ElementsMatch(t, append(deliveryKeys, "child_total", "child_completed", "stages"), keys(rows[0]))
 
 	// 父行在前（顶层按 created_at 升序）。
@@ -83,14 +83,14 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 	require.Len(t, tasks2, 1)
 	synced := tasks2[0].(map[string]any)
 	require.Equal(t, w2synced.ID, synced["id"])
-	require.Equal(t, "INFERA-9", synced["multica_issue_key"])
+	require.Equal(t, "INFERA-9", synced["external_issue_key"])
 	require.Equal(t, "小鱼儿", synced["assignee"])
 	require.Equal(t, "high", synced["priority"])
 
 	// 子任务行键集冻结（AC：子任务带 stage 与 status 字段）。
 	require.ElementsMatch(t,
-		[]string{"id", "title", "stage", "status", "current_stage", "pending_gate", "multica_issue_id",
-			"multica_issue_key", "assignee", "priority", "created_at", "updated_at"},
+		[]string{"id", "title", "stage", "status", "current_stage", "pending_gate", "external_issue_id",
+			"external_issue_key", "assignee", "priority", "created_at", "updated_at"},
 		keys(first))
 
 	// 普通需求：无子任务 → stages 空数组（非 null）、计数 0。
@@ -102,14 +102,14 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 // --- AC（INFERA-146）：同父下无阶段（wave 0）子任务独立分组，排在编号阶段之后 ---
 
 // TestBuildTaskGroupsNoStageBucketLast：同父下既有编号阶段子任务（wave 1/2）
-// 又有无阶段子任务（wave 0，multica 同步镜像）时：wave 0 不混进「阶段 1」，
+// 又有无阶段子任务（wave 0，任务同步镜像）时：wave 0 不混进「阶段 1」，
 // 独立成组且位于全部编号阶段之后；JSON 仍输出 stage:0，编号阶段顺序不变。
 func TestBuildTaskGroupsNoStageBucketLast(t *testing.T) {
 	parent := store.Delivery{ID: "p1", ProjectID: "prj", Title: "父", Status: "active", SplitMode: true}
 	kids := []store.Delivery{
 		{ID: "k-w1", ProjectID: "prj", ParentID: "p1", Wave: 1, Title: "阶段1子任务", Status: "completed", CurrentStage: "unit_test"},
 		{ID: "k-w0", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "无阶段子任务", Status: "queued",
-			MulticaIssueID: "mi-0", MulticaIssueKey: "INFERA-0"},
+			ExternalIssueID: "mi-0", ExternalIssueKey: "INFERA-0"},
 		{ID: "k-w2", ProjectID: "prj", ParentID: "p1", Wave: 2, Title: "阶段2子任务", Status: "active", CurrentStage: "code_gen"},
 	}
 	// 顶层平表顺序刻意打乱：分组只由 wave 决定，与入序无关。

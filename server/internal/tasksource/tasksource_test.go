@@ -1,4 +1,4 @@
-package multica
+package tasksource
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 // TestNewValidation：坑1 + 坑4 的入口防线。
 // 坑1：X-Workspace-Id 隐式必需——workspace 缺失必须在构造期报清晰错误，不能等到 400。
-// 坑4：BaseURL 必须显式配置、不内置默认值；指向云端 multica.ai 的误配要能检出来。
+// 坑4：BaseURL 必须显式配置、不内置默认值。
 func TestNewValidation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -22,7 +22,6 @@ func TestNewValidation(t *testing.T) {
 		wantErr string
 	}{
 		{"BaseURL 为空（坑4：不内置默认值）", "", "mul_t", "ws-1", "ServerURL 必须显式配置"},
-		{"BaseURL 指向云端（坑4：误配可检出）", "https://api.multica.ai", "mul_t", "ws-1", "云端"},
 		{"BaseURL 非 http(s) scheme", "ftp://localhost:8088", "mul_t", "ws-1", "http"},
 		{"Token 缺失", "http://localhost:8088", "", "ws-1", "Token"},
 		{"WorkspaceID 缺失（坑1）", "http://localhost:8088", "mul_t", "", "WorkspaceID"},

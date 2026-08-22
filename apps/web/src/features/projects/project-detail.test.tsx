@@ -66,8 +66,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     pinned: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    multica_project_id: '',
-    multica_synced_at: null,
+    external_project_id: '',
+    external_synced_at: null,
     ...overrides,
   }
 }

@@ -1,6 +1,6 @@
 package gatepoll
 
-// 测试替身：multica / github client 与 Store 全部用 fake，不碰真服务、不碰真 DB
+// 测试替身：tasksource / github client 与 Store 全部用 fake，不碰真服务、不碰真 DB
 // （pg 例外，见 store_pg_test.go 的测试库引导模式）。
 
 import (
@@ -11,41 +11,41 @@ import (
 
 	"github.com/tokfinity/infera/internal/flow"
 	"github.com/tokfinity/infera/internal/github"
-	"github.com/tokfinity/infera/internal/multica"
+	"github.com/tokfinity/infera/internal/tasksource"
 )
 
 // ---------------------------------------------------------------------------
-// fakeMultica：脚本化 multica client。GetIssue / ListCommentsSince 的语义
+// fakeTaskSource：脚本化 tasksource client。GetIssue / ListCommentsSince 的语义
 // 镜像真 client：评论升序、since 严格大于过滤；redeliverAnchor 模拟服务端
-// 秒级截断导致的锚点评论重复下发（真实坑，见 multica.ListCommentsSince 注释）。
+// 秒级截断导致的锚点评论重复下发（真实坑，见 tasksource.ListCommentsSince 注释）。
 // ---------------------------------------------------------------------------
 
-type fakeMultica struct {
+type fakeTaskSource struct {
 	mu       sync.Mutex
-	issues   map[string]multica.Issue // by issue id
-	comments map[string][]multica.Comment
+	issues   map[string]tasksource.Issue // by issue id
+	comments map[string][]tasksource.Comment
 	getErr   map[string]error // by issue id
 	listErr  map[string]error // by issue id
 
 	redeliverAnchor bool
 }
 
-func newFakeMultica() *fakeMultica {
-	return &fakeMultica{
-		issues:   map[string]multica.Issue{},
-		comments: map[string][]multica.Comment{},
+func newFakeTaskSource() *fakeTaskSource {
+	return &fakeTaskSource{
+		issues:   map[string]tasksource.Issue{},
+		comments: map[string][]tasksource.Comment{},
 		getErr:   map[string]error{},
 		listErr:  map[string]error{},
 	}
 }
 
-func (f *fakeMultica) addIssue(id, status string) {
+func (f *fakeTaskSource) addIssue(id, status string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.issues[id] = multica.Issue{ID: id, Identifier: "INFERA-1", Status: status}
+	f.issues[id] = tasksource.Issue{ID: id, Identifier: "INFERA-1", Status: status}
 }
 
-func (f *fakeMultica) setStatus(id, status string) {
+func (f *fakeTaskSource) setStatus(id, status string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if iss, ok := f.issues[id]; ok {
@@ -54,35 +54,35 @@ func (f *fakeMultica) setStatus(id, status string) {
 	}
 }
 
-func (f *fakeMultica) addComment(issueID, id, body string, at time.Time) {
+func (f *fakeTaskSource) addComment(issueID, id, body string, at time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.comments[issueID] = append(f.comments[issueID], multica.Comment{
+	f.comments[issueID] = append(f.comments[issueID], tasksource.Comment{
 		ID: id, AuthorType: "agent", AuthorID: "agent-1", Content: body, CreatedAt: at,
 	})
 }
 
-func (f *fakeMultica) GetIssue(_ context.Context, idOrKey string) (multica.Issue, error) {
+func (f *fakeTaskSource) GetIssue(_ context.Context, idOrKey string) (tasksource.Issue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err, ok := f.getErr[idOrKey]; ok {
-		return multica.Issue{}, err
+		return tasksource.Issue{}, err
 	}
 	iss, ok := f.issues[idOrKey]
 	if !ok {
-		return multica.Issue{}, fmt.Errorf("fakeMultica: issue %q 不存在", idOrKey)
+		return tasksource.Issue{}, fmt.Errorf("fakeTaskSource: issue %q 不存在", idOrKey)
 	}
 	return iss, nil
 }
 
-func (f *fakeMultica) ListCommentsSince(_ context.Context, issueID string, cur multica.CommentCursor) ([]multica.Comment, multica.CommentCursor, error) {
+func (f *fakeTaskSource) ListCommentsSince(_ context.Context, issueID string, cur tasksource.CommentCursor) ([]tasksource.Comment, tasksource.CommentCursor, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err, ok := f.listErr[issueID]; ok {
 		return nil, cur, err
 	}
 	all := f.comments[issueID]
-	var out []multica.Comment
+	var out []tasksource.Comment
 	for _, c := range all { // 升序（append 序）
 		if c.CreatedAt.After(cur.Since) {
 			out = append(out, c)
@@ -96,7 +96,7 @@ func (f *fakeMultica) ListCommentsSince(_ context.Context, issueID string, cur m
 	next := cur
 	if len(out) > 0 {
 		last := out[len(out)-1]
-		next = multica.CommentCursor{AfterID: last.ID, Since: last.CreatedAt}
+		next = tasksource.CommentCursor{AfterID: last.ID, Since: last.CreatedAt}
 	}
 	return out, next, nil
 }
@@ -225,10 +225,10 @@ func (m *memStore) addReq(req flow.Requirement) {
 	defer m.mu.Unlock()
 	m.reqs[req.ID] = req
 	m.cursors[req.ID] = flow.PollCursor{
-		RequirementID:  req.ID,
-		MulticaIssueID: req.MulticaIssueID,
-		LastStatus:     "",
-		SeenVerdict:    false,
+		RequirementID:   req.ID,
+		ExternalIssueID: req.ExternalIssueID,
+		LastStatus:      "",
+		SeenVerdict:     false,
 	}
 }
 
@@ -241,7 +241,7 @@ func (m *memStore) ListInFlight(_ context.Context) ([]InFlight, error) {
 	}
 	var out []InFlight
 	for _, r := range m.reqs {
-		if r.MulticaIssueID == "" || r.Node == flow.NodeDelivered {
+		if r.ExternalIssueID == "" || r.Node == flow.NodeDelivered {
 			continue
 		}
 		out = append(out, InFlight{Req: r, Cursor: m.cursors[r.ID]})
@@ -388,13 +388,13 @@ var testNow = time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 // newTestReq 返回一个已派发的标准测试需求（issue 已建、大节点 dispatched）。
 func newTestReq(id, issueID string) flow.Requirement {
 	return flow.Requirement{
-		ID: id, Title: "需求-" + id, MulticaIssueID: issueID, MulticaIssueKey: "INFERA-" + id,
+		ID: id, Title: "需求-" + id, ExternalIssueID: issueID, ExternalIssueKey: "INFERA-" + id,
 		Node: flow.NodeDispatched,
 	}
 }
 
 // newTestPoller 用 fake 三件套组装一个 30s 间隔的轮询器（测试里只手动 PollOnce，
 // 不走 ticker；间隔取默认档）。
-func newTestPoller(store Store, mc MulticaClient, gh GitHubClient, policy MergePolicyResolver) (*Poller, error) {
+func newTestPoller(store Store, mc TaskSourceClient, gh GitHubClient, policy MergePolicyResolver) (*Poller, error) {
 	return New(store, mc, gh, policy, 30*time.Second)
 }

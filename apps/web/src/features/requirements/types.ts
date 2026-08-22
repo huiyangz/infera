@@ -24,7 +24,7 @@ export type DecisionChoice = 'retry' | 'skip' | 'abort' | 'custom'
 /** 合并策略档位 */
 export type MergePolicyMode = 'manual' | 'auto_pass' | 'threshold'
 
-/** 需求行（GET 详情 / 列表共有字段；含 Multica / GitHub 深链） */
+/** 需求行（GET 详情 / 列表共有字段；含外部任务源 / GitHub 深链） */
 export interface Requirement {
   id: string
   title: string
@@ -33,10 +33,10 @@ export interface Requirement {
   source: string
   priority: string
   acceptors: string[]
-  multica_issue_id: string
-  multica_issue_key: string
-  /** Multica issue 深链（空串 = 未派发） */
-  multica_issue_url: string
+  external_issue_id: string
+  external_issue_key: string
+  /** 外部任务源 issue 深链（空串 = 未派发） */
+  external_issue_url: string
   /** 评论中提取的 GitHub PR URL（空串 = 尚未关联） */
   pr_url: string
   node: FlowNode

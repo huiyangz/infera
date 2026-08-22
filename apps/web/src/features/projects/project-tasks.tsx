@@ -21,7 +21,7 @@ import {
 } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
-import { assigneeLabel } from '@/features/multica-sync/display'
+import { assigneeLabel } from '@/features/task-sync/display'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -109,11 +109,11 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
   )
 }
 
-/** 来源标识小徽：multica 同步行专用（父卡片；子任务行以粗体 key 标识来源） */
-function MulticaChip() {
+/** 来源标识小徽：同步进来的任务行专用（父卡片；子任务行以粗体 key 标识来源） */
+function SyncedChip() {
   return (
     <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-      Multica
+      已同步
     </span>
   )
 }
@@ -159,7 +159,7 @@ function ParentTaskCard({
         >
           <span className='flex items-center justify-between gap-2'>
             <span className='flex min-w-0 items-center gap-1.5'>
-              {g.multica_issue_id && <MulticaChip />}
+              {g.external_issue_id && <SyncedChip />}
               <span className='truncate text-sm font-medium'>{g.title}</span>
             </span>
             <StatusBadge status={g.status} />
@@ -167,7 +167,7 @@ function ParentTaskCard({
           <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
             {/* 同步镜像无 current_stage：issue key 顶替阶段位展示 */}
             <span>
-              {stageLabel(g.current_stage) || g.multica_issue_key || '—'}
+              {stageLabel(g.current_stage) || g.external_issue_key || '—'}
             </span>
             {assignee && <span>· {assignee}</span>}
             <span className='ms-auto tabular-nums'>
@@ -249,7 +249,7 @@ function StageGroup({
  * 相对时间；行内容缩进于阶段标题之下（ps-6）。
  */
 function ChildTaskRow({ d }: { d: TaskChild }) {
-  const key = d.multica_issue_key
+  const key = d.external_issue_key
   return (
     <Link
       to='/deliveries/$id'

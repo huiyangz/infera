@@ -26,10 +26,10 @@ type sessionManager struct {
 
 	// 登录失败限速（per-IP）：连续失败达 maxFails 锁 lockWindow，
 	// 每次失败响应延迟 failDelay（拖慢在线爆破）。测试可调小窗口值。
-	fails       map[string]*loginFails
-	maxFails    int
-	lockWindow  time.Duration
-	failDelay   time.Duration
+	fails      map[string]*loginFails
+	maxFails   int
+	lockWindow time.Duration
+	failDelay  time.Duration
 }
 
 // loginFails 某来源 IP 的连续失败计数与锁定截止时间。

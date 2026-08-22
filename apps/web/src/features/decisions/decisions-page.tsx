@@ -81,9 +81,9 @@ export function DecisionsPage() {
                       >
                         {r.title}
                       </Link>
-                      {r.multica_issue_key && (
+                      {r.external_issue_key && (
                         <span className='ms-2 font-mono text-xs text-muted-foreground'>
-                          {r.multica_issue_key}
+                          {r.external_issue_key}
                         </span>
                       )}
                     </td>

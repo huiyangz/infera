@@ -116,7 +116,7 @@ export function ApprovalCard({
       payload={card.payload}
       footer={
         <div className='flex w-full flex-wrap items-center justify-between gap-3'>
-          <DeepLink url={requirement.multica_issue_url} />
+          <DeepLink url={requirement.external_issue_url} />
           <div className='flex items-center gap-2'>
             <Button
               size='lg'
@@ -178,7 +178,7 @@ export function DecisionCard({
       payload={card.payload}
       footer={
         <div className='flex w-full flex-wrap items-center justify-between gap-3'>
-          <DeepLink url={requirement.multica_issue_url} />
+          <DeepLink url={requirement.external_issue_url} />
           <div className='flex flex-wrap items-center gap-2'>
             <Button
               size='lg'
@@ -311,7 +311,7 @@ export function MergeCard({
       footer={
         <div className='flex w-full flex-wrap items-center justify-between gap-3'>
           <div className='flex items-center gap-3'>
-            <DeepLink url={requirement.multica_issue_url} />
+            <DeepLink url={requirement.external_issue_url} />
             <DeepLink url={requirement.pr_url} label='查看 PR' />
           </div>
           <div className='flex items-center gap-2'>
@@ -381,7 +381,7 @@ export function UpdateCard({
       payload={card.payload}
       footer={
         <div className='flex w-full items-center justify-between gap-3'>
-          <DeepLink url={requirement.multica_issue_url} />
+          <DeepLink url={requirement.external_issue_url} />
           <DeepLink url={requirement.pr_url} label='查看 PR' />
         </div>
       }

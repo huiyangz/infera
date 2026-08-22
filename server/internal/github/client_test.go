@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNew：构造期挡掉误配（对齐 multica.New 的入口防线风格）——
+// TestNew：构造期挡掉误配（对齐 tasksource.New 的入口防线风格）——
 // token 缺失、BaseURL 非法都在构造期报错，不漏到运行期变难排查的 401/404。
 func TestNew(t *testing.T) {
 	t.Run("token 缺失报错", func(t *testing.T) {

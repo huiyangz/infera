@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/infera-api'
-import { getMulticaSyncStatus, triggerMulticaSync } from './api'
+import { getTaskSyncStatus, triggerTaskSync } from './api'
 
 /**
  * fetch 替身：记录调用并按脚本返回 response 形对象。
@@ -36,7 +36,7 @@ const RESULT = {
   issues_imported: 5,
   issues_skipped: 1,
   skips: [
-    { multica_issue_id: 'm9', issue_key: 'AUTO-1', reason: 'smoke' },
+    { external_issue_id: 'm9', issue_key: 'AUTO-1', reason: 'smoke' },
   ],
   error: '',
 }
@@ -45,23 +45,34 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('multica 同步 API client（契约冻结于 T03：server/internal/api/multicasync.go）', () => {
-  it('triggerMulticaSync POST /api/multica/sync，返回本轮 Result（含 skips 明细）', async () => {
+describe('任务同步 API client（契约冻结于 INFERA-169：server/internal/api/tasksync.go）', () => {
+  it('triggerTaskSync POST /api/task-sync，返回本轮 Result（含 skips 明细）', async () => {
     const { calls } = stubFetch({ body: RESULT })
-    const out = await triggerMulticaSync()
-    expect(calls[0]?.url).toBe('/api/multica/sync')
+    const out = await triggerTaskSync()
+    expect(calls[0]?.url).toBe('/api/task-sync')
     expect(calls[0]?.init?.method).toBe('POST')
     expect(out.projects_imported).toBe(2)
     expect(out.issues_imported).toBe(5)
     expect(out.skips?.[0]?.reason).toBe('smoke')
+    expect(out.skips?.[0]?.external_issue_id).toBe('m9')
   })
 
-  it('getMulticaSyncStatus GET /api/multica/sync，last 为 null = 从未同步', async () => {
-    const { calls } = stubFetch({ body: { running: false, last: null } })
-    const out = await getMulticaSyncStatus()
-    expect(calls[0]).toEqual({ url: '/api/multica/sync', init: undefined })
-    expect(out.running).toBe(false)
-    expect(out.last).toBeNull()
+  it('getTaskSyncStatus GET /api/task-sync/status，返回 {lastSyncAt, status, error}', async () => {
+    const { calls } = stubFetch({
+      body: { lastSyncAt: '2026-08-22T03:00:05Z', status: 'success', error: '' },
+    })
+    const out = await getTaskSyncStatus()
+    expect(calls[0]).toEqual({ url: '/api/task-sync/status', init: undefined })
+    expect(out.lastSyncAt).toBe('2026-08-22T03:00:05Z')
+    expect(out.status).toBe('success')
+    expect(out.error).toBe('')
+  })
+
+  it('lastSyncAt=null + idle 表示从未完成过同步', async () => {
+    stubFetch({ body: { lastSyncAt: null, status: 'idle', error: '' } })
+    const out = await getTaskSyncStatus()
+    expect(out.lastSyncAt).toBeNull()
+    expect(out.status).toBe('idle')
   })
 
   it('409/502/503 抛 ApiError 并透传后端 error 文案（409 运行中 / 502 上游失败 / 503 未装配）', async () => {
@@ -69,10 +80,10 @@ describe('multica 同步 API client（契约冻结于 T03：server/internal/api/
       status: 503,
       body: {
         error:
-          'multica 同步未装配（需配置 MULTICA_SERVER_URL / MULTICA_TOKEN / MULTICA_WORKSPACE_ID）',
+          '任务同步未装配（需配置 TASK_SYNC_SERVER_URL / TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID）',
       },
     })
-    await expect(triggerMulticaSync()).rejects.toSatisfy((e: unknown) => {
+    await expect(triggerTaskSync()).rejects.toSatisfy((e: unknown) => {
       const err = e as ApiError
       return (
         err instanceof ApiError &&
@@ -81,7 +92,7 @@ describe('multica 同步 API client（契约冻结于 T03：server/internal/api/
       )
     })
     stubFetch({ status: 409, body: { error: '已有同步在进行，稍后用 GET 查看结果' } })
-    await expect(triggerMulticaSync()).rejects.toSatisfy((e: unknown) => {
+    await expect(triggerTaskSync()).rejects.toSatisfy((e: unknown) => {
       const err = e as ApiError
       return err instanceof ApiError && err.status === 409
     })

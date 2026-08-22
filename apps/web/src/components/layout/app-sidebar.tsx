@@ -11,6 +11,7 @@ import { sidebarData } from './data/sidebar-data'
 import { NavGroup } from './nav-group'
 import { NavUser } from './nav-user'
 import { Brand } from './brand'
+import { AutoSyncStatus } from '@/features/task-sync/auto-sync-status'
 
 export function AppSidebar() {
   const { collapsible, variant } = useLayout()
@@ -25,6 +26,8 @@ export function AppSidebar() {
         ))}
       </SidebarContent>
       <SidebarFooter>
+        {/* 自动同步状态条：全局常驻（所有页面轮询），折叠成图标轨时隐藏 */}
+        <AutoSyncStatus />
         <NavUser user={sidebarData.user} />
       </SidebarFooter>
       <SidebarRail />

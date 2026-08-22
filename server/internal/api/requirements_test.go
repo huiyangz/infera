@@ -52,7 +52,7 @@ func (f *fakeReq) Create(ctx context.Context, in reqservice.CreateInput) (*reqse
 		return nil, f.err
 	}
 	return &reqservice.Requirement{ID: "r-1", Title: in.Title, Node: flow.NodeDispatched,
-		MulticaIssueKey: "INFERA-31", MulticaIssueURL: "http://m/i", Acceptors: []string{}}, nil
+		ExternalIssueKey: "INFERA-31", ExternalIssueURL: "http://m/i", Acceptors: []string{}}, nil
 }
 
 func (f *fakeReq) List(ctx context.Context) ([]reqservice.RequirementListItem, error) {
@@ -223,9 +223,9 @@ func TestCreateRequirementEndpoint(t *testing.T) {
 	var got reqservice.Requirement
 	require.NoError(t, json.Unmarshal([]byte(bodyStr), &got))
 	require.Equal(t, "r-1", got.ID)
-	require.Equal(t, "INFERA-31", got.MulticaIssueKey)
+	require.Equal(t, "INFERA-31", got.ExternalIssueKey)
 	require.Equal(t, "dispatched", string(got.Node))
-	require.Equal(t, "http://m/i", got.MulticaIssueURL)
+	require.Equal(t, "http://m/i", got.ExternalIssueURL)
 
 	// 反例：畸形 JSON
 	code, _ = doJSON(t, c, http.MethodPost, ts.URL+"/api/requirements", "{oops")
@@ -234,7 +234,7 @@ func TestCreateRequirementEndpoint(t *testing.T) {
 	fake.err = reqservice.ErrInvalid
 	code, _ = doJSON(t, c, http.MethodPost, ts.URL+"/api/requirements", `{"title":""}`)
 	require.Equal(t, http.StatusBadRequest, code)
-	// 反例：上游 Multica 失败 → 502
+	// 反例：上游平台失败 → 502
 	fake.err = context.DeadlineExceeded
 	code, _ = doJSON(t, c, http.MethodPost, ts.URL+"/api/requirements", `{"title":"x"}`)
 	require.Equal(t, http.StatusBadGateway, code)

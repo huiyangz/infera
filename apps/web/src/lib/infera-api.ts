@@ -115,7 +115,7 @@ export async function getProjectStats(id: string): Promise<RequirementStats> {
 
 // —— agent 编排 ——
 // Agent 注册/管理页已下线（INFERA-110）：后端 /api/agents 保留，前端仅剩
-// 编排绑定处的只读 listAgents；CRUD 由人在 Multica 后端直接操作。
+// 编排绑定处的只读 listAgents；CRUD 由人在任务源后端直接操作。
 export async function listAgents(): Promise<Agent[]> {
   return json(await fetch('/api/agents'))
 }

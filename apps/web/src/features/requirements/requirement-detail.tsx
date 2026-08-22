@@ -187,8 +187,8 @@ export function RequirementDetailPage({
             )}
             <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-3'>
               <DeepLinks
-                issueKey={data.multica_issue_key}
-                issueUrl={data.multica_issue_url}
+                issueKey={data.external_issue_key}
+                issueUrl={data.external_issue_url}
                 prUrl={data.pr_url}
               />
               <p className='text-xs tabular-nums text-muted-foreground'>

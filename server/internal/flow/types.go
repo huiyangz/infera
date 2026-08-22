@@ -6,7 +6,7 @@ import (
 )
 
 // Requirement 是 infera 侧的需求聚合根。业务元数据（描述、验收标准、来源、
-// 优先级、验收人）只存 infera——Multica 侧只承载执行，不回存这些字段。
+// 优先级、验收人）只存 infera——上游侧只承载执行，不回存这些字段。
 type Requirement struct {
 	ID                 string
 	Title              string
@@ -15,8 +15,8 @@ type Requirement struct {
 	Source             string   // 来源
 	Priority           string   // 优先级
 	Acceptors          []string // 验收人
-	MulticaIssueID     string   // Multica issue id 映射
-	MulticaIssueKey    string   // 如 INFERA-31
+	ExternalIssueID    string   // 上游 issue id 映射
+	ExternalIssueKey   string   // 如 INFERA-31
 	Node               Node     // 大节点（单一状态源）
 	PRURL              string   // 评论中提取的 github PR 引用
 	CreatedAt          time.Time
@@ -93,13 +93,13 @@ func (p MergePolicy) Validate() error {
 }
 
 // PollCursor 是一个在途需求的轮询位置（持久化在 requirements 行上）：
-// 增量评论游标 + 上次见到的 Multica 状态 + 是否见过 verdict。
+// 增量评论游标 + 上次见到的 上游状态 + 是否见过 verdict。
 // LastCommentAt 之后的评论才算新（严格大于——同一时刻的评论不重复消费）。
 type PollCursor struct {
-	RequirementID  string
-	MulticaIssueID string
-	LastCommentAt  time.Time // since 游标（零值 = 全量拉取）
-	LastStatus     string    // 上次见到的 Multica 父 issue 状态
-	SeenVerdict    bool      // 是否已见过任何 verdict 评论（兜底规则二的输入）
-	UpdatedAt      time.Time
+	RequirementID   string
+	ExternalIssueID string
+	LastCommentAt   time.Time // since 游标（零值 = 全量拉取）
+	LastStatus      string    // 上次见到的 上游父 issue 状态
+	SeenVerdict     bool      // 是否已见过任何 verdict 评论（兜底规则二的输入）
+	UpdatedAt       time.Time
 }

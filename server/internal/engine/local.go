@@ -205,7 +205,7 @@ func (e *Engine) readonlyFeedback(d *store.Delivery, stage string) string {
 var splitPlanRe = regexp.MustCompile("```infera-split\\n([\\s\\S]*?)\\n```")
 
 // ParseSplitPlan 解析拆分建议；无 block / 解析失败返回 nil（按无建议处理）。
-//（与 api 门禁页的展示解析同源；engine 导出供 MCP get_gate 复用。）
+// （与 api 门禁页的展示解析同源；engine 导出供 MCP get_gate 复用。）
 func ParseSplitPlan(spec string) []store.ChildSpec {
 	m := splitPlanRe.FindStringSubmatch(spec)
 	if m == nil {

@@ -8,13 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedStatsStore 铺一个项目：multica 同步来源（last_synced_at 非 nil）+ 五条需求
+// seedStatsStore 铺一个项目：任务同步来源（last_synced_at 非 nil）+ 五条需求
 // （active+门、active、queued、completed、blocked），一个从未同步的空项目。
 func seedStatsStore(t *testing.T, st Store) (synced, empty *Project) {
 	t.Helper()
 	ctx := context.Background()
-	synced = &Project{Name: "同步项目", MulticaProjectID: "mp-1"}
-	require.NoError(t, st.UpsertProjectByMulticaID(ctx, synced))
+	synced = &Project{Name: "同步项目", ExternalProjectID: "mp-1"}
+	require.NoError(t, st.UpsertProjectByExternalID(ctx, synced))
 	empty = &Project{Name: "本地项目", RepoURL: "https://github.com/x/y", DefaultBranch: "main"}
 	require.NoError(t, st.CreateProject(ctx, empty))
 
@@ -75,9 +75,9 @@ func seedPendingStore(t *testing.T, st Store) (newest, oldest *Delivery) {
 	p2 := &Project{Name: "项目二"}
 	require.NoError(t, st.CreateProject(ctx, p2))
 
-	oldest = &Delivery{ProjectID: p1.ID, Title: "规格审批中", Status: "active", PendingGate: "spec_approval", CurrentStage: "spec", MulticaIssueKey: "INFERA-1", Assignee: "agent:lead", Priority: "high"}
-	oldest.MulticaIssueID = "mi-1" // 同步来源展示字段（本地行为空）
-	require.NoError(t, st.UpsertDeliveryByMulticaID(ctx, oldest))
+	oldest = &Delivery{ProjectID: p1.ID, Title: "规格审批中", Status: "active", PendingGate: "spec_approval", CurrentStage: "spec", ExternalIssueKey: "INFERA-1", Assignee: "agent:lead", Priority: "high"}
+	oldest.ExternalIssueID = "mi-1" // 同步来源展示字段（本地行为空）
+	require.NoError(t, st.UpsertDeliveryByExternalID(ctx, oldest))
 	time.Sleep(5 * time.Millisecond)
 
 	noGate := &Delivery{ProjectID: p1.ID, Title: "无门，不该出现", Status: "active"}
@@ -108,8 +108,8 @@ func checkListPendingDecisions(t *testing.T, st Store) {
 	require.Equal(t, "tasks_approval", rows[0].PendingGate)
 	require.Equal(t, "active", rows[0].Status)
 	require.Equal(t, newest.ProjectID, rows[0].ProjectID)
-	require.Empty(t, rows[0].MulticaIssueKey, "本地需求 issue_key 为空串")
-	require.Equal(t, "INFERA-1", rows[1].MulticaIssueKey)
+	require.Empty(t, rows[0].ExternalIssueKey, "本地需求 issue_key 为空串")
+	require.Equal(t, "INFERA-1", rows[1].ExternalIssueKey)
 	require.Equal(t, "agent:lead", rows[1].Assignee)
 	require.Equal(t, "high", rows[1].Priority)
 	require.False(t, rows[1].UpdatedAt.IsZero())
