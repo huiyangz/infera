@@ -38,6 +38,37 @@ export interface ChildSpec {
   wave: number
 }
 
+// —— 项目任务分组列表（契约冻结于 L202608221704-1-T01：server/internal/api/taskgroups.go） ——
+
+/** 子任务行：阶段组内的展示字段（stage=所属阶段，即拆分批次 wave 1..N） */
+export interface TaskChild {
+  id: string
+  title: string
+  stage: number
+  status: DeliveryStatus
+  current_stage: string
+  pending_gate: string
+  multica_issue_id: string
+  multica_issue_key: string
+  assignee: string
+  priority: string
+  created_at: string
+  updated_at: string
+}
+
+/** 一个阶段（批次）下的子任务集合：tasks 按创建时间升序 */
+export interface TaskStageGroup {
+  stage: number
+  tasks: TaskChild[]
+}
+
+/** 父任务卡片行：Delivery 全字段内联 + 子任务分组摘要（无子任务时 stages 为 []） */
+export interface TaskGroupRow extends Delivery {
+  child_total: number
+  child_completed: number
+  stages: TaskStageGroup[]
+}
+
 /** 任务清单条目（tasks agent 产出 / 任务审批门可编辑覆盖） */
 export interface TaskSpec {
   title: string
@@ -192,7 +223,7 @@ export function stagesForDelivery(d: {
  * 用 Record<string, ...> 而非 Record<StageName, ...>：后端新增阶段时前端只缺翻译、不崩。
  */
 export const STAGE_META: Record<string, { label: string; hint: string }> = {
-  intake: { label: '需求受理', hint: '记录需求原文，建立交付档案' },
+  intake: { label: '任务受理', hint: '记录任务原文，建立交付档案' },
   spec: {
     label: '规格生成',
     hint: 'Spec Agent 依据需求与仓库代码撰写规格说明',
