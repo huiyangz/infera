@@ -62,7 +62,7 @@ func TestAgentsCRUD(t *testing.T) {
 	require.Len(t, list, 1)
 }
 
-// fullBindings 全节点绑定同一 agent 的默认编排 PUT 请求体（跟随 BindableNodes 扩展；
+// fullBindings 全节点绑定同一 agent 的 PUT 请求体（跟随 BindableNodes 扩展；
 // overrides 覆盖指定节点，如引用不存在的 agent 制造校验失败）。
 func fullBindings(base string, overrides map[string]string) string {
 	b := map[string]string{}
@@ -79,6 +79,25 @@ func fullBindings(base string, overrides map[string]string) string {
 	return string(raw)
 }
 
+// TestGlobalPipelineEndpointGone（INFERA-180）：全局默认编排端点已删除——
+// GET/PUT /api/pipeline 一律 404，项目级 pipeline 是唯一绑定入口。
+func TestGlobalPipelineEndpointGone(t *testing.T) {
+	ts, _ := newServer(t)
+	c := login(t, ts.URL)
+
+	r, err := c.Get(ts.URL + "/api/pipeline")
+	require.NoError(t, err)
+	_ = r.Body.Close()
+	require.Equal(t, http.StatusNotFound, r.StatusCode, "GET /api/pipeline 应已下线")
+
+	req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline", bytes.NewBufferString(fullBindings("x", nil)))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "PUT /api/pipeline 应已下线")
+}
+
 func TestAgentDeleteConflict(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
@@ -88,8 +107,8 @@ func TestAgentDeleteConflict(t *testing.T) {
 	require.NoError(t, st.CreateProject(ctx, p))
 	id := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
 
-	// 默认绑定引用 → 409 且写明节点
-	preq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
+	// 项目绑定引用 → 409 且写明节点
+	preq, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/projects/"+p.ID+"/pipeline",
 		bytes.NewBufferString(fullBindings(id, nil)))
 	preq.Header.Set("Content-Type", "application/json")
 	resp, err := c.Do(preq)
@@ -111,90 +130,18 @@ func TestAgentDeleteConflict(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, nresp.StatusCode)
 }
 
-// TestPipelinePutAcceptsLegacyBindings：默认编排 PUT 只强校验基准节点——
-// 升级前的 6 节点绑定（无 design/tasks）仍合法（R11：缺绑定走兜底不 blocked，
-// 旧配置/旧客户端免重 PUT）。
-func TestPipelinePutAcceptsLegacyBindings(t *testing.T) {
-	ts, st := newServer(t)
-	c := login(t, ts.URL)
-
-	id := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
-
-	legacy := map[string]string{}
-	for _, n := range orchestration.RequiredNodes {
-		legacy[n] = id
-	}
-	raw, err := json.Marshal(map[string]any{"bindings": legacy})
-	require.NoError(t, err)
-	r, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline", bytes.NewReader(raw))
-	r.Header.Set("Content-Type", "application/json")
-	resp, err := c.Do(r)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	defs, err := st.ListBindings(context.Background(), "")
-	require.NoError(t, err)
-	require.Len(t, defs, len(orchestration.RequiredNodes), "旧集合全量替换：恰好基准节点")
-}
-
-func TestDefaultPipelinePut(t *testing.T) {
-	ts, st := newServer(t)
-	c := login(t, ts.URL)
-	ctx := context.Background()
-
-	id := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
-
-	// 缺节点 → 400 列明
-	r, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(`{"bindings":{"spec":"`+id+`"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	resp, err := c.Do(r)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	require.Contains(t, body["error"], "test_gen")
-
-	// 不存在的 agent → 400
-	r, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(fullBindings(id, map[string]string{"code_gen": "00000000-0000-0000-0000-000000000000"})))
-	r.Header.Set("Content-Type", "application/json")
-	resp, _ = c.Do(r)
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	// happy：全量替换
-	r, _ = http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(fullBindings(id, nil)))
-	r.Header.Set("Content-Type", "application/json")
-	resp, _ = c.Do(r)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
-	var pipe struct {
-		Nodes    []string          `json:"nodes"`
-		Agents   []store.Agent     `json:"agents"`
-		Bindings map[string]string `json:"bindings"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pipe))
-	require.Len(t, pipe.Nodes, len(orchestration.BindableNodes))
-	require.Len(t, pipe.Bindings, len(orchestration.BindableNodes))
-
-	defs, err := st.ListBindings(ctx, "")
-	require.NoError(t, err)
-	require.Len(t, defs, len(orchestration.BindableNodes))
-}
-
-func TestProjectPipelineOverrideAndClear(t *testing.T) {
+// TestProjectPipelineShape（INFERA-180 冻结契约）：响应只有 nodes + bindings——
+// 项目绑定是唯一绑定来源，无 defaults/overrides/effective/from。
+func TestProjectPipelineShape(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
 	ctx := context.Background()
 
 	p := &store.Project{Name: "demo", RepoURL: "", DefaultBranch: "main"}
 	require.NoError(t, st.CreateProject(ctx, p))
-	defID := createAgentViaAPI(t, c, ts.URL, "default-cli", "cli")
-	ovID := createAgentViaAPI(t, c, ts.URL, "agent-b", "cli")
+	a1 := createAgentViaAPI(t, c, ts.URL, "agent-a", "cli")
+	a2 := createAgentViaAPI(t, c, ts.URL, "agent-b", "cli")
 
-	// 默认编排
 	put := func(body string) *http.Response {
 		t.Helper()
 		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/projects/"+p.ID+"/pipeline", bytes.NewBufferString(body))
@@ -203,42 +150,50 @@ func TestProjectPipelineOverrideAndClear(t *testing.T) {
 		require.NoError(t, err)
 		return resp
 	}
-	r, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/pipeline",
-		bytes.NewBufferString(fullBindings(defID, nil)))
-	r.Header.Set("Content-Type", "application/json")
-	resp, _ := c.Do(r)
-	require.Equal(t, 200, resp.StatusCode)
-	_ = resp.Body.Close()
 
-	// 项目只覆盖 test_gen
-	resp = put(`{"bindings":{"test_gen":"` + ovID + `"}}`)
-	require.Equal(t, 200, resp.StatusCode)
+	// 全量 PUT：响应即 GET 形状
+	resp := put(fullBindings(a1, map[string]string{"test_gen": a2}))
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var pj struct {
-		Defaults  map[string]string            `json:"defaults"`
-		Overrides map[string]string            `json:"overrides"`
-		Effective map[string]map[string]string `json:"effective"`
+		Nodes    []string          `json:"nodes"`
+		Bindings map[string]string `json:"bindings"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pj))
-	require.Equal(t, ovID, pj.Overrides["test_gen"])
-	require.Equal(t, defID, pj.Defaults["test_gen"])
-	require.Equal(t, "project", pj.Effective["test_gen"]["from"])
-	require.Equal(t, "default", pj.Effective["spec"]["from"])
+	require.Equal(t, orchestration.BindableNodes, pj.Nodes)
+	require.Len(t, pj.Bindings, len(orchestration.BindableNodes))
+	require.Equal(t, a2, pj.Bindings["test_gen"])
+	require.Equal(t, a1, pj.Bindings["spec"])
+
+	// GET 同形状
+	gresp, err := c.Get(ts.URL + "/api/projects/" + p.ID + "/pipeline")
+	require.NoError(t, err)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.NewDecoder(gresp.Body).Decode(&raw))
+	for _, key := range []string{"nodes", "bindings"} {
+		require.Contains(t, raw, key)
+	}
+	for _, gone := range []string{"defaults", "overrides", "effective", "from"} {
+		require.NotContains(t, raw, gone, "全局默认语义字段必须消失: "+gone)
+	}
 
 	// 未知节点 → 400（design 现已是可绑定节点，取真不存在的名字）
-	resp = put(`{"bindings":{"nonexistent_stage":"` + ovID + `"}}`)
+	resp = put(`{"bindings":{"nonexistent_stage":"` + a2 + `"}}`)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	_ = resp.Body.Close()
 
-	// {} 清空覆盖
+	// 不存在的 agent → 400
+	resp = put(fullBindings(a2, map[string]string{"code_gen": "00000000-0000-0000-0000-000000000000"}))
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	_ = resp.Body.Close()
+
+	// {} 清空
 	resp = put(`{}`)
-	require.Equal(t, 200, resp.StatusCode)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	var cleared struct {
-		Overrides map[string]string            `json:"overrides"`
-		Effective map[string]map[string]string `json:"effective"`
+		Bindings map[string]string `json:"bindings"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&cleared))
-	require.Empty(t, cleared.Overrides)
-	require.Equal(t, "default", cleared.Effective["test_gen"]["from"])
+	require.Empty(t, cleared.Bindings)
 
 	ovs, err := st.ListBindings(ctx, p.ID)
 	require.NoError(t, err)
@@ -246,6 +201,6 @@ func TestProjectPipelineOverrideAndClear(t *testing.T) {
 
 	// 项目不存在 → 404
 	greq, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/projects/00000000-0000-0000-0000-000000000000/pipeline", nil)
-	gresp, _ := c.Do(greq)
-	require.Equal(t, http.StatusNotFound, gresp.StatusCode)
+	gresp2, _ := c.Do(greq)
+	require.Equal(t, http.StatusNotFound, gresp2.StatusCode)
 }

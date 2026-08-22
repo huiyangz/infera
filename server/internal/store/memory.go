@@ -545,16 +545,18 @@ func (m *Memory) DeleteAgent(_ context.Context, id string) error {
 
 func bindingKey(projectID, node string) string { return projectID + "\x00" + node }
 
+// UpsertBinding 按 (project,node) 幂等覆盖（项目级专用；空 ProjectID → ErrInvalid）。
 func (m *Memory) UpsertBinding(_ context.Context, b *PipelineBinding) error {
+	if b.ProjectID == "" {
+		return ErrInvalid
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.agents[b.AgentID]; !ok {
 		return ErrNotFound
 	}
-	if b.ProjectID != "" {
-		if _, ok := m.projects[b.ProjectID]; !ok {
-			return ErrNotFound
-		}
+	if _, ok := m.projects[b.ProjectID]; !ok {
+		return ErrNotFound
 	}
 	key := bindingKey(b.ProjectID, b.Node)
 	if ex, ok := m.bindings[key]; ok {
@@ -572,7 +574,11 @@ func (m *Memory) UpsertBinding(_ context.Context, b *PipelineBinding) error {
 	return nil
 }
 
+// DeleteBinding 删项目的某节点绑定（项目级专用；空 projectID → ErrInvalid）。
 func (m *Memory) DeleteBinding(_ context.Context, projectID, node string) error {
+	if projectID == "" {
+		return ErrInvalid
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.bindings[bindingKey(projectID, node)]; !ok {
@@ -584,14 +590,15 @@ func (m *Memory) DeleteBinding(_ context.Context, projectID, node string) error 
 
 // ReplaceBindings 原子替换某项目的全部绑定（与 Pg 的单事务语义对齐）：
 // 锁内先整体校验（项目、每个 agent 存在），全部通过才删旧写新——
-// 任一步不通过直接返回，集合永不半写。
+// 任一步不通过直接返回，集合永不半写。空 projectID → ErrInvalid。
 func (m *Memory) ReplaceBindings(_ context.Context, projectID string, byNode map[string]string) error {
+	if projectID == "" {
+		return ErrInvalid
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if projectID != "" {
-		if _, ok := m.projects[projectID]; !ok {
-			return ErrNotFound
-		}
+	if _, ok := m.projects[projectID]; !ok {
+		return ErrNotFound
 	}
 	for _, agentID := range byNode {
 		if _, ok := m.agents[agentID]; !ok {
@@ -611,7 +618,11 @@ func (m *Memory) ReplaceBindings(_ context.Context, projectID string, byNode map
 	return nil
 }
 
+// ListBindings 某项目的绑定，按创建时间升序（项目级专用；空 projectID → ErrInvalid）。
 func (m *Memory) ListBindings(_ context.Context, projectID string) ([]PipelineBinding, error) {
+	if projectID == "" {
+		return nil, ErrInvalid
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]PipelineBinding, 0)
@@ -624,7 +635,7 @@ func (m *Memory) ListBindings(_ context.Context, projectID string) ([]PipelineBi
 	return out, nil
 }
 
-// ListAllBindings 全部绑定（默认 + 所有项目覆盖），按创建时间升序。
+// ListAllBindings 全部项目的绑定，按创建时间升序。
 func (m *Memory) ListAllBindings(_ context.Context) ([]PipelineBinding, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

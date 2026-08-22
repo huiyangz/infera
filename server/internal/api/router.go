@@ -108,8 +108,6 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/agents", s.createAgent)
 		r.Patch("/api/agents/{id}", s.patchAgent)
 		r.Delete("/api/agents/{id}", s.deleteAgent)
-		r.Get("/api/pipeline", s.getPipeline)
-		r.Put("/api/pipeline", s.putPipeline)
 		r.Get("/api/projects/{id}/pipeline", s.getProjectPipeline)
 		r.Put("/api/projects/{id}/pipeline", s.putProjectPipeline)
 		// 需求流转面（INFERA-11 T05）

@@ -137,7 +137,7 @@ func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
-// bindingNodesFor 扫出引用某 agent 的绑定位置（"默认/test_gen"、"项目名/code_gen"）。
+// bindingNodesFor 扫出引用某 agent 的绑定位置（"项目名/code_gen"）。
 // 绑定用 ListAllBindings 一次全量带回（项目逐个查是 N+1）。
 func (s *Server) bindingNodesFor(r *http.Request, agentID string) ([]string, error) {
 	ctx := r.Context()
@@ -145,7 +145,7 @@ func (s *Server) bindingNodesFor(r *http.Request, agentID string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	names := map[string]string{"": "默认"}
+	names := map[string]string{}
 	for _, p := range projs {
 		names[p.ID] = p.Name
 	}
@@ -168,62 +168,7 @@ func (s *Server) bindingNodesFor(r *http.Request, agentID string) ([]string, err
 	return out, nil
 }
 
-// --- 全局默认编排 ---
-
-func (s *Server) getPipeline(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.st.ListAgents(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取 agent 列表失败")
-		return
-	}
-	defs, err := s.st.ListBindings(r.Context(), "")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取默认绑定失败")
-		return
-	}
-	bindings := map[string]string{}
-	for _, b := range defs {
-		bindings[b.Node] = b.AgentID
-	}
-	if agents == nil {
-		agents = []store.Agent{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":    orchestration.BindableNodes,
-		"agents":   agents,
-		"bindings": bindings,
-	})
-}
-
-func (s *Server) putPipeline(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Bindings map[string]string `json:"bindings"`
-	}
-	if err := decode(w, r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体不合法")
-		return
-	}
-	// 全量替换默认：必须覆盖全部基准节点。design/tasks 等可选节点按需提供
-	// （缺绑定交付走引擎兜底 runner——旧 6 节点配置免重 PUT，R11 兼容）。
-	var missing []string
-	for _, n := range orchestration.RequiredNodes {
-		if body.Bindings[n] == "" {
-			missing = append(missing, n)
-		}
-	}
-	if len(missing) > 0 {
-		writeError(w, http.StatusBadRequest, "默认编排必须覆盖全部节点，缺少: "+strings.Join(missing, ", "))
-		return
-	}
-	// 节点/agent/配置校验 + 单事务替换（任一步失败整体回滚，无半写）
-	if err := orchestration.SaveBindings(r.Context(), s.st, "", body.Bindings); err != nil {
-		saveBindingsErr(w, err)
-		return
-	}
-	s.getPipeline(w, r)
-}
-
-// --- 项目编排 ---
+// --- 项目编排（项目绑定是唯一绑定来源——全局默认编排已删除）---
 
 func (s *Server) getProjectPipeline(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
@@ -234,38 +179,18 @@ func (s *Server) getProjectPipeline(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err, "项目不存在", "读取项目失败")
 		return
 	}
-	defs, err := s.st.ListBindings(r.Context(), "")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取默认绑定失败")
-		return
-	}
 	ovs, err := s.st.ListBindings(r.Context(), projectID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取项目绑定失败")
 		return
 	}
-	defaults := map[string]string{}
-	for _, b := range defs {
-		defaults[b.Node] = b.AgentID
-	}
-	overrides := map[string]string{}
+	bindings := map[string]string{}
 	for _, b := range ovs {
-		overrides[b.Node] = b.AgentID
-	}
-	// effective：项目覆盖 ?? 默认（不报缺失——前端按缺省展示）
-	effective := map[string]orchestration.Effective{}
-	for _, n := range orchestration.BindableNodes {
-		if id, ok := overrides[n]; ok {
-			effective[n] = orchestration.Effective{Node: n, AgentID: id, From: "project"}
-		} else if id, ok := defaults[n]; ok {
-			effective[n] = orchestration.Effective{Node: n, AgentID: id, From: "default"}
-		}
+		bindings[b.Node] = b.AgentID
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":     orchestration.BindableNodes,
-		"defaults":  defaults,
-		"overrides": overrides,
-		"effective": effective,
+		"nodes":    orchestration.BindableNodes,
+		"bindings": bindings,
 	})
 }
 

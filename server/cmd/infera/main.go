@@ -64,22 +64,15 @@ func main() {
 	// HTTPS 终端部署时开启 cookie Secure（本地 http 开发保持关闭）。
 	srv.SetCookieSecure(os.Getenv("INFERA_COOKIE_SECURE") == "true")
 
-	// 默认编排种子：无默认绑定时注册 default-cli / local-console 并绑定全部节点。
-	// spec 默认走 default-cli（E2E 需要可跑通）；SEED_LOCAL_SPEC=true 切到本机交互占位。
-	// 失败不致命：Resolver 未就绪时引擎回退单 runner 旧路径，启动永不因此中断。
-	if err := seedDefaultOrchestration(context.Background(), st, cfg.AgentCmd); err != nil {
-		log.Printf("seed orchestration: %v（引擎回退单 runner 模式）", err)
-	}
-
 	// 启动期清扫孤儿 workdir（须在 ResumeActive 前：恢复点火会重新 Acquire 在途交付）。
 	sweepOrphanWorkdirs(context.Background(), st, ws)
 
 	// 固化：code_review 门禁到达时 commit（绿地）/ push + PR（绑库，github.com），
 	// 复用带 token 的 git 实例；PR 创建用同一 token。
 	eng := engine.New(st, ar, ws, tr).WithPersister(persist.NewLocal(g, cfg.GitHubToken))
-	// 节点执行器按项目编排绑定解析（项目覆盖 ?? 全局默认）；基准节点解析失败按
-	// 绑定缺失 blocked；可选节点（design/tasks，旧默认绑定不覆盖）缺绑定回退
-	// 构造时的 ar 兜底（R11：真 agent 可绑定，旧配置不 blocked）。
+	// 节点执行器按项目编排绑定解析（项目绑定是唯一来源，无全局兜底）；基准节点
+	// 解析失败按绑定缺失 blocked；可选节点（design/tasks）缺绑定回退构造时的
+	// ar 兜底（R11：真 agent 可绑定，旧配置不 blocked）。
 	eng.ResolveRunner = func(ctx context.Context, projectID, node string) (agent.Runner, error) {
 		agents, _, err := orchestration.Resolve(ctx, st, projectID)
 		if err != nil {
@@ -173,58 +166,6 @@ func main() {
 	}
 	pool.Close()
 	log.Printf("infera 已停止")
-}
-
-// seedDefaultOrchestration 幂等种子：无默认绑定时注册 default-cli（command 取
-// AGENT_CMD）与 local-console（本机交互占位），并绑定全部可绑定节点。
-// spec 默认走 default-cli（流程可跑通）；SEED_LOCAL_SPEC=true 切到 local-console。
-// 已有默认绑定时不动（用户可能改过）。
-func seedDefaultOrchestration(ctx context.Context, st store.Store, agentCmd string) error {
-	existing, err := st.ListBindings(ctx, "")
-	if err != nil || len(existing) > 0 {
-		return err
-	}
-	cli := &store.Agent{
-		Name:   "default-cli",
-		Runner: "cli",
-		Config: map[string]any{"command": []any{"sh", "-c", agentCmd + ` "$INFERA_PROMPT"`}},
-	}
-	if err := st.CreateAgent(ctx, cli); err != nil && !errors.Is(err, store.ErrConflict) {
-		return err
-	}
-	local := &store.Agent{Name: "local-console", Runner: "local", Config: map[string]any{}}
-	if err := st.CreateAgent(ctx, local); err != nil && !errors.Is(err, store.ErrConflict) {
-		return err
-	}
-	// 重名（半种子状态）时回读拿 id。读失败必须上抛：吞错会继续用空
-	// agent id 绑定出坏数据（误导性错误 + 半种子状态）。
-	agents, err := st.ListAgents(ctx)
-	if err != nil {
-		return err
-	}
-	for _, a := range agents {
-		switch a.Name {
-		case "default-cli":
-			cli.ID = a.ID
-		case "local-console":
-			local.ID = a.ID
-		}
-	}
-	specAgent, specName := cli.ID, "default-cli"
-	if os.Getenv("SEED_LOCAL_SPEC") == "true" {
-		specAgent, specName = local.ID, "local-console"
-	}
-	for _, node := range orchestration.BindableNodes {
-		id := cli.ID
-		if node == "spec" {
-			id = specAgent
-		}
-		if err := st.UpsertBinding(ctx, &store.PipelineBinding{Node: node, AgentID: id}); err != nil {
-			return err
-		}
-	}
-	log.Printf("seed: 默认编排就绪（spec→%s，test_gen/code_gen/code_review/双道审查→default-cli）", specName)
-	return nil
 }
 
 // sweepOrphanWorkdirs 启动期回收孤儿 workdir：workspace 注册表只在内存，

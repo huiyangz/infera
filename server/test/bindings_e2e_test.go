@@ -27,10 +27,11 @@ import (
 	"github.com/tokfinity/infera/internal/workspace"
 )
 
-// TestAgentBindings 编排配置全链路：
-//  1. 默认编排（default-cli=脚本A）下项目 A 的交付跑通，test_gen 产物带 A 标记；
-//  2. 注册 agentB（脚本B），项目 B 只覆盖 test_gen → B 的 test_gen 产物带 B 标记，A 不受影响；
-//  3. 删除默认 test_gen 绑定 → 新交付立即 blocked，stage_failed 写明缺 test_gen。
+// TestAgentBindings 编排配置全链路（项目级绑定是唯一来源，全局默认已删除）：
+//  1. 项目 A 绑定脚本 A（全部节点）→ 交付跑通，test_gen 产物带 A 标记；
+//  2. 项目 B 全量绑定（test_gen→脚本B，其余→A）→ B 的 test_gen 产物带 B 标记，A 不受影响；
+//  3. 直插一条遗留全局绑定行 + 删掉 A 的 test_gen 项目绑定 → 新交付 blocked
+//     且 stage_failed 写明缺 test_gen（全局行不得兜底）。
 func TestAgentBindings(t *testing.T) {
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -92,21 +93,21 @@ esac
 	require.Equal(t, 200, r.StatusCode)
 	_ = r.Body.Close()
 
-	// 注册两个 cli agent + 默认编排（全部 → A，含 R10 双道审查节点）。
+	// 注册两个 cli agent（含 R10 双道审查节点的全量绑定随后按项目下发）。
 	idA := createAgentE2E(t, client, base, "default-cli", scriptA)
 	idB := createAgentE2E(t, client, base, "agent-b", scriptB)
-	bindings := map[string]string{
+	fullA := map[string]string{
 		"spec": idA, "test_gen": idA, "code_gen": idA, "code_review": idA,
 		"spec_conformance": idA, "code_quality": idA,
 	}
-	putDefaultBindings(t, client, base, bindings)
 
-	// --- 1. 默认编排：项目 A 交付跑通 ---
+	// --- 1. 项目 A 全量绑定脚本 A：交付跑通 ---
 	var projA, projB store.Project
 	post(t, client, base+"/api/projects",
 		fmt.Sprintf(`{"name":"a","repo_url":%q,"default_branch":"main"}`, newBare(t)), &projA)
 	post(t, client, base+"/api/projects",
 		fmt.Sprintf(`{"name":"b","repo_url":%q,"default_branch":"main"}`, newBare(t)), &projB)
+	putProjectBindings(t, client, base, projA.ID, fullA)
 
 	var dA store.Delivery
 	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"A","description":"x"}`, &dA)
@@ -119,8 +120,15 @@ esac
 	}, "A 到 code_review 门")
 	require.Contains(t, artifactContent(det, "tests"), "tests from AGENT_A")
 
-	// --- 2. 项目 B 覆盖 test_gen → agent B ---
-	putProjectBindings(t, client, base, projB.ID, map[string]string{"test_gen": idB})
+	// --- 2. 项目 B 绑定 test_gen→B、其余→A ---
+	putProjectBindings(t, client, base, projB.ID, func() map[string]string {
+		b := map[string]string{}
+		for k, v := range fullA {
+			b[k] = v
+		}
+		b["test_gen"] = idB
+		return b
+	}())
 	var dB store.Delivery
 	post(t, client, base+"/api/projects/"+projB.ID+"/deliveries", `{"title":"B","description":"x"}`, &dB)
 	waitFor(t, client, base, dB.ID, func(det detailJSON) bool {
@@ -131,11 +139,11 @@ esac
 		return det.Delivery.PendingGate == "code_review"
 	}, "B 到 code_review 门")
 	require.Contains(t, artifactContent(det, "tests"), "tests from AGENT_B", "B 的 test_gen 应来自 agent-b")
-	// 未覆盖节点仍走默认（A）
-	require.Contains(t, artifactContent(det, "summary"), "AGENT_A", "B 的 code_gen 仍走默认 agent")
+	// B 的其余节点绑定的是 A
+	require.Contains(t, artifactContent(det, "summary"), "AGENT_A", "B 的 code_gen 走项目绑定的 agent A")
 
 	// A 不受影响：A 的既有 delivery 已在上面断言过 AGENT_A；
-	// A 的新交付也仍走默认。
+	// A 的新交付仍走自己的项目绑定。
 	var dA2 store.Delivery
 	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"A2","description":"x"}`, &dA2)
 	waitFor(t, client, base, dA2.ID, func(det detailJSON) bool {
@@ -147,16 +155,19 @@ esac
 	}, "A2 到 code_review 门")
 	require.Contains(t, artifactContent(det, "tests"), "tests from AGENT_A", "A 不受 B 覆盖影响")
 
-	// --- 3. 删默认 test_gen 绑定 → 新交付 blocked，事件写明缺 test_gen ---
-	require.NoError(t, st.DeleteBinding(context.Background(), "", "test_gen"))
-	t.Cleanup(func() {
-		_ = st.UpsertBinding(context.Background(), &store.PipelineBinding{Node: "test_gen", AgentID: idA})
-	})
+	// --- 3. 遗留全局行不兜底 + 删 A 的 test_gen 项目绑定 → 新交付 blocked ---
+	// 直插一条 0009 之前的遗留全局绑定行（test_gen→B）：若解析仍走全局兜底，
+	// test_gen 会解析成功，交付不会 blocked——以此钉死「项目绑定是唯一来源」。
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO pipeline_bindings (id, project_id, node, agent_id)
+		 VALUES (gen_random_uuid(), NULL, 'test_gen', $1)`, idB)
+	require.NoError(t, err)
+	require.NoError(t, st.DeleteBinding(context.Background(), projA.ID, "test_gen"))
 	var dC store.Delivery
 	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"C","description":"x"}`, &dC)
 	det = waitFor(t, client, base, dC.ID, func(det detailJSON) bool {
 		return det.Delivery.Status == "blocked"
-	}, "缺绑定的新交付应 blocked")
+	}, "缺绑定的新交付应 blocked（全局遗留行不得兜底）")
 	var stageFailed string
 	for _, e := range det.Timeline {
 		if e.EventType == "stage_failed" {
@@ -183,18 +194,6 @@ func createAgentE2E(t *testing.T, c *http.Client, base, name, script string) str
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&a))
 	require.NotEmpty(t, a.ID)
 	return a.ID
-}
-
-func putDefaultBindings(t *testing.T, c *http.Client, base string, b map[string]string) {
-	t.Helper()
-	raw, err := json.Marshal(map[string]any{"bindings": b})
-	require.NoError(t, err)
-	req, _ := http.NewRequest(http.MethodPut, base+"/api/pipeline", bytes.NewReader(raw))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, 200, resp.StatusCode)
 }
 
 func putProjectBindings(t *testing.T, c *http.Client, base, projectID string, b map[string]string) {

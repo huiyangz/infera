@@ -11,7 +11,7 @@ import (
 	"github.com/tokfinity/infera/internal/store"
 )
 
-// seedEnv 建项目 + 两个 agent + 默认绑定（全节点→a1），返回 store。
+// seedEnv 建项目 + 两个 agent + 项目级绑定（全节点→a1），返回 store。
 func seedEnv(t *testing.T) (*store.Memory, *store.Project, store.Agent, store.Agent) {
 	t.Helper()
 	ctx := context.Background()
@@ -23,39 +23,60 @@ func seedEnv(t *testing.T) (*store.Memory, *store.Project, store.Agent, store.Ag
 	require.NoError(t, st.CreateAgent(ctx, a1))
 	require.NoError(t, st.CreateAgent(ctx, a2))
 	for _, n := range BindableNodes {
-		require.NoError(t, st.UpsertBinding(ctx, &store.PipelineBinding{Node: n, AgentID: a1.ID}))
+		require.NoError(t, st.UpsertBinding(ctx, &store.PipelineBinding{ProjectID: p.ID, Node: n, AgentID: a1.ID}))
 	}
 	return st, p, *a1, *a2
 }
 
-func TestResolveDefaultsAndOverride(t *testing.T) {
+func TestResolveProjectBindings(t *testing.T) {
 	st, p, a1, a2 := seedEnv(t)
 	ctx := context.Background()
 
-	// 无覆盖：全部来自 default，指向 a1
+	// 全节点项目绑定：全部解析到 a1
 	ags, eff, err := Resolve(ctx, st, p.ID)
 	require.NoError(t, err)
 	for _, n := range BindableNodes {
 		require.Equal(t, a1.ID, ags[n].ID)
-		require.Equal(t, "default", eff[n].From)
+		require.Equal(t, a1.ID, eff[n].AgentID)
+		require.Equal(t, n, eff[n].Node)
 	}
 
-	// 项目覆盖 test_gen → a2
+	// 换绑 test_gen → a2
 	require.NoError(t, st.UpsertBinding(ctx, &store.PipelineBinding{ProjectID: p.ID, Node: "test_gen", AgentID: a2.ID}))
 	ags, eff, err = Resolve(ctx, st, p.ID)
 	require.NoError(t, err)
 	require.Equal(t, a2.ID, ags["test_gen"].ID)
-	require.Equal(t, "project", eff["test_gen"].From)
-	require.Equal(t, "default", eff["spec"].From)
+	require.Equal(t, a2.ID, eff["test_gen"].AgentID)
 	require.Equal(t, a1.ID, ags["spec"].ID)
 }
 
+// TestResolveWithoutBindings：项目无任何绑定时缺全部基准节点——全局默认已删除，
+// 不存在任何兜底来源。
+func TestResolveWithoutBindings(t *testing.T) {
+	st := store.NewMemory()
+	ctx := context.Background()
+	p := &store.Project{Name: "bare", RepoURL: "", DefaultBranch: "main"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	a1 := &store.Agent{Name: "cli-1", Runner: "cli", Config: map[string]any{"command": []any{"echo"}}}
+	require.NoError(t, st.CreateAgent(ctx, a1))
+
+	_, _, err := Resolve(ctx, st, p.ID)
+	var incomplete *ErrIncompleteBindings
+	require.ErrorAs(t, err, &incomplete)
+	require.Equal(t, RequiredNodes, incomplete.Missing)
+}
+
+// TestResolveIncompleteBindings：基准节点缺绑定即 ErrIncompleteBindings（按
+// BindableNodes 序），可选节点（design/tasks）缺绑定不阻断。
 func TestResolveIncompleteBindings(t *testing.T) {
 	st, p, _, _ := seedEnv(t)
 	ctx := context.Background()
 
-	require.NoError(t, st.DeleteBinding(ctx, "", "test_gen"))
-	require.NoError(t, st.DeleteBinding(ctx, "", "code_review"))
+	require.NoError(t, st.DeleteBinding(ctx, p.ID, "test_gen"))
+	require.NoError(t, st.DeleteBinding(ctx, p.ID, "code_review"))
+	// design/tasks 属可选节点：删掉不进 missing
+	require.NoError(t, st.DeleteBinding(ctx, p.ID, "design"))
+	require.NoError(t, st.DeleteBinding(ctx, p.ID, "tasks"))
 
 	_, _, err := Resolve(ctx, st, p.ID)
 	var incomplete *ErrIncompleteBindings
@@ -63,16 +84,16 @@ func TestResolveIncompleteBindings(t *testing.T) {
 	require.Equal(t, []string{"test_gen", "code_review"}, incomplete.Missing)
 	require.Contains(t, err.Error(), "test_gen")
 
-	// ValidateComplete 跟随 BindableNodes：缺任一节点即失败，全节点通过。
+	// ValidateComplete 只强校验基准节点：缺任一基准节点即失败，全基准节点通过。
 	partial := map[string]Effective{}
-	for i, n := range BindableNodes {
-		if i < len(BindableNodes)-1 {
+	for i, n := range RequiredNodes {
+		if i < len(RequiredNodes)-1 {
 			partial[n] = Effective{}
 		}
 	}
 	require.Error(t, ValidateComplete(partial))
 	full := map[string]Effective{}
-	for _, n := range BindableNodes {
+	for _, n := range RequiredNodes {
 		full[n] = Effective{}
 	}
 	require.NoError(t, ValidateComplete(full))
@@ -85,49 +106,37 @@ func TestDesignTasksBindable(t *testing.T) {
 	st, p, a1, a2 := seedEnv(t)
 	ctx := context.Background()
 
-	// 可绑定：项目级保存 design/tasks 绑定成功，Resolve 解析得到。
-	require.NoError(t, SaveBindings(ctx, st, p.ID, map[string]string{"design": a2.ID, "tasks": a2.ID}))
+	// 可绑定：项目级保存含 design/tasks 的全量绑定成功，Resolve 解析得到。
+	full := map[string]string{}
+	for _, n := range RequiredNodes {
+		full[n] = a1.ID
+	}
+	full["design"], full["tasks"] = a2.ID, a2.ID
+	require.NoError(t, SaveBindings(ctx, st, p.ID, full))
 	ags, eff, err := Resolve(ctx, st, p.ID)
 	require.NoError(t, err)
 	require.Equal(t, a2.ID, ags["design"].ID)
 	require.Equal(t, a2.ID, ags["tasks"].ID)
-	require.Equal(t, "project", eff["design"].From)
-	require.Equal(t, a1.ID, ags["spec"].ID, "未覆盖的节点照常来自默认")
+	require.Equal(t, a2.ID, eff["design"].AgentID)
 }
 
-// TestLegacyBindingsWithoutDesignTasksNotBlocked：默认绑定兼容——升级前的
-// 默认绑定只覆盖基准节点（无 design/tasks），Resolve 不得因此
-// ErrIncompleteBindings；缺绑定的可选节点不出现在 agents（引擎回退兜底
-// runner，而非 blocked）。基准节点缺失仍必须阻断。
-func TestLegacyBindingsWithoutDesignTasksNotBlocked(t *testing.T) {
-	st, p, _, _ := seedEnv(t)
+// TestOptionalNodesSkippedWhenUnbound：项目只绑基准节点（无 design/tasks）时
+// Resolve 不报绑定不全，可选节点不出现在 agents（引擎回退兜底 runner）。
+func TestOptionalNodesSkippedWhenUnbound(t *testing.T) {
+	st := store.NewMemory()
 	ctx := context.Background()
-
-	// 模拟旧默认绑定：删掉 design/tasks 的默认绑定。
-	require.NoError(t, st.DeleteBinding(ctx, "", "design"))
-	require.NoError(t, st.DeleteBinding(ctx, "", "tasks"))
+	p := &store.Project{Name: "legacy", RepoURL: "", DefaultBranch: "main"}
+	require.NoError(t, st.CreateProject(ctx, p))
+	a1 := &store.Agent{Name: "cli-1", Runner: "cli", Config: map[string]any{"command": []any{"echo"}}}
+	require.NoError(t, st.CreateAgent(ctx, a1))
+	for _, n := range RequiredNodes {
+		require.NoError(t, st.UpsertBinding(ctx, &store.PipelineBinding{ProjectID: p.ID, Node: n, AgentID: a1.ID}))
+	}
 
 	ags, _, err := Resolve(ctx, st, p.ID)
-	require.NoError(t, err, "旧默认绑定（无 design/tasks）不得报绑定不全")
+	require.NoError(t, err, "缺可选节点不得报绑定不全")
 	_, hasDesign := ags["design"]
 	require.False(t, hasDesign, "未绑定的可选节点不出现在 agents（引擎走兜底）")
-
-	// 基准节点（RequiredNodes）缺失仍阻断——兼容不得放松核心校验。
-	require.NoError(t, st.DeleteBinding(ctx, "", "spec"))
-	_, _, err = Resolve(ctx, st, p.ID)
-	var incomplete *ErrIncompleteBindings
-	require.ErrorAs(t, err, &incomplete)
-	require.Equal(t, []string{"spec"}, incomplete.Missing)
-}
-
-// TestValidateCompleteRequiresOnlyRequiredNodes：ValidateComplete 只强校验
-// 基准节点（旧语义跟随全集会迫使所有调用方重 PUT pipeline）。
-func TestValidateCompleteRequiresOnlyRequiredNodes(t *testing.T) {
-	requiredOnly := map[string]Effective{}
-	for _, n := range RequiredNodes {
-		requiredOnly[n] = Effective{}
-	}
-	require.NoError(t, ValidateComplete(requiredOnly))
 }
 
 func TestRunnerFor(t *testing.T) {
