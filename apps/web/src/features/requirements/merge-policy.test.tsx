@@ -29,6 +29,8 @@ function makeProject(id: string, name: string): Project {
     pinned: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
+    multica_project_id: '',
+    multica_synced_at: null,
   }
 }
 

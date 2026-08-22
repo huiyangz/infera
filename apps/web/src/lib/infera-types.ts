@@ -11,6 +11,14 @@ export interface Delivery {
   fail_count: number
   created_at: string
   updated_at: string
+  /** multica 来源映射：issue ID 空 = 非 multica 同步；key 为展示键（如 INFERA-79） */
+  multica_issue_id: string
+  multica_issue_key: string
+  /** 同步进来的展示数据（"type:id" 引用串，非同步行为空串） */
+  assignee: string
+  priority: string
+  /** null = 从未同步 */
+  multica_synced_at: string | null
   /** 拆分子需求指向父 delivery；父/普通需求为空串 */
   parent_id: string
   /** 拆分批次号 1..N（父/普通需求为 0） */
@@ -74,6 +82,10 @@ export interface Project {
   pinned: boolean
   created_at: string
   updated_at: string
+  /** multica 来源映射：项目 ID 空 = 非 multica 同步 */
+  multica_project_id: string
+  /** null = 从未同步 */
+  multica_synced_at: string | null
   stats?: ProjectStats
 }
 

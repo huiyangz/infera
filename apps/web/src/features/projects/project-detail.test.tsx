@@ -12,8 +12,8 @@ import {
 } from 'vitest'
 import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page, type Locator } from 'vitest/browser'
-import { getProject, listProjectDeliveries } from '@/lib/infera-api'
-import type { Project } from '@/lib/infera-types'
+import { getDelivery, getProject, listProjectDeliveries } from '@/lib/infera-api'
+import type { Delivery, Project } from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { ProjectDetail } from './project-detail'
 
@@ -25,6 +25,7 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     ...actual,
     getProject: vi.fn(),
     listProjectDeliveries: vi.fn(),
+    getDelivery: vi.fn(),
   }
 })
 
@@ -62,13 +63,52 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     pinned: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
+    multica_project_id: '',
+    multica_synced_at: null,
     ...overrides,
   }
 }
 
-async function renderProjectDetail(project: Project): Promise<RenderResult> {
+function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
+  return {
+    id: 'd1',
+    project_id: 'p1',
+    title: '本地需求',
+    description: '',
+    status: 'active',
+    current_stage: 'spec',
+    pending_gate: null,
+    fail_count: 0,
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    parent_id: '',
+    wave: 0,
+    split_mode: false,
+    merge_state: '',
+    complexity: '',
+    multica_issue_id: '',
+    multica_issue_key: '',
+    assignee: '',
+    priority: '',
+    multica_synced_at: null,
+    ...overrides,
+  }
+}
+
+async function renderProjectDetail(
+  project: Project,
+  deliveries: Delivery[] = []
+): Promise<RenderResult> {
   vi.mocked(getProject).mockResolvedValue(project)
-  vi.mocked(listProjectDeliveries).mockResolvedValue([])
+  vi.mocked(listProjectDeliveries).mockResolvedValue(deliveries)
+  // 右侧详情面板按选中行拉取；给出最小形状避免真实 fetch
+  if (deliveries[0]) {
+    vi.mocked(getDelivery).mockResolvedValue({
+      delivery: deliveries[0],
+      timeline: [],
+      artifacts: [],
+    })
+  }
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -221,5 +261,68 @@ describe('ProjectDetail 顶栏长文本布局', () => {
     expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(
       document.documentElement.clientWidth
     )
+  })
+})
+
+describe('ProjectDetail 需求列表 multica 来源标识', () => {
+  beforeAll(async () => {
+    await page.viewport(1280, 720)
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(async () => {
+    await cleanup()
+  })
+
+  it('同步进来的父/子需求行带 Multica 标识与 issue key，父行显示负责人短标；本地需求行不带', async () => {
+    const screen = await renderProjectDetail(
+      makeProject(),
+      [
+        makeDelivery({ id: 'd1', title: '本地需求' }),
+        makeDelivery({
+          id: 'd2',
+          title: '同步需求',
+          status: 'queued',
+          current_stage: '',
+          multica_issue_id: 'mi-2',
+          multica_issue_key: 'INFERA-77',
+          assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
+          multica_synced_at: '2026-08-22T03:00:05Z',
+        }),
+        makeDelivery({
+          id: 'd3',
+          title: '同步子需求',
+          status: 'queued',
+          current_stage: '',
+          parent_id: 'd2',
+          wave: 1,
+          multica_issue_id: 'mi-3',
+          multica_issue_key: 'INFERA-78',
+          assignee: 'member:9b45e9f4-a3f2-4c1e-92f4-1cbd88238da3',
+          multica_synced_at: '2026-08-22T03:00:05Z',
+        }),
+      ]
+    )
+    await waitForProject(screen, SHORT_REPO)
+
+    // 行级断言走 button 角色：选中行的标题会同时出现在右侧详情面板，裸文本定位有歧义
+    await expect.element(screen.getByRole('button', { name: /本地需求/ })).toBeInTheDocument()
+    await expect.element(screen.getByRole('button', { name: /同步需求/ })).toBeInTheDocument()
+    await expect.element(screen.getByRole('button', { name: /同步子需求/ })).toBeInTheDocument()
+    // 父/子两条同步行各带一枚来源标识；本地行不带
+    const chips = await screen.getByText('Multica', { exact: true }).all()
+    expect(chips).toHaveLength(2)
+    // issue key 代替空阶段位展示（同步镜像无 current_stage）
+    await expect
+      .element(screen.getByText('INFERA-77', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('INFERA-78', { exact: true }))
+      .toBeInTheDocument()
+    // 负责人展示串 type:id 的前端短标（姓名解析归展示层）
+    await expect.element(screen.getByText('Agent 7bc775bc')).toBeInTheDocument()
   })
 })

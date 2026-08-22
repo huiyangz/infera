@@ -42,8 +42,8 @@ func isFKViolation(err error) bool {
 }
 
 const (
-	projectCols  = "id,name,repo_url,default_branch,pinned,created_at,updated_at"
-	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,created_at,updated_at"
+	projectCols  = "id,name,repo_url,default_branch,pinned,multica_project_id,multica_synced_at,created_at,updated_at"
+	deliveryCols = "id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,multica_issue_id,multica_issue_key,assignee,priority,multica_synced_at,created_at,updated_at"
 	stageRunCols = "id,delivery_id,stage,attempt,status,started_at,finished_at"
 )
 
@@ -51,7 +51,7 @@ const (
 
 func scanProject(row pgx.Row) (*Project, error) {
 	p := &Project{}
-	if err := row.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.RepoURL, &p.DefaultBranch, &p.Pinned, &p.MulticaProjectID, &p.MulticaSyncedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	return p, nil
@@ -60,7 +60,7 @@ func scanProject(row pgx.Row) (*Project, error) {
 func scanDelivery(row pgx.Row) (*Delivery, error) {
 	d := &Delivery{}
 	var parentID sql.NullString
-	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.Complexity, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.ProjectID, &d.Title, &d.Description, &d.Status, &d.CurrentStage, &d.PendingGate, &d.FailCount, &d.BaseCommit, &d.RejectReason, &d.WorkspaceReady, &parentID, &d.Wave, &d.SplitMode, &d.MergeState, &d.Complexity, &d.MulticaIssueID, &d.MulticaIssueKey, &d.Assignee, &d.Priority, &d.MulticaSyncedAt, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return nil, mapErr(err)
 	}
 	d.ParentID = parentID.String
@@ -161,6 +161,37 @@ func (pg *Pg) ProjectStats(ctx context.Context, id string) (ProjectStats, error)
 	return ProjectStats{Active: active, Pending: pending, Last: last.Time}, nil
 }
 
+// UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
+// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新 name 与 synced_at，
+// repo_url/default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
+// RETURNING id 两个分支都回行 ID，回读整行填充结构体。
+// MulticaProjectID 为空 → ErrInvalid。
+func (pg *Pg) UpsertProjectByMulticaID(ctx context.Context, p *Project) error {
+	if p.MulticaProjectID == "" {
+		return ErrInvalid
+	}
+	if p.ID == "" {
+		p.ID = uuid.NewString()
+	}
+	var id string
+	err := pg.pool.QueryRow(ctx,
+		`INSERT INTO projects (id,name,repo_url,default_branch,pinned,multica_project_id,multica_synced_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,now())
+		 ON CONFLICT (multica_project_id) WHERE multica_project_id <> ''
+		 DO UPDATE SET name=EXCLUDED.name, multica_synced_at=now()
+		 RETURNING id`,
+		p.ID, p.Name, p.RepoURL, p.DefaultBranch, p.Pinned, p.MulticaProjectID).Scan(&id)
+	if err != nil {
+		return err
+	}
+	got, err := pg.GetProject(ctx, id)
+	if err != nil {
+		return err
+	}
+	*p = *got
+	return nil
+}
+
 // deliveries
 
 func (pg *Pg) CreateDelivery(ctx context.Context, d *Delivery) error {
@@ -223,7 +254,8 @@ func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 
 // UpdateDelivery 按读到的 updated_at 条件更新（乐观锁，同 UpdateAgent）：
 // 并发读-改-写的后写者条件不命中 → 回读定性（不存在 → ErrNotFound；版本过期 → ErrConflict），
-// 全行覆盖不得静默冲掉并发修改。
+// 全行覆盖不得静默冲掉并发修改。SET 不含 multica 来源列——同步映射字段归
+// UpsertDeliveryByMulticaID 所有，普通更新路径不冲掉（同 Memory 的字段保留语义）。
 func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 	err := pg.pool.QueryRow(ctx,
 		`UPDATE deliveries SET title=$2,description=$3,status=$4,current_stage=$5,pending_gate=$6,fail_count=$7,base_commit=$8,reject_reason=$9,workspace_ready=$10,parent_id=$11,wave=$12,split_mode=$13,merge_state=$14,complexity=$15,updated_at=now()
@@ -237,6 +269,50 @@ func (pg *Pg) UpdateDelivery(ctx context.Context, d *Delivery) error {
 		return ErrConflict // 行在、版本过期：并发覆盖
 	}
 	return mapErr(err)
+}
+
+// UpsertDeliveryByMulticaID 按 multica issue ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
+// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新外部来源字段
+// （project_id/title/description/status/parent_id/wave/issue_key/assignee/priority），
+// 引擎侧字段（stage/gate/fail_count/...）不被同步覆盖；插入分支整行走入参（同 CreateDelivery）。
+// RETURNING id 两个分支都回行 ID，回读整行填充结构体。
+// MulticaIssueID 为空 → ErrInvalid；ProjectID 不存在（FK 23503）→ ErrNotFound。
+func (pg *Pg) UpsertDeliveryByMulticaID(ctx context.Context, d *Delivery) error {
+	if d.MulticaIssueID == "" {
+		return ErrInvalid
+	}
+	if d.ID == "" {
+		d.ID = uuid.NewString()
+	}
+	var id string
+	err := pg.pool.QueryRow(ctx,
+		`INSERT INTO deliveries (id,project_id,title,description,status,current_stage,pending_gate,fail_count,base_commit,reject_reason,workspace_ready,parent_id,wave,split_mode,merge_state,complexity,multica_issue_id,multica_issue_key,assignee,priority,multica_synced_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now())
+		 ON CONFLICT (multica_issue_id) WHERE multica_issue_id <> ''
+		 DO UPDATE SET project_id=EXCLUDED.project_id,
+		               title=EXCLUDED.title,
+		               description=EXCLUDED.description,
+		               status=EXCLUDED.status,
+		               parent_id=EXCLUDED.parent_id,
+		               wave=EXCLUDED.wave,
+		               multica_issue_key=EXCLUDED.multica_issue_key,
+		               assignee=EXCLUDED.assignee,
+		               priority=EXCLUDED.priority,
+		               multica_synced_at=now()
+		 RETURNING id`,
+		d.ID, d.ProjectID, d.Title, d.Description, d.Status, d.CurrentStage, d.PendingGate, d.FailCount, d.BaseCommit, d.RejectReason, d.WorkspaceReady, nullableParent(d.ParentID), d.Wave, d.SplitMode, d.MergeState, d.Complexity, d.MulticaIssueID, d.MulticaIssueKey, d.Assignee, d.Priority).Scan(&id)
+	if isFKViolation(err) { // project_id 不存在
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	got, err := pg.GetDelivery(ctx, id)
+	if err != nil {
+		return err
+	}
+	*d = *got
+	return nil
 }
 
 // ListChildDeliveries 取某父 delivery 的全部子需求，按批次号、创建时间升序。
