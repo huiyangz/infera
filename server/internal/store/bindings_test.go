@@ -42,36 +42,25 @@ func checkAgentBindings(t *testing.T, s Store) {
 	got, _ = s.GetAgent(ctx, a1.ID)
 	require.Equal(t, "http", got.Runner)
 
-	// 默认 + 项目覆盖绑定，upsert 幂等
-	b := &PipelineBinding{ProjectID: "", Node: "spec", AgentID: a1.ID}
-	require.NoError(t, s.UpsertBinding(ctx, b))
-	require.NoError(t, s.UpsertBinding(ctx, &PipelineBinding{ProjectID: "", Node: "spec", AgentID: a2.ID}))
-	defs, err := s.ListBindings(ctx, "")
-	require.NoError(t, err)
-	require.Len(t, defs, 1)
-	require.Equal(t, a2.ID, defs[0].AgentID)
-	require.Empty(t, defs[0].ProjectID)
-
-	ov := &PipelineBinding{ProjectID: p.ID, Node: "spec", AgentID: a1.ID}
-	require.NoError(t, s.UpsertBinding(ctx, ov))
+	// 项目绑定 upsert 幂等
+	require.NoError(t, s.UpsertBinding(ctx, &PipelineBinding{ProjectID: p.ID, Node: "spec", AgentID: a1.ID}))
+	require.NoError(t, s.UpsertBinding(ctx, &PipelineBinding{ProjectID: p.ID, Node: "spec", AgentID: a2.ID}))
 	ovs, err := s.ListBindings(ctx, p.ID)
 	require.NoError(t, err)
 	require.Len(t, ovs, 1)
-	require.Equal(t, a1.ID, ovs[0].AgentID)
-	// 项目列表不含默认
-	require.Len(t, mustList(s, ctx, ""), 1)
+	require.Equal(t, a2.ID, ovs[0].AgentID)
+	require.Equal(t, p.ID, ovs[0].ProjectID)
 
 	// 指向不存在 agent → ErrNotFound
-	require.ErrorIs(t, s.UpsertBinding(ctx, &PipelineBinding{Node: "code_gen", AgentID: "00000000-0000-0000-0000-000000000000"}), ErrNotFound)
+	require.ErrorIs(t, s.UpsertBinding(ctx, &PipelineBinding{ProjectID: p.ID, Node: "code_gen", AgentID: "00000000-0000-0000-0000-000000000000"}), ErrNotFound)
 
 	// 删除仍被引用的 agent → ErrConflict
 	require.ErrorIs(t, s.DeleteAgent(ctx, a2.ID), ErrConflict)
 	// 解绑后可删
-	require.NoError(t, s.DeleteBinding(ctx, "", "spec"))
 	require.NoError(t, s.DeleteBinding(ctx, p.ID, "spec"))
 	require.NoError(t, s.DeleteAgent(ctx, a2.ID))
 	// 删除不存在的绑定/agent → ErrNotFound
-	require.ErrorIs(t, s.DeleteBinding(ctx, "", "spec"), ErrNotFound)
+	require.ErrorIs(t, s.DeleteBinding(ctx, p.ID, "spec"), ErrNotFound)
 	require.ErrorIs(t, s.DeleteAgent(ctx, a2.ID), ErrNotFound)
 
 	// 更新不存在的 agent / 重名冲突

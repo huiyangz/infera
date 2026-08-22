@@ -613,38 +613,30 @@ func (pg *Pg) DeleteAgent(ctx context.Context, id string) error {
 	return nil
 }
 
-// UpsertBinding 按 (project,node) 幂等覆盖。project_id 空串 = 全局默认。
-// 部分唯一索引的 NULL 语义使两条 ON CONFLICT 分支必须分开写。
+// UpsertBinding 按 (project,node) 幂等覆盖（项目级专用；空 ProjectID → ErrInvalid）。
 func (pg *Pg) UpsertBinding(ctx context.Context, b *PipelineBinding) error {
+	if b.ProjectID == "" {
+		return ErrInvalid
+	}
 	if b.ID == "" {
 		b.ID = uuid.NewString()
 	}
-	var err error
-	if b.ProjectID == "" {
-		_, err = pg.pool.Exec(ctx,
-			`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,NULL,$2,$3)
-			 ON CONFLICT (node) WHERE project_id IS NULL DO UPDATE SET agent_id=EXCLUDED.agent_id`,
-			b.ID, b.Node, b.AgentID)
-	} else {
-		_, err = pg.pool.Exec(ctx,
-			`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,$2,$3,$4)
-			 ON CONFLICT (project_id,node) WHERE project_id IS NOT NULL DO UPDATE SET agent_id=EXCLUDED.agent_id`,
-			b.ID, b.ProjectID, b.Node, b.AgentID)
-	}
+	_, err := pg.pool.Exec(ctx,
+		`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,$2,$3,$4)
+		 ON CONFLICT (project_id,node) WHERE project_id IS NOT NULL DO UPDATE SET agent_id=EXCLUDED.agent_id`,
+		b.ID, b.ProjectID, b.Node, b.AgentID)
 	if isFKViolation(err) { // agent_id / project_id 不存在
 		return ErrNotFound
 	}
 	return err
 }
 
+// DeleteBinding 删项目的某节点绑定（项目级专用；空 projectID → ErrInvalid）。
 func (pg *Pg) DeleteBinding(ctx context.Context, projectID, node string) error {
-	var tag pgconn.CommandTag
-	var err error
 	if projectID == "" {
-		tag, err = pg.pool.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id IS NULL AND node=$1`, node)
-	} else {
-		tag, err = pg.pool.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1 AND node=$2`, projectID, node)
+		return ErrInvalid
 	}
+	tag, err := pg.pool.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1 AND node=$2`, projectID, node)
 	if err != nil {
 		return err
 	}
@@ -655,23 +647,20 @@ func (pg *Pg) DeleteBinding(ctx context.Context, projectID, node string) error {
 }
 
 // ReplaceBindings 单事务原子替换某项目的全部绑定：先删旧、再按节点序写入新集合，
-// 任一步失败整体回滚（调用方拿到错误时原状态一字不差）。projectID 空串 = 全局默认。
+// 任一步失败整体回滚（调用方拿到错误时原状态一字不差）。空 projectID → ErrInvalid。
 // 按节点序插入使失败位置确定：排在失败项之前的写入已真实落过，回滚覆盖的正是半写场景。
 func (pg *Pg) ReplaceBindings(ctx context.Context, projectID string, byNode map[string]string) error {
+	if projectID == "" {
+		return ErrInvalid
+	}
 	err := pgx.BeginFunc(ctx, pg.pool, func(tx pgx.Tx) error {
-		var err error
-		if projectID == "" {
-			_, err = tx.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id IS NULL`)
-		} else {
-			_, err = tx.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1`, projectID)
-		}
-		if err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM pipeline_bindings WHERE project_id=$1`, projectID); err != nil {
 			return err
 		}
 		for _, node := range slices.Sorted(maps.Keys(byNode)) {
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO pipeline_bindings (id,project_id,node,agent_id) VALUES ($1,$2,$3,$4)`,
-				uuid.NewString(), nullableParent(projectID), node, byNode[node]); err != nil {
+				uuid.NewString(), projectID, node, byNode[node]); err != nil {
 				return err
 			}
 		}
@@ -683,17 +672,14 @@ func (pg *Pg) ReplaceBindings(ctx context.Context, projectID string, byNode map[
 	return err
 }
 
-// ListBindings：projectID 空串 = 全局默认，否则该项目的覆盖绑定。
+// ListBindings：某项目的绑定（项目级专用；空 projectID → ErrInvalid）。
 func (pg *Pg) ListBindings(ctx context.Context, projectID string) ([]PipelineBinding, error) {
-	var q string
-	var args []any
 	if projectID == "" {
-		q = `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings WHERE project_id IS NULL ORDER BY created_at`
-	} else {
-		q = `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings WHERE project_id=$1 ORDER BY created_at`
-		args = append(args, projectID)
+		return nil, ErrInvalid
 	}
-	rows, err := pg.pool.Query(ctx, q, args...)
+	rows, err := pg.pool.Query(ctx,
+		`SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings WHERE project_id=$1 ORDER BY created_at`,
+		projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +687,7 @@ func (pg *Pg) ListBindings(ctx context.Context, projectID string) ([]PipelineBin
 	return collectBindings(rows)
 }
 
-// ListAllBindings 全部绑定（默认 + 所有项目覆盖）单查询带回，按创建时间升序。
+// ListAllBindings 全部项目的绑定单查询带回，按创建时间升序。
 func (pg *Pg) ListAllBindings(ctx context.Context) ([]PipelineBinding, error) {
 	rows, err := pg.pool.Query(ctx, `SELECT id,project_id,node,agent_id,created_at FROM pipeline_bindings ORDER BY created_at`)
 	if err != nil {
