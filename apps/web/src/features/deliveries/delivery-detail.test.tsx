@@ -22,14 +22,9 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
   return {
     ...actual,
     getDelivery: vi.fn(),
-    // useLocalNodes 依赖的两条 pipeline 查询（空绑定即可，不触发本机停车 UI）
-    getPipeline: vi.fn().mockResolvedValue({ nodes: [], agents: [], bindings: {} }),
-    getProjectPipeline: vi.fn().mockResolvedValue({
-      nodes: [],
-      defaults: {},
-      overrides: {},
-      effective: {},
-    }),
+    // useLocalNodes 依赖的两条查询（空绑定即可，不触发本机停车 UI）
+    listAgents: vi.fn().mockResolvedValue([]),
+    getProjectPipeline: vi.fn().mockResolvedValue({ nodes: [], bindings: {} }),
   }
 })
 

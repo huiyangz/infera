@@ -45,46 +45,46 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+// TestSaveBindings：项目级保存的校验与原子替换（全局默认已删除——projectID
+// 空由 store 拒绝，SaveBindings 不再有全局路径）。
 func TestSaveBindings(t *testing.T) {
 	st, p, a1, a2 := seedEnv(t)
 	ctx := context.Background()
-	seeded := bindingsSnapshot(t, st, "")
+	seeded := bindingsSnapshot(t, st, p.ID)
 
 	// 未知节点 → 校验失败，不写库（design/tasks 现已是可绑定节点，取真不存在的名字）
-	err := SaveBindings(ctx, st, "", map[string]string{"nonexistent_stage": a1.ID})
+	err := SaveBindings(ctx, st, p.ID, map[string]string{"nonexistent_stage": a1.ID})
 	var invalid *ErrInvalidBinding
 	require.ErrorAs(t, err, &invalid)
 	require.Contains(t, err.Error(), "nonexistent_stage")
-	require.Equal(t, seeded, bindingsSnapshot(t, st, ""), "校验失败不得写入")
+	require.Equal(t, seeded, bindingsSnapshot(t, st, p.ID), "校验失败不得写入")
 
 	// 不存在的 agent → 校验失败，不写库
-	err = SaveBindings(ctx, st, "", map[string]string{"spec": "00000000-0000-0000-0000-000000000000"})
+	err = SaveBindings(ctx, st, p.ID, map[string]string{"spec": "00000000-0000-0000-0000-000000000000"})
 	require.ErrorAs(t, err, &invalid)
 	require.Contains(t, err.Error(), "不存在")
-	require.Equal(t, seeded, bindingsSnapshot(t, st, ""))
+	require.Equal(t, seeded, bindingsSnapshot(t, st, p.ID))
 
 	// agent 存在但配置不合法（存量脏数据绕过了 API 预校验）→ 保存即报错
 	bad := &store.Agent{Name: "legacy-bad", Runner: "cli"}
 	require.NoError(t, st.CreateAgent(ctx, bad))
-	err = SaveBindings(ctx, st, "", map[string]string{"spec": bad.ID})
+	err = SaveBindings(ctx, st, p.ID, map[string]string{"spec": bad.ID})
 	require.ErrorAs(t, err, &invalid)
 	require.Contains(t, err.Error(), "config.command", "错误应写明缺的字段")
 	require.Contains(t, err.Error(), "legacy-bad", "错误应写明哪个 agent 配置不合法")
-	require.Equal(t, seeded, bindingsSnapshot(t, st, ""))
+	require.Equal(t, seeded, bindingsSnapshot(t, st, p.ID))
 
-	// 合法保存：全量替换默认（spec→a2，其余→a1，含 R10 双道审查节点）
+	// 合法保存：全量替换（spec→a2，其余→a1，含 R10 双道审查节点）
 	full := map[string]string{"spec": a2.ID, "test_gen": a1.ID, "code_gen": a1.ID, "code_review": a1.ID,
 		"spec_conformance": a1.ID, "code_quality": a1.ID}
-	require.NoError(t, SaveBindings(ctx, st, "", full))
-	require.Equal(t, full, bindingsSnapshot(t, st, ""))
+	require.NoError(t, SaveBindings(ctx, st, p.ID, full))
+	require.Equal(t, full, bindingsSnapshot(t, st, p.ID))
 
-	// 项目级：覆盖 + 清空
-	require.NoError(t, SaveBindings(ctx, st, p.ID, map[string]string{"test_gen": a2.ID}))
-	require.Equal(t, map[string]string{"test_gen": a2.ID}, bindingsSnapshot(t, st, p.ID))
+	// 清空
 	require.NoError(t, SaveBindings(ctx, st, p.ID, map[string]string{}))
 	require.Empty(t, bindingsSnapshot(t, st, p.ID))
 
-	// 项目级引用非法 agent 同样整体拒绝
+	// 引用非法 agent 整体拒绝
 	err = SaveBindings(ctx, st, p.ID, map[string]string{"spec": bad.ID})
 	require.ErrorAs(t, err, &invalid)
 	require.Empty(t, bindingsSnapshot(t, st, p.ID))

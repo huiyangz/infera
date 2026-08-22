@@ -81,8 +81,8 @@ func TestAgentConfigValidation(t *testing.T) {
 	require.Equal(t, "http://localhost:9", got.Config["url"])
 }
 
-// TestPipelinePutRejectsInvalidAgentConfig 绑定引用配置不合法的 agent → 保存即 400，
-// 且原绑定不被半写（默认与项目级）。
+// TestPipelinePutRejectsInvalidAgentConfig 项目绑定引用配置不合法的 agent →
+// 保存即 400，且原绑定不被半写。
 func TestPipelinePutRejectsInvalidAgentConfig(t *testing.T) {
 	ts, st := newServer(t)
 	c := login(t, ts.URL)
@@ -96,34 +96,26 @@ func TestPipelinePutRejectsInvalidAgentConfig(t *testing.T) {
 	p := &store.Project{Name: "demo", RepoURL: "", DefaultBranch: "main"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
-	// 先放一份合法默认
-	put := func(url, body string) *http.Response {
+	put := func(body string) *http.Response {
 		t.Helper()
-		req, _ := http.NewRequest(http.MethodPut, ts.URL+url, bytes.NewBufferString(body))
+		req, _ := http.NewRequest(http.MethodPut, ts.URL+"/api/projects/"+p.ID+"/pipeline", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := c.Do(req)
 		require.NoError(t, err)
 		return resp
 	}
-	fullGood := fullBindings(good, nil)
-	resp := put("/api/pipeline", fullGood)
+	// 先放一份合法绑定
+	resp := put(fullBindings(good, nil))
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	_ = resp.Body.Close()
 
-	// 默认 PUT 引用 bad → 400 写明字段与节点，原绑定保持全节点 ×good
-	resp = put("/api/pipeline", fullBindings(good, map[string]string{"spec": bad.ID}))
-	requireFieldErr(t, resp, "config.command")
-	defs, err := st.ListBindings(ctx, "")
-	require.NoError(t, err)
-	require.Len(t, defs, len(orchestration.BindableNodes))
-	for _, b := range defs {
-		require.Equal(t, good, b.AgentID, "失败的保存不得留下半写")
-	}
-
-	// 项目级 PUT 引用 bad → 400，项目无绑定
-	resp = put("/api/projects/"+p.ID+"/pipeline", `{"bindings":{"test_gen":"`+bad.ID+`"}}`)
+	// PUT 引用 bad → 400 写明字段，原绑定保持全节点 ×good
+	resp = put(fullBindings(good, map[string]string{"spec": bad.ID}))
 	requireFieldErr(t, resp, "config.command")
 	ovs, err := st.ListBindings(ctx, p.ID)
 	require.NoError(t, err)
-	require.Empty(t, ovs)
+	require.Len(t, ovs, len(orchestration.BindableNodes))
+	for _, b := range ovs {
+		require.Equal(t, good, b.AgentID, "失败的保存不得留下半写")
+	}
 }

@@ -8,7 +8,6 @@ import type {
   Delivery,
   DeliveryDetail,
   GateInfo,
-  PipelineInfo,
   Project,
   ProjectPipeline,
   RequirementStats,
@@ -116,26 +115,15 @@ export async function getProjectStats(id: string): Promise<RequirementStats> {
 // —— agent 编排 ——
 // Agent 注册/管理页已下线（INFERA-110）：后端 /api/agents 保留，前端仅剩
 // 编排绑定处的只读 listAgents；CRUD 由人在任务源后端直接操作。
+// 全局默认编排端点（GET/PUT /api/pipeline）已删除（INFERA-181）：
+// 项目绑定（/api/projects/{id}/pipeline）是唯一编排定义。
 export async function listAgents(): Promise<Agent[]> {
   return json(await fetch('/api/agents'))
-}
-export async function getPipeline(): Promise<PipelineInfo> {
-  return json(await fetch('/api/pipeline'))
-}
-/** 全量替换默认绑定（必须覆盖全部可绑定节点，否则后端 400 列缺失） */
-export async function putPipeline(bindings: BindingMap): Promise<PipelineInfo> {
-  return json(
-    await fetch('/api/pipeline', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bindings }),
-    })
-  )
 }
 export async function getProjectPipeline(id: string): Promise<ProjectPipeline> {
   return json(await fetch(`/api/projects/${id}/pipeline`))
 }
-/** 全量替换项目覆盖；传 {} 清空全部覆盖、回退默认 */
+/** 全量替换项目绑定；传 {} 清空全部项目绑定 */
 export async function putProjectPipeline(
   id: string,
   bindings: BindingMap

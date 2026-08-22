@@ -14,11 +14,19 @@ import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
 import {
   getProject,
+  getProjectPipeline,
   getProjectStats,
+  listAgents,
   listProjectDeliveries,
   listProjects,
+  putProjectPipeline,
 } from '@/lib/infera-api'
-import type { Project, RequirementStats } from '@/lib/infera-types'
+import type {
+  Agent,
+  Project,
+  ProjectPipeline,
+  RequirementStats,
+} from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { ProjectDetail } from './project-detail'
 
@@ -30,6 +38,9 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     getProjectStats: vi.fn(),
     listProjectDeliveries: vi.fn(),
     listProjects: vi.fn(),
+    getProjectPipeline: vi.fn(),
+    putProjectPipeline: vi.fn(),
+    listAgents: vi.fn(),
   }
 })
 
@@ -279,5 +290,102 @@ describe('ProjectDetail 新建需求入口（INFERA-178：与任务列表页共�
       .getByRole('combobox', { name: '项目', exact: true })
       .element())!
     expect(project.textContent).toContain('演示项目')
+  })
+})
+
+// —— 编排对话框：项目级唯一定义（INFERA-181，契约 = {nodes, bindings}）——
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'a1',
+    name: 'agent',
+    runner: 'cli',
+    config: {},
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+const DIALOG_AGENTS = [
+  makeAgent({ id: 'a1', name: '规格机' }),
+  makeAgent({ id: 'a2', name: '实现机', runner: 'local' }),
+]
+
+async function renderWithDialogMocks(pipeline: ProjectPipeline) {
+  vi.mocked(getProjectPipeline).mockResolvedValue(pipeline)
+  vi.mocked(putProjectPipeline).mockResolvedValue({
+    nodes: pipeline.nodes,
+    bindings: {},
+  })
+  vi.mocked(listAgents).mockResolvedValue(DIALOG_AGENTS)
+  const screen = await renderProjectDetail(makeProject())
+  await waitForProject(screen)
+  await screen.getByRole('button', { name: '编排' }).click()
+  await expect.element(screen.getByRole('dialog')).toBeInTheDocument()
+  return screen
+}
+
+describe('ProjectDetail 编排对话框项目级唯一定义（INFERA-181）', () => {
+  it('按 {nodes, bindings} 契约渲染当前项目绑定', async () => {
+    const screen = await renderWithDialogMocks({
+      nodes: ['spec', 'code_gen'],
+      bindings: { spec: 'a1', code_gen: 'a2' },
+    })
+    // 节点行来自响应的 nodes
+    await expect
+      .element(screen.getByText('规格生成', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('实现', { exact: true }).first())
+      .toBeInTheDocument()
+    // 注册 Agent 抵达编辑器下拉（选中态经 bindings 驱动，保存断言另测）
+    await screen.getByRole('combobox').first().click()
+    await expect
+      .element(screen.getByRole('option', { name: /规格机/ }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('option', { name: /实现机/ }))
+      .toBeInTheDocument()
+  })
+
+  it('无「沿用全局默认」语义：文案与来源列都不存在，清空按钮为「清空项目编排」', async () => {
+    const screen = await renderWithDialogMocks({
+      nodes: ['spec'],
+      bindings: { spec: 'a1' },
+    })
+    expect(await screen.getByText(/全局默认/).query()).toBeNull()
+    expect(await screen.getByText('恢复默认', { exact: true }).query()).toBeNull()
+    await expect
+      .element(screen.getByRole('button', { name: '清空项目编排' }))
+      .toBeInTheDocument()
+    // 来源列（默认/项目覆盖徽标）不复存在
+    expect(await screen.getByText('来源', { exact: true }).query()).toBeNull()
+    expect(await screen.getByText('项目覆盖', { exact: true }).query()).toBeNull()
+  })
+
+  it('保存提交全量绑定（项目级唯一定义，非增量覆盖）', async () => {
+    const screen = await renderWithDialogMocks({
+      nodes: ['spec', 'code_gen'],
+      bindings: { spec: 'a1', code_gen: 'a2' },
+    })
+    await screen.getByRole('button', { name: '保存项目编排' }).click()
+    await vi.waitFor(() => {
+      expect(putProjectPipeline).toHaveBeenCalledWith('p1', {
+        spec: 'a1',
+        code_gen: 'a2',
+      })
+    })
+  })
+
+  it('「清空项目编排」提交空绑定（PUT {}）', async () => {
+    const screen = await renderWithDialogMocks({
+      nodes: ['spec', 'code_gen'],
+      bindings: { spec: 'a1', code_gen: 'a2' },
+    })
+    await screen.getByRole('button', { name: '清空项目编排' }).click()
+    await vi.waitFor(() => {
+      expect(putProjectPipeline).toHaveBeenCalledWith('p1', {})
+    })
   })
 })

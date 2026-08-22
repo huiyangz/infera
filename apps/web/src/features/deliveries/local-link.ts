@@ -5,7 +5,7 @@
  * 经 submit_stage_output 交回，流水线自动推进。
  */
 import { useQuery } from '@tanstack/react-query'
-import { getPipeline, getProjectPipeline } from '@/lib/infera-api'
+import { getProjectPipeline, listAgents } from '@/lib/infera-api'
 
 /** 本机守护进程地址（默认与 helper 默认 --listen 一致；可用 VITE_INFERA_LINK_URL 覆盖） */
 const LINK_HELPER_URL: string =
@@ -41,7 +41,7 @@ export async function handleLocally(deliveryId: string): Promise<HandleResult> {
 }
 
 /**
- * 项目编排里 effective 绑定为 local runner 的节点集合。
+ * 项目编排里绑定为 local runner agent 的节点集合（项目级唯一定义 {nodes, bindings}）。
  * null = 加载中或查询失败（按钮退化为不显示，不影响页面其余功能）。
  */
 export function useLocalNodes(projectId: string | undefined) {
@@ -51,14 +51,14 @@ export function useLocalNodes(projectId: string | undefined) {
     staleTime: 30_000,
     retry: false,
     queryFn: async () => {
-      const [pipeline, project] = await Promise.all([
-        getPipeline(),
+      const [agents, project] = await Promise.all([
+        listAgents(),
         getProjectPipeline(projectId!),
       ])
-      const runnerOf = new Map(pipeline.agents.map((a) => [a.id, a.runner]))
+      const runnerOf = new Map(agents.map((a) => [a.id, a.runner]))
       const nodes = new Set<string>()
-      for (const eff of Object.values(project.effective)) {
-        if (runnerOf.get(eff.agent_id) === 'local') nodes.add(eff.node)
+      for (const [node, agentId] of Object.entries(project.bindings)) {
+        if (runnerOf.get(agentId) === 'local') nodes.add(node)
       }
       return nodes
     },

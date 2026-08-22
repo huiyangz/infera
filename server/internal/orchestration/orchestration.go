@@ -1,5 +1,6 @@
 // Package orchestration 实现 Agent 编排配置：可绑定节点清单（单一事实来源）、
-// 绑定解析（项目覆盖 ?? 全局默认）、runner 工厂（按 agent.runner 构造执行器）。
+// 项目级绑定解析（全局默认已删除，项目绑定是唯一来源）、runner 工厂
+// （按 agent.runner 构造执行器）。
 package orchestration
 
 import (
@@ -19,8 +20,8 @@ import (
 var BindableNodes = []string{"spec", "design", "tasks", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
 
 // RequiredNodes 基准节点：缺绑定即 ErrIncompleteBindings（blocked）的核心集合。
-// design/tasks 是可选节点——历史默认绑定不覆盖它们，缺绑定时引擎回退构造
-// runner 兜底（不阻断交付），因此 Resolve/默认 PUT 只强校验本集合。
+// design/tasks 是可选节点——缺绑定时引擎回退构造 runner 兜底（不阻断交付），
+// 因此 Resolve 只强校验本集合。
 var RequiredNodes = []string{"spec", "test_gen", "code_gen", "code_review", "spec_conformance", "code_quality"}
 
 // ErrLocalRunner runner=local 的哨兵：本机交互通道（批 B 实装），本批语义 = 交付停在该阶段。
@@ -33,22 +34,16 @@ func (e *ErrIncompleteBindings) Error() string {
 	return fmt.Sprintf("orchestration: 节点缺少有效 agent 绑定: %s", strings.Join(e.Missing, ", "))
 }
 
-// Effective 某节点的有效绑定：AgentID + 来源（default=全局默认 / project=项目覆盖）。
+// Effective 某节点的有效绑定（项目级——全局默认已删除，绑定只有一种来源）。
 type Effective struct {
 	Node    string `json:"node"`
 	AgentID string `json:"agent_id"`
-	From    string `json:"from"` // default|project
 }
 
-// Resolve 解析某项目的有效编排：agents 按节点给生效的 agent，eff 给来源。
+// Resolve 解析某项目的有效编排：只读该项目的绑定（无任何兜底来源）。
 // 基准节点（RequiredNodes）缺绑定（或指向不存在的 agent）→ *ErrIncompleteBindings；
-// 可选节点（design/tasks）缺绑定 → 不出现在 agents（引擎回退兜底 runner，
-// 旧默认绑定免重 PUT 升级）。
+// 可选节点（design/tasks）缺绑定 → 不出现在 agents（引擎回退兜底 runner）。
 func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]store.Agent, map[string]Effective, error) {
-	defaults, err := st.ListBindings(ctx, "")
-	if err != nil {
-		return nil, nil, err
-	}
 	overrides, err := st.ListBindings(ctx, projectID)
 	if err != nil {
 		return nil, nil, err
@@ -62,10 +57,6 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 		byID[a.ID] = a
 	}
 
-	defByNode := make(map[string]store.PipelineBinding, len(defaults))
-	for _, b := range defaults {
-		defByNode[b.Node] = b
-	}
 	ovByNode := make(map[string]store.PipelineBinding, len(overrides))
 	for _, b := range overrides {
 		ovByNode[b.Node] = b
@@ -75,10 +66,7 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 	eff := make(map[string]Effective, len(BindableNodes))
 	var missing []string
 	for _, node := range BindableNodes {
-		b, from := ovByNode[node], "project"
-		if b.AgentID == "" {
-			b, from = defByNode[node], "default"
-		}
+		b := ovByNode[node]
 		a, ok := byID[b.AgentID]
 		if !ok {
 			if slices.Contains(RequiredNodes, node) {
@@ -87,7 +75,7 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 			continue
 		}
 		agents[node] = a
-		eff[node] = Effective{Node: node, AgentID: a.ID, From: from}
+		eff[node] = Effective{Node: node, AgentID: a.ID}
 	}
 	if len(missing) > 0 {
 		return nil, nil, &ErrIncompleteBindings{Missing: missing}
@@ -175,7 +163,7 @@ func ValidateConfig(runner string, config map[string]any) error {
 	return nil
 }
 
-// SaveBindings 校验并原子保存一组绑定（默认与项目级共用；projectID 空 = 全局默认）：
+// SaveBindings 校验并原子保存某项目的一组绑定（项目级专用，全局默认已删除）：
 // 节点必须可绑定、agent 必须存在且配置合法——把交付期才会暴露的 blocked 提前到保存时。
 // 校验失败 *ErrInvalidBinding；通过后走 store 单事务替换，任一步失败整体回滚（无半写）。
 func SaveBindings(ctx context.Context, st store.Store, projectID string, bindings map[string]string) error {

@@ -224,12 +224,12 @@ type Store interface {
 	GetAgent(ctx context.Context, id string) (*Agent, error)
 	UpdateAgent(ctx context.Context, a *Agent) error
 	DeleteAgent(ctx context.Context, id string) error
-	// pipeline bindings：projectID 空 = 全局默认；UpsertBinding 按 (project,node) 幂等覆盖。
+	// pipeline bindings（项目级专用——全局默认编排已删除）：空 projectID → ErrInvalid；
+	// UpsertBinding 按 (project,node) 幂等覆盖。
 	UpsertBinding(ctx context.Context, b *PipelineBinding) error
 	DeleteBinding(ctx context.Context, projectID, node string) error
 	ListBindings(ctx context.Context, projectID string) ([]PipelineBinding, error)
-	// ListAllBindings 一次查询带回全部绑定（全局默认 + 所有项目覆盖；
-	// 全局默认行 ProjectID 为空串）——全量扫描场景替代逐项目 N+1。
+	// ListAllBindings 一次查询带回全部项目的绑定——全量扫描场景替代逐项目 N+1。
 	ListAllBindings(ctx context.Context) ([]PipelineBinding, error)
 	// ReplaceBindings 原子替换某项目的全部绑定（byNode: node→agentID；空=清空）：
 	// 任一步失败整体回滚，不留半写。agent/项目不存在 → ErrNotFound。
