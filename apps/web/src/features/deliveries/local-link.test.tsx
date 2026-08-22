@@ -1,7 +1,69 @@
-import { describe, expect, it } from 'vitest'
-import { gateHasLocalRole, parkedAtLocalNode } from './local-link'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { describe, expect, it, vi } from 'vitest'
+import { cleanup, render } from 'vitest-browser-react'
+import { getProjectPipeline, listAgents } from '@/lib/infera-api'
+import type { Agent, ProjectPipeline } from '@/lib/infera-types'
+import { gateHasLocalRole, parkedAtLocalNode, useLocalNodes } from './local-link'
+
+vi.mock('@/lib/infera-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/infera-api')>()
+  return {
+    ...actual,
+    listAgents: vi.fn(),
+    getProjectPipeline: vi.fn(),
+  }
+})
 
 const base = { status: 'active', pending_gate: null, split_mode: false }
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'a1',
+    name: 'agent',
+    runner: 'cli',
+    config: {},
+    created_at: '2026-08-01T00:00:00Z',
+    updated_at: '2026-08-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+/** 探针：把 useLocalNodes 的结果渲染成逗号分隔节点串 */
+function LocalNodesProbe({ projectId }: { projectId: string }) {
+  const nodes = useLocalNodes(projectId)
+  return (
+    <div data-testid='local-nodes'>
+      {nodes ? [...nodes].sort().join(',') : 'pending'}
+    </div>
+  )
+}
+
+describe('useLocalNodes（INFERA-181：按项目级唯一定义 {nodes, bindings} 计算）', () => {
+  it('绑定 local runner agent 的节点入选，其它 runner 不入选', async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      makeAgent({ id: 'a1', name: '本机', runner: 'local' }),
+      makeAgent({ id: 'a2', name: '远端', runner: 'cli' }),
+    ])
+    const pipeline: ProjectPipeline = {
+      nodes: ['spec', 'code_gen', 'code_review'],
+      bindings: { spec: 'a1', code_gen: 'a2', code_review: 'a1' },
+    }
+    vi.mocked(getProjectPipeline).mockResolvedValue(pipeline)
+
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const screen = await render(
+      <QueryClientProvider client={qc}>
+        <LocalNodesProbe projectId='p1' />
+      </QueryClientProvider>
+    )
+    await expect
+      .element(screen.getByTestId('local-nodes'))
+      .toHaveTextContent('code_review,spec')
+    await cleanup()
+  })
+})
 
 describe('parkedAtLocalNode', () => {
   it('五个 agent 节点（spec/design/tasks/test_gen/code_gen）绑定 local 都算本机停车', () => {

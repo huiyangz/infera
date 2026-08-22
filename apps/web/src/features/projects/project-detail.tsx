@@ -258,8 +258,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 }
 
 /**
- * 项目编排对话框：展示当前生效绑定（默认 + 项目覆盖），可整体另存为项目覆盖，
- * 或「恢复默认」清空全部覆盖（PUT {}）回退全局默认。
+ * 项目编排对话框：项目级唯一绑定定义（全局默认编排已删除，INFERA-181）。
+ * 展示当前项目绑定（{nodes, bindings} 契约），全量另存，
+ * 或「清空项目编排」清空全部绑定（PUT {}）。
  */
 function OrchestrationDialog({
   projectId,
@@ -270,7 +271,7 @@ function OrchestrationDialog({
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
-  // sel=null 表示未编辑，展示后端当前生效值；用户改动后暂存本地，保存成功即复位
+  // sel=null 表示未编辑，展示后端当前项目绑定；用户改动后暂存本地，保存成功即复位
   const [sel, setSel] = useState<BindingMap | null>(null)
 
   const { data: pipe } = useQuery({
@@ -284,28 +285,14 @@ function OrchestrationDialog({
     enabled: open,
   })
 
-  // 当前生效值（项目覆盖 ?? 默认）
-  const effectiveMap = pipe
-    ? Object.fromEntries(
-        Object.values(pipe.effective).map((e) => [e.node, e.agent_id]),
-      )
-    : {}
-  const value = sel ?? effectiveMap
-
-  // 只提交与默认不同的节点（未改动的留空 → 继续跟随全局默认）
-  const diffOverrides = (bindings: BindingMap): BindingMap =>
-    Object.fromEntries(
-      Object.entries(bindings).filter(
-        ([node, agentId]) => pipe?.defaults[node] !== agentId,
-      ),
-    )
+  const value = sel ?? pipe?.bindings ?? {}
 
   const save = useMutation({
     mutationFn: (bindings: BindingMap) =>
-      putProjectPipeline(projectId, diffOverrides(bindings)),
+      putProjectPipeline(projectId, bindings),
     onSuccess: (_d, bindings) => {
       toast.success(
-        Object.keys(bindings).length ? '项目编排已保存' : '已恢复默认编排',
+        Object.keys(bindings).length ? '项目编排已保存' : '已清空项目编排',
       )
       setSel(null)
       qc.invalidateQueries({ queryKey: ['project-pipeline', projectId] })
@@ -314,12 +301,7 @@ function OrchestrationDialog({
   })
 
   const nodes = pipe?.nodes ?? []
-  const fromMap = pipe
-    ? Object.fromEntries(
-        Object.values(pipe.effective).map((e) => [e.node, e.from]),
-      )
-    : undefined
-  const allChosen = nodes.every((n) => value[n])
+  const allChosen = nodes.length > 0 && nodes.every((n) => value[n])
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -332,7 +314,7 @@ function OrchestrationDialog({
         <DialogHeader>
           <DialogTitle>流水线编排 · {projectName}</DialogTitle>
           <DialogDescription>
-            为本项目各节点指定执行 Agent；未保存的节点沿用全局默认
+            为本项目各节点指定执行 Agent（项目绑定是唯一绑定定义）
           </DialogDescription>
         </DialogHeader>
         <BindingEditor
@@ -340,7 +322,6 @@ function OrchestrationDialog({
           agents={agents ?? []}
           value={value}
           onChange={setSel}
-          showFrom={fromMap}
         />
         <DialogFooter className='sm:justify-between'>
           <Button
@@ -348,10 +329,10 @@ function OrchestrationDialog({
             disabled={save.isPending}
             onClick={() => save.mutate({})}
           >
-            恢复默认
+            清空项目编排
           </Button>
           <Button
-            disabled={save.isPending || !nodes.length || !allChosen}
+            disabled={save.isPending || !allChosen}
             onClick={() => save.mutate(value)}
           >
             {save.isPending ? '保存中…' : '保存项目编排'}

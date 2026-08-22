@@ -13,8 +13,6 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     listProjects: vi.fn(),
     patchProjectPinned: vi.fn(),
     createProject: vi.fn(),
-    getPipeline: vi.fn(),
-    putPipeline: vi.fn(),
   }
 })
 
@@ -78,6 +76,16 @@ beforeEach(() => {
 
 afterEach(async () => {
   await cleanup()
+})
+
+describe('ProjectsList 默认编排入口移除（INFERA-181）', () => {
+  it('页面没有「默认编排」按钮/文案——项目绑定是唯一编排定义', async () => {
+    const screen = await mount()
+    expect(
+      await screen.getByRole('button', { name: /默认编排/ }).query()
+    ).toBeNull()
+    expect(await screen.getByText(/默认编排/).query()).toBeNull()
+  })
 })
 
 describe('ProjectsList 来源标识与自动加载', () => {

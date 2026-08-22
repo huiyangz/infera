@@ -283,22 +283,14 @@ export interface Agent {
 /** 节点 → agent_id 绑定表 */
 export type BindingMap = Record<string, string>
 
-/** GET /api/pipeline */
-export interface PipelineInfo {
-  nodes: string[]
-  agents: Agent[]
-  bindings: BindingMap
-}
-
-/** GET /api/projects/:id/pipeline —— effective 是 node 键的对象（后端 map 序列化） */
+/**
+ * GET/PUT /api/projects/:id/pipeline —— 项目级唯一绑定定义
+ * （契约冻结于 INFERA-180：server/internal/api/orchestration.go，
+ * 全局默认编排已删除，无 defaults/overrides/effective/from 字段）。
+ */
 export interface ProjectPipeline {
   nodes: string[]
-  defaults: BindingMap
-  overrides: BindingMap
-  effective: Record<
-    string,
-    { node: string; agent_id: string; from: 'default' | 'project' }
-  >
+  bindings: BindingMap
 }
 
 export interface GateInfo {
