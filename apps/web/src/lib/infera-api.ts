@@ -11,6 +11,7 @@ import type {
   PipelineInfo,
   Project,
   ProjectPipeline,
+  RequirementStats,
   TaskSpec,
 } from './infera-types'
 
@@ -99,6 +100,10 @@ export async function patchProjectPinned(
 }
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
   return json(await fetch(`/api/projects/${id}/deliveries`))
+}
+/** 项目维度需求统计（T01 冻结契约，形状见 RequirementStats） */
+export async function getProjectStats(id: string): Promise<RequirementStats> {
+  return json(await fetch(`/api/projects/${id}/stats`))
 }
 
 // —— agent 编排 ——

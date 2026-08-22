@@ -1,36 +1,31 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
-import {
-  ChevronDown,
-  ChevronRight,
-  GitBranch,
-  Inbox,
-  Plus,
-  SlidersHorizontal,
-} from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { ChevronRight, GitBranch, ListTree, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  createDelivery,
   getProject,
   getProjectPipeline,
+  getProjectStats,
   listAgents,
-  listProjectDeliveries,
   putProjectPipeline,
 } from '@/lib/infera-api'
 import {
   type BindingMap,
-  type Delivery,
-  stageLabel,
+  type RequirementStats,
 } from '@/lib/infera-types'
-import { timeAgo } from '@/lib/time'
-import { cn } from '@/lib/utils'
-import { DeliveryDetail } from '@/features/deliveries/delivery-detail'
-import { BindingEditor } from '@/features/pipeline/binding-editor'
-import { assigneeLabel } from '@/features/multica-sync/display'
-import { StatusBadge } from '@/components/status-badge'
+import { dateTime } from '@/lib/time'
 import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { BindingEditor } from '@/features/pipeline/binding-editor'
 import {
   Dialog,
   DialogContent,
@@ -40,48 +35,28 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+
+/** 状态桶展示口径（与 StatusBadge 一致的中文名） */
+const STATUS_BUCKETS: Array<{ key: keyof RequirementStats['by_status']; label: string }> = [
+  { key: 'active', label: '进行中' },
+  { key: 'queued', label: '未启动' },
+  { key: 'completed', label: '已完成' },
+  { key: 'blocked', label: '已阻塞' },
+]
 
 /**
- * 项目详情 = 主从布局：左侧本项目需求列表（可选中），右侧选中需求详情。
- * 选中态走 URL search param（?d=），可分享、可后退；移动端只显示一栏。
+ * 项目详情 = 项目域总览（L202608221241-2-T04）：必需配置 + 项目统计
+ * （T01 冻结契约）+ 任务列表入口。需求/任务浏览移至项目任务列表页。
  */
-export function ProjectDetail({
-  projectId,
-  selectedDeliveryId,
-}: {
-  projectId: string
-  selectedDeliveryId?: string
-}) {
-  const navigate = useNavigate()
-  const qc = useQueryClient()
+export function ProjectDetail({ projectId }: { projectId: string }) {
   const { data: proj } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => getProject(projectId),
   })
-  const { data: deliveries, isLoading } = useQuery({
-    queryKey: ['project-deliveries', projectId],
-    queryFn: () => listProjectDeliveries(projectId),
+  const { data: stats } = useQuery({
+    queryKey: ['project-stats', projectId],
+    queryFn: () => getProjectStats(projectId),
   })
-  const [title, setTitle] = useState('')
-  // 拆分父子树的折叠态（per-parent，默认展开）
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-
-  const create = useMutation({
-    mutationFn: () => createDelivery(projectId, { title }),
-    onSuccess: (d) => {
-      setTitle('')
-      toast.success('需求已提交，流水线即将启动')
-      qc.invalidateQueries({ queryKey: ['project-deliveries', projectId] })
-      navigate({ to: '/projects/$id', params: { id: projectId }, search: { d: d.id } })
-    },
-    onError: (e: Error) => toast.error(e.message),
-  })
-
-  // URL 未指定时默认选中第一条（仅影响渲染，不写 URL）
-  const effectiveId = selectedDeliveryId ?? deliveries?.[0]?.id
-  const waiting = deliveries?.filter((d) => d.pending_gate).length ?? 0
 
   return (
     <>
@@ -102,40 +77,15 @@ export function ProjectDetail({
               <span className='truncate' title={proj?.repo_url || undefined}>
                 {proj?.repo_url || '（未绑仓库）'}
               </span>
-              <span className='shrink-0 text-border'>·</span>
               {proj?.default_branch && (
-                <span className='shrink-0'>{proj.default_branch}</span>
+                <>
+                  <span className='shrink-0 text-border'>·</span>
+                  <span className='shrink-0'>{proj.default_branch}</span>
+                </>
               )}
             </p>
           </div>
           <div className='flex shrink-0 items-center gap-2'>
-            {proj?.repo_url ? (
-              <form
-                className='flex items-center gap-2'
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  if (title.trim()) create.mutate()
-                }}
-              >
-                <Input
-                  className='w-64'
-                  placeholder='一句话需求，回车提交…'
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                />
-                <Button
-                  type='submit'
-                  size='lg'
-                  disabled={!title.trim() || create.isPending}
-                >
-                  <Plus /> 新建交付
-                </Button>
-              </form>
-            ) : (
-              <p className='text-sm text-muted-foreground'>
-                项目未绑定仓库，暂时不支持提交需求
-              </p>
-            )}
             {proj && (
               <OrchestrationDialog
                 projectId={projectId}
@@ -146,250 +96,162 @@ export function ProjectDetail({
         </div>
       </Header>
 
-      <div className='flex h-[calc(100svh-4rem)]'>
-        {/* 左：需求列表（通栏，hairline 分隔，不做卡片盒） */}
-        <aside
-          className={cn(
-            'flex w-80 shrink-0 flex-col border-r',
-            effectiveId && 'max-lg:hidden',
-          )}
-        >
-          <div className='flex h-9 items-center justify-between border-b px-4'>
-            <span className='text-xs font-medium uppercase tracking-wider text-muted-foreground'>
-              需求
-              {deliveries?.length ? (
-                <span className='ml-1.5'>
-                  {deliveries.length}
-                </span>
-              ) : null}
-            </span>
-            {waiting > 0 && (
-              <span className='text-xs text-foreground'>{waiting} 个待审批</span>
-            )}
-          </div>
-          <div className='flex-1 overflow-y-auto'>
-            {isLoading ? (
-              <div className='space-y-2 p-3'>
-                <Skeleton className='h-14 w-full' />
-                <Skeleton className='h-14 w-full' />
+      <div className='mx-auto w-full max-w-4xl space-y-6 p-6'>
+        {/* 必需配置：只呈现项目已有配置字段 */}
+        <section>
+          <h2 className='mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground'>
+            必需配置
+          </h2>
+          <Card className='gap-0 py-2'>
+            <dl className='divide-y'>
+              <div className='flex items-center justify-between gap-4 px-5 py-3'>
+                <dt className='shrink-0 text-sm text-muted-foreground'>
+                  仓库地址
+                </dt>
+                <dd className='min-w-0 truncate font-mono text-sm'>
+                  {proj?.repo_url || (
+                    <span className='text-muted-foreground'>（未绑仓库）</span>
+                  )}
+                </dd>
               </div>
-            ) : !deliveries?.length ? (
-              <div className='flex flex-col items-center gap-2 p-8 text-center'>
-                <Inbox className='size-5 text-muted-foreground' />
-                <p className='text-sm text-muted-foreground'>
-                  还没有需求，右上角输入一句话提交
-                </p>
+              <div className='flex items-center justify-between gap-4 px-5 py-3'>
+                <dt className='shrink-0 text-sm text-muted-foreground'>
+                  默认分支
+                </dt>
+                <dd className='min-w-0 truncate font-mono text-sm'>
+                  {proj?.default_branch || (
+                    <span className='text-muted-foreground'>—</span>
+                  )}
+                </dd>
               </div>
-            ) : (
-              (() => {
-                const parents = deliveries.filter((d) => !d.parent_id)
-                const childrenOf = (pid: string) =>
-                  deliveries.filter((d) => d.parent_id === pid)
-                const select = (id: string) =>
-                  navigate({
-                    to: '/projects/$id',
-                    params: { id: projectId },
-                    search: { d: id === effectiveId ? undefined : id },
-                  })
-                return parents.map((p) => {
-                  const kids = childrenOf(p.id)
-                  const isCollapsed = collapsed.has(p.id)
-                  return (
-                    <div key={p.id}>
-                      <DeliveryRow
-                        d={p}
-                        active={p.id === effectiveId}
-                        onSelect={select}
-                        childrenDone={
-                          kids.length
-                            ? `${kids.filter((c) => c.status === 'completed').length}/${kids.length}`
-                            : undefined
-                        }
-                        conflict={p.split_mode && p.merge_state === 'conflict'}
-                        expandable={kids.length > 0}
-                        expanded={!isCollapsed}
-                        onToggleExpand={
-                          kids.length
-                            ? () =>
-                                setCollapsed((prev) => {
-                                  const next = new Set(prev)
-                                  if (next.has(p.id)) next.delete(p.id)
-                                  else next.add(p.id)
-                                  return next
-                                })
-                            : undefined
-                        }
-                      />
-                      {kids.length > 0 && !isCollapsed &&
-                        kids.map((c) => (
-                          <ChildDeliveryRow
-                            key={c.id}
-                            d={c}
-                            active={c.id === effectiveId}
-                            onSelect={select}
-                          />
-                        ))}
-                    </div>
-                  )
-                })
-              })()
-            )}
-          </div>
-        </aside>
+            </dl>
+          </Card>
+        </section>
 
-        {/* 右：详情面板（通栏阅读面） */}
-        <main
-          className={cn(
-            'min-w-0 flex-1 overflow-y-auto',
-            !effectiveId && 'max-lg:hidden',
-          )}
-        >
-          {effectiveId ? (
-            <DeliveryDetail deliveryId={effectiveId} embedded />
-          ) : null}
-        </main>
+        {/* 项目统计：T01 冻结契约（store.RequirementStats） */}
+        <section>
+          <h2 className='mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground'>
+            项目统计
+          </h2>
+          <div className='grid gap-4 sm:grid-cols-3'>
+            <Card className='gap-1 py-5'>
+              <CardHeader className='px-5'>
+                <CardTitle className='text-sm font-normal text-muted-foreground'>
+                  需求总数
+                </CardTitle>
+              </CardHeader>
+              <CardContent className='px-5'>
+                <p className='text-2xl font-semibold tabular-nums'>
+                  {stats ? (
+                    stats.requirement_total
+                  ) : (
+                    <Skeleton className='h-8 w-10' />
+                  )}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className='gap-1 py-5'>
+              <CardHeader className='px-5'>
+                <CardTitle className='text-sm font-normal text-muted-foreground'>
+                  待决策
+                </CardTitle>
+              </CardHeader>
+              <CardContent className='px-5'>
+                <p className='text-2xl font-semibold tabular-nums'>
+                  {stats ? (
+                    stats.pending_decisions
+                  ) : (
+                    <Skeleton className='h-8 w-10' />
+                  )}
+                </p>
+              </CardContent>
+            </Card>
+            <Card className='gap-1 py-5'>
+              <CardHeader className='px-5'>
+                <CardTitle className='text-sm font-normal text-muted-foreground'>
+                  已交付
+                </CardTitle>
+              </CardHeader>
+              <CardContent className='px-5'>
+                <p className='text-2xl font-semibold tabular-nums'>
+                  {stats ? (
+                    stats.delivered
+                  ) : (
+                    <Skeleton className='h-8 w-10' />
+                  )}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+          <Card className='mt-4 gap-0 py-2'>
+            <dl className='divide-y'>
+              {STATUS_BUCKETS.map(({ key, label }) => (
+                <div
+                  key={key}
+                  className='flex items-center justify-between gap-4 px-5 py-2.5'
+                >
+                  <dt className='text-sm text-muted-foreground'>{label}</dt>
+                  <dd className='text-sm font-medium tabular-nums'>
+                    {stats ? (
+                      stats.by_status[key]
+                    ) : (
+                      <Skeleton className='h-4 w-8' />
+                    )}
+                  </dd>
+                </div>
+              ))}
+              <div className='flex items-center justify-between gap-4 px-5 py-2.5'>
+                <dt className='text-sm text-muted-foreground'>最近同步</dt>
+                <dd className='text-sm tabular-nums text-muted-foreground'>
+                  {stats ? (
+                    stats.last_synced_at ? (
+                      dateTime(stats.last_synced_at)
+                    ) : (
+                      '从未同步'
+                    )
+                  ) : (
+                    <Skeleton className='h-4 w-20' />
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </Card>
+        </section>
+
+        {/* 任务列表入口 */}
+        <section>
+          <h2 className='mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground'>
+            任务列表
+          </h2>
+          <Card className='group py-5 transition-colors hover:bg-accent/50'>
+            <CardHeader className='px-5'>
+              <CardTitle className='text-base font-semibold tracking-[-0.2px]'>
+                <Link
+                  to='/projects/$id/tasks'
+                  params={{ id: projectId }}
+                  className='after:absolute after:inset-0'
+                >
+                  项目任务
+                </Link>
+              </CardTitle>
+              <CardAction className='relative z-10'>
+                <Button variant='ghost' size='icon' aria-label='项目任务' asChild>
+                  <Link to='/projects/$id/tasks' params={{ id: projectId }}>
+                    <ListTree />
+                  </Link>
+                </Button>
+              </CardAction>
+            </CardHeader>
+            <CardContent className='px-5'>
+              <p className='flex items-center gap-1 text-sm text-muted-foreground'>
+                以父子结构查看本项目的父需求与子任务
+                <ChevronRight className='size-4' />
+              </p>
+            </CardContent>
+          </Card>
+        </section>
       </div>
     </>
-  )
-}
-
-function DeliveryRow({
-  d,
-  active,
-  onSelect,
-  childrenDone,
-  conflict,
-  expandable,
-  expanded,
-  onToggleExpand,
-}: {
-  d: Delivery
-  active: boolean
-  onSelect: (id: string) => void
-  /** 拆分父：「已完成子需求/全部子需求」 */
-  childrenDone?: string
-  conflict?: boolean
-  expandable?: boolean
-  expanded?: boolean
-  onToggleExpand?: () => void
-}) {
-  const assignee = assigneeLabel(d.assignee)
-  return (
-    <div
-      className={cn(
-        'relative block w-full border-b transition-colors',
-        active ? 'bg-accent' : 'hover:bg-accent/50',
-      )}
-    >
-      {active && (
-        <span className='absolute inset-y-0 start-0 w-0.5 bg-foreground' />
-      )}
-      <div className='flex items-start'>
-        {expandable ? (
-          <button
-            type='button'
-            aria-label={expanded ? '收起子需求' : '展开子需求'}
-            className='flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground'
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleExpand?.()
-            }}
-          >
-            {expanded ? (
-              <ChevronDown className='size-3.5' />
-            ) : (
-              <ChevronRight className='size-3.5' />
-            )}
-          </button>
-        ) : (
-          <span className='w-7 shrink-0' />
-        )}
-        <button
-          type='button'
-          onClick={() => onSelect(d.id)}
-          className='min-w-0 flex-1 py-2.5 pe-4 text-start'
-        >
-          <span className='flex items-center justify-between gap-2'>
-            <span className='flex min-w-0 items-center gap-1.5'>
-              {d.multica_issue_id && (
-                <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-                  Multica
-                </span>
-              )}
-              <span className='truncate text-sm font-medium'>{d.title}</span>
-            </span>
-            <StatusBadge status={d.status} />
-          </span>
-          <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
-            {/* 同步镜像无 current_stage：issue key 顶替阶段位展示 */}
-            <span>{stageLabel(d.current_stage) || d.multica_issue_key}</span>
-            {assignee && <span>· {assignee}</span>}
-            {childrenDone && <span>· 子需求 {childrenDone} 完成</span>}
-            <span className='ms-auto tabular-nums'>{timeAgo(d.updated_at)}</span>
-          </span>
-          <span className='mt-1.5 flex items-center gap-1.5'>
-            {d.pending_gate && (
-              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
-                待审批
-              </span>
-            )}
-            {conflict && (
-              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
-                合并冲突
-              </span>
-            )}
-          </span>
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** 子需求行：缩进 + 「子」chip，样式更轻。 */
-function ChildDeliveryRow({
-  d,
-  active,
-  onSelect,
-}: {
-  d: Delivery
-  active: boolean
-  onSelect: (id: string) => void
-}) {
-  return (
-    <button
-      type='button'
-      onClick={() => onSelect(d.id)}
-      className={cn(
-        'relative block w-full border-b px-4 py-2 pl-10 text-start transition-colors',
-        active ? 'bg-accent' : 'hover:bg-accent/50',
-      )}
-    >
-      {active && (
-        <span className='absolute inset-y-0 start-0 w-0.5 bg-foreground' />
-      )}
-      <span className='flex items-center justify-between gap-2'>
-        <span className='flex min-w-0 items-center gap-1.5'>
-          <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-            子
-          </span>
-          {d.multica_issue_id && (
-            <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-              Multica
-            </span>
-          )}
-          <span className='truncate text-xs font-medium'>{d.title}</span>
-        </span>
-        <StatusBadge status={d.status} />
-      </span>
-      <span className='mt-1 flex items-center justify-between text-[11px] text-muted-foreground'>
-        <span>
-          {d.current_stage
-            ? `批次 ${d.wave || 1} · ${stageLabel(d.current_stage)}`
-            : d.multica_issue_key}
-        </span>
-        <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
-      </span>
-    </button>
   )
 }
 
