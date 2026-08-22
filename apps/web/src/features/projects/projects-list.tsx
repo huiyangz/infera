@@ -14,6 +14,8 @@ import { type BindingMap, type Project } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { BindingEditor } from '@/features/pipeline/binding-editor'
+import { MulticaSyncButton } from '@/features/multica-sync/sync-button'
+import { IconMultica } from '@/assets/brand-icons'
 import { Header } from '@/components/layout/header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -78,6 +80,12 @@ function ProjectCard({
           {proj.repo_url || '（未绑仓库）'}
         </p>
         <div className='flex min-h-6 flex-wrap items-center gap-1.5'>
+          {proj.multica_project_id && (
+            <Badge variant='outline' className='gap-1.5'>
+              <IconMultica className='size-3' />
+              Multica
+            </Badge>
+          )}
           {s?.pending ? (
             <Badge>
               <Link
@@ -172,6 +180,7 @@ export function ProjectsList() {
             </p>
           </div>
           <DefaultOrchestrationDialog />
+          <MulticaSyncButton />
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button size='lg'>

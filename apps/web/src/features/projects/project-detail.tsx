@@ -27,6 +27,7 @@ import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { DeliveryDetail } from '@/features/deliveries/delivery-detail'
 import { BindingEditor } from '@/features/pipeline/binding-editor'
+import { assigneeLabel } from '@/features/multica-sync/display'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Button } from '@/components/ui/button'
@@ -272,6 +273,7 @@ function DeliveryRow({
   expanded?: boolean
   onToggleExpand?: () => void
 }) {
+  const assignee = assigneeLabel(d.assignee)
   return (
     <div
       className={cn(
@@ -308,11 +310,20 @@ function DeliveryRow({
           className='min-w-0 flex-1 py-2.5 pe-4 text-start'
         >
           <span className='flex items-center justify-between gap-2'>
-            <span className='truncate text-sm font-medium'>{d.title}</span>
+            <span className='flex min-w-0 items-center gap-1.5'>
+              {d.multica_issue_id && (
+                <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
+                  Multica
+                </span>
+              )}
+              <span className='truncate text-sm font-medium'>{d.title}</span>
+            </span>
             <StatusBadge status={d.status} />
           </span>
           <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
-            <span>{stageLabel(d.current_stage)}</span>
+            {/* 同步镜像无 current_stage：issue key 顶替阶段位展示 */}
+            <span>{stageLabel(d.current_stage) || d.multica_issue_key}</span>
+            {assignee && <span>· {assignee}</span>}
             {childrenDone && <span>· 子需求 {childrenDone} 完成</span>}
             <span className='ms-auto tabular-nums'>{timeAgo(d.updated_at)}</span>
           </span>
@@ -361,13 +372,20 @@ function ChildDeliveryRow({
           <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
             子
           </span>
+          {d.multica_issue_id && (
+            <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
+              Multica
+            </span>
+          )}
           <span className='truncate text-xs font-medium'>{d.title}</span>
         </span>
         <StatusBadge status={d.status} />
       </span>
       <span className='mt-1 flex items-center justify-between text-[11px] text-muted-foreground'>
         <span>
-          批次 {d.wave || 1} · {stageLabel(d.current_stage)}
+          {d.current_stage
+            ? `批次 ${d.wave || 1} · ${stageLabel(d.current_stage)}`
+            : d.multica_issue_key}
         </span>
         <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
       </span>
