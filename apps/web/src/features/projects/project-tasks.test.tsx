@@ -55,8 +55,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     pinned: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    multica_project_id: '',
-    multica_synced_at: null,
+    external_project_id: '',
+    external_synced_at: null,
     ...overrides,
   }
 }
@@ -69,8 +69,8 @@ function makeChild(overrides: Partial<TaskChild> = {}): TaskChild {
     status: 'active',
     current_stage: 'code_gen',
     pending_gate: '',
-    multica_issue_id: '',
-    multica_issue_key: '',
+    external_issue_id: '',
+    external_issue_key: '',
     assignee: '',
     priority: '',
     created_at: '2026-08-01T00:00:00Z',
@@ -91,11 +91,11 @@ function makeGroup(overrides: Partial<TaskGroupRow> = {}): TaskGroupRow {
     fail_count: 0,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    multica_issue_id: '',
-    multica_issue_key: '',
+    external_issue_id: '',
+    external_issue_key: '',
     assignee: '',
     priority: '',
-    multica_synced_at: null,
+    external_synced_at: null,
     parent_id: '',
     wave: 0,
     split_mode: false,
@@ -141,10 +141,10 @@ function groupsFixture(): TaskGroupRow[] {
       title: '同步父任务',
       status: 'queued',
       current_stage: '',
-      multica_issue_id: 'mi-2',
-      multica_issue_key: 'INFERA-77',
+      external_issue_id: 'mi-2',
+      external_issue_key: 'INFERA-77',
       assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
-      multica_synced_at: '2026-08-22T03:00:05Z',
+      external_synced_at: '2026-08-22T03:00:05Z',
       child_total: 4,
       child_completed: 1,
       stages: [
@@ -156,8 +156,8 @@ function groupsFixture(): TaskGroupRow[] {
               title: '同步子任务甲',
               status: 'completed',
               current_stage: '',
-              multica_issue_id: 'mi-3',
-              multica_issue_key: 'INFERA-78',
+              external_issue_id: 'mi-3',
+              external_issue_key: 'INFERA-78',
               assignee: 'member:9b45e9f4-a3f2-4c1e-92f4-1cbd88238da3',
             }),
             makeChild({
@@ -165,8 +165,8 @@ function groupsFixture(): TaskGroupRow[] {
               title: '同步子任务乙',
               status: 'queued',
               current_stage: '',
-              multica_issue_id: 'mi-4',
-              multica_issue_key: 'INFERA-79',
+              external_issue_id: 'mi-4',
+              external_issue_key: 'INFERA-79',
             }),
           ],
         },
@@ -349,8 +349,8 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02：子任务按阶�
                   stage: 0,
                   status: 'queued',
                   current_stage: '',
-                  multica_issue_id: 'mi-13',
-                  multica_issue_key: 'INFERA-13',
+                  external_issue_id: 'mi-13',
+                  external_issue_key: 'INFERA-13',
                 }),
               ],
             },
@@ -430,12 +430,12 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02：子任务按阶�
       .toBeInTheDocument()
   })
 
-  it('multica 来源: 父卡片带 Multica 标识；子任务行以粗体 issue key 标识来源', async () => {
+  it('同步来源: 父卡片带「已同步」标识；子任务行以粗体 issue key 标识来源', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '本地任务')
 
     // 来源徽只出现在父卡片（子行信息由粗体 key 承担，对齐参考图行式）
-    const chips = await screen.getByText('Multica', { exact: true }).all()
+    const chips = await screen.getByText('已同步', { exact: true }).all()
     expect(chips).toHaveLength(1)
   })
 

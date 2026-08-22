@@ -61,8 +61,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     pinned: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
-    multica_project_id: '',
-    multica_synced_at: null,
+    external_project_id: '',
+    external_synced_at: null,
     ...overrides,
   }
 }
@@ -84,11 +84,11 @@ function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
     split_mode: false,
     merge_state: '',
     complexity: '',
-    multica_issue_id: '',
-    multica_issue_key: '',
+    external_issue_id: '',
+    external_issue_key: '',
     assignee: '',
     priority: '',
-    multica_synced_at: null,
+    external_synced_at: null,
     ...overrides,
   }
 }
@@ -102,8 +102,8 @@ function makeTaskGroup(): TaskGroupRow {
     status: 'active',
     current_stage: 'code',
     pending_gate: '',
-    multica_issue_id: '',
-    multica_issue_key: '',
+    external_issue_id: '',
+    external_issue_key: '',
     assignee: '',
     priority: '',
     created_at: '2026-08-01T00:00:00Z',

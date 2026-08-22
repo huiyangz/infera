@@ -34,9 +34,9 @@ const REQ: Requirement = {
   source: 'web',
   priority: 'P1',
   acceptors: [],
-  multica_issue_id: 'm1',
-  multica_issue_key: 'INFERA-31',
-  multica_issue_url: 'http://multica.local/infera/issues/m1',
+  external_issue_id: 'm1',
+  external_issue_key: 'INFERA-31',
+  external_issue_url: 'http://tasks.local/infera/issues/m1',
   pr_url: 'https://github.com/acme/repo/pull/7',
   node: 'in_review',
   created_at: '2026-08-21T00:00:00Z',
@@ -184,7 +184,7 @@ describe('MergeCard 合并卡', () => {
     diff: { files: 3, additions: 87, deletions: 15, changes: 102 },
   }
 
-  it('渲染 verdict、行级评审评论（path:line/side/author/body）与 diff 概要（文件数与 +/- 行数），深链指向 Multica issue 与 PR（新窗口）', async () => {
+  it('渲染 verdict、行级评审评论（path:line/side/author/body）与 diff 概要（文件数与 +/- 行数），深链指向外部任务源 issue 与 PR（新窗口）', async () => {
     vi.mocked(getRequirementPRReview).mockResolvedValue(REVIEW)
     const screen = await mount(
       <MergeCard card={card({ kind: 'merge', payload: PAYLOAD })} requirement={REQ} />
@@ -210,7 +210,7 @@ describe('MergeCard 合并卡', () => {
     await expect.element(screen.getByText(/\+87/)).toBeInTheDocument()
     await expect.element(screen.getByText(/-15/)).toBeInTheDocument()
     const issue = screen.getByRole('link', { name: '查看完整时间线' })
-    expect((await issue.element()).getAttribute('href')).toBe(REQ.multica_issue_url)
+    expect((await issue.element()).getAttribute('href')).toBe(REQ.external_issue_url)
     expect((await issue.element()).getAttribute('target')).toBe('_blank')
     const pr = screen.getByRole('link', { name: /PR/ })
     expect((await pr.element()).getAttribute('href')).toBe(REQ.pr_url)
@@ -274,7 +274,7 @@ describe('UpdateCard 兜底卡', () => {
       .element(screen.getByText('进度更新：单元测试全部通过'))
       .toBeInTheDocument()
     const issue = screen.getByRole('link', { name: '查看完整时间线' })
-    expect((await issue.element()).getAttribute('href')).toBe(REQ.multica_issue_url)
+    expect((await issue.element()).getAttribute('href')).toBe(REQ.external_issue_url)
     expect(screen.container.querySelector('button')).toBeNull()
   })
 })
