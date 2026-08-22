@@ -24,11 +24,13 @@ type stubSync struct {
 
 	running bool
 	last    *syncsvc.Result
+	status  syncsvc.Status
 }
 
 func (s *stubSync) SyncNow(context.Context) (syncsvc.Result, error) { return s.res, s.err }
 func (s *stubSync) Running() bool                                   { return s.running }
 func (s *stubSync) Last() *syncsvc.Result                           { return s.last }
+func (s *stubSync) Status() syncsvc.Status                          { return s.status }
 
 // newSyncServer 建一个带（可选）同步装配的测试服务器。
 func newSyncServer(t *testing.T, svc TaskSyncAPI) *httptest.Server {
@@ -68,7 +70,82 @@ func TestTaskSyncUnconfiguredServiceUnavailable(t *testing.T) {
 
 	r, _ = c.Get(ts.URL + "/api/task-sync")
 	require.Equal(t, 503, r.StatusCode)
+	r, _ = c.Get(ts.URL + "/api/task-sync/status")
+	require.Equal(t, 503, r.StatusCode)
 }
+
+// --- GET /api/task-sync/status：冻结契约 lastSyncAt / status / error ---
+
+func TestTaskSyncStatusContract(t *testing.T) {
+	ts := newSyncServer(t, &stubSync{status: syncsvc.Status{
+		Status: syncsvc.StatusSuccess, Error: "",
+	}})
+	c := login(t, ts.URL)
+	r, err := c.Get(ts.URL + "/api/task-sync/status")
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode)
+
+	// 字段名逐字校验：契约由本任务冻结，拼错即破坏前端对接。
+	var body map[string]json.RawMessage
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+	for _, key := range []string{"lastSyncAt", "status", "error"} {
+		require.Contains(t, body, key, "响应必须含字段 %q", key)
+	}
+}
+
+func TestTaskSyncStatusNeverSyncedIsIdle(t *testing.T) {
+	ts := newSyncServer(t, syncsvc.New(&e2eSyncFetch{}, store.NewMemory()))
+	c := login(t, ts.URL)
+	r, err := c.Get(ts.URL + "/api/task-sync/status")
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode)
+	var st syncsvc.Status
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&st))
+	require.Equal(t, syncsvc.StatusIdle, st.Status)
+	require.Nil(t, st.LastSyncAt)
+	require.Empty(t, st.Error)
+}
+
+func TestTaskSyncStatusEndToEndSuccessAndFailure(t *testing.T) {
+	// 成功：同步一轮后 lastSyncAt 更新、status=success。
+	st := store.NewMemory()
+	ts := newSyncServer(t, syncsvc.New(&e2eSyncFetch{
+		projects: []tasksource.Project{{ID: "m-prj-1", Title: "自动闭环"}},
+	}, st))
+	c := login(t, ts.URL)
+	_, err := c.Post(ts.URL+"/api/task-sync", "application/json", nil)
+	require.NoError(t, err)
+
+	r, err := c.Get(ts.URL + "/api/task-sync/status")
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode)
+	var got syncsvc.Status
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+	require.Equal(t, syncsvc.StatusSuccess, got.Status)
+	require.NotNil(t, got.LastSyncAt, "成功后 lastSyncAt 更新")
+	require.Empty(t, got.Error)
+
+	// 失败：上游错误 → POST 502，但服务不崩，status 面如实反映 error。
+	ts2 := newSyncServer(t, syncsvc.New(errFetch{err: errors.New("upstream 500")}, store.NewMemory()))
+	c2 := login(t, ts2.URL)
+	r2, err := c2.Post(ts2.URL+"/api/task-sync", "application/json", nil)
+	require.NoError(t, err)
+	require.Equal(t, 502, r2.StatusCode)
+
+	r3, err := c2.Get(ts2.URL + "/api/task-sync/status")
+	require.NoError(t, err)
+	require.Equal(t, 200, r3.StatusCode, "同步失败后状态接口必须仍可用（服务不崩）")
+	var got2 syncsvc.Status
+	require.NoError(t, json.NewDecoder(r3.Body).Decode(&got2))
+	require.Equal(t, syncsvc.StatusError, got2.Status)
+	require.Contains(t, got2.Error, "upstream 500")
+}
+
+// errFetch 恒失败的拉取面替身。
+type errFetch struct{ err error }
+
+func (f errFetch) ListProjects(context.Context) ([]tasksource.Project, error) { return nil, f.err }
+func (f errFetch) ListIssues(context.Context) ([]tasksource.Issue, error)     { return nil, f.err }
 
 // --- POST 触发：返回本轮 Result；GET：running + last 形状 ---
 

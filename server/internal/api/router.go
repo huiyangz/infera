@@ -126,9 +126,11 @@ func (s *Server) Mux() http.Handler {
 		r.Get("/api/requirements/{id}/pr-review", s.handleRequirementPRReview)
 		r.Get("/api/projects/{id}/merge-policy", s.handleGetMergePolicy)
 		r.Put("/api/projects/{id}/merge-policy", s.handleSetMergePolicy)
-		// 任务同步面（INFERA-80 T03）：POST 触发全量同步 / GET 最近一次结果
+		// 任务同步面（INFERA-80 T03 / INFERA-169）：POST 触发全量同步 /
+		// GET 最近一次结果 / GET status 自动同步状态（冻结契约）
 		r.Post("/api/task-sync", s.handleTaskSyncTrigger)
-		r.Get("/api/task-sync", s.handleTaskSyncStatus)
+		r.Get("/api/task-sync", s.handleTaskSyncState)
+		r.Get("/api/task-sync/status", s.handleTaskSyncStatus)
 	})
 	return r
 }

@@ -89,3 +89,39 @@ func TestAssembleFlowReachesReqservice(t *testing.T) {
 	_, _, err := assembleFlow(nil, fullFlowConfig())
 	require.ErrorContains(t, err, "reqservice: 连接池缺失")
 }
+
+// TestAssembleTaskSyncNotConfigured：同步三键全空 = 未接入（不装配、不报错），
+// main 据此不注入同步服务（同步路由 503）也不启动调度器。
+func TestAssembleTaskSyncNotConfigured(t *testing.T) {
+	svc, sched, err := assembleTaskSync(config.Config{}, nil)
+	require.NoError(t, err)
+	require.Nil(t, svc)
+	require.Nil(t, sched)
+}
+
+// TestAssembleTaskSyncFullConfig：三键齐 → 同步服务 + 自动同步调度器
+// （间隔取 cfg.TaskSyncInterval，含 0=仅启动轮）。
+func TestAssembleTaskSyncFullConfig(t *testing.T) {
+	base := fullFlowConfig()
+	for name, interval := range map[string]time.Duration{
+		"周期轮询":  5 * time.Minute,
+		"0 仅启动轮": 0,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			cfg.TaskSyncInterval = interval
+			svc, sched, err := assembleTaskSync(cfg, nil)
+			require.NoError(t, err)
+			require.NotNil(t, svc)
+			require.NotNil(t, sched)
+		})
+	}
+}
+
+// TestAssembleTaskSyncMisconfig：半配（有 URL 无 token）拿到构造器显式报错。
+func TestAssembleTaskSyncMisconfig(t *testing.T) {
+	cfg := fullFlowConfig()
+	cfg.TaskSyncToken = ""
+	_, _, err := assembleTaskSync(cfg, nil)
+	require.ErrorContains(t, err, "Token")
+}

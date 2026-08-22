@@ -10,8 +10,26 @@ import (
 	"github.com/tokfinity/infera/internal/gatepoll"
 	"github.com/tokfinity/infera/internal/github"
 	"github.com/tokfinity/infera/internal/reqservice"
+	"github.com/tokfinity/infera/internal/store"
+	"github.com/tokfinity/infera/internal/syncsvc"
 	"github.com/tokfinity/infera/internal/tasksource"
 )
+
+// assembleTaskSync 装配任务同步（INFERA-169）：凭据三键齐 → client + 同步
+// 服务 + 自动同步调度器（启动即同步一轮，之后按 cfg.TaskSyncInterval 周期
+// 轮询；0 = 仅启动轮）。三键全空 = 未接入，返回双 nil 无错；半配交给
+// tasksource.New 显式报错（与 assembleFlow 同一组键，错误更早暴露）。
+func assembleTaskSync(cfg config.Config, st store.Store) (*syncsvc.Service, *syncsvc.Scheduler, error) {
+	if cfg.TaskSyncServerURL == "" && cfg.TaskSyncToken == "" && cfg.TaskSyncWorkspaceID == "" {
+		return nil, nil, nil
+	}
+	client, err := tasksource.New(cfg.TaskSyncServerURL, cfg.TaskSyncToken, cfg.TaskSyncWorkspaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	svc := syncsvc.New(client, st)
+	return svc, syncsvc.NewScheduler(svc, cfg.TaskSyncInterval), nil
+}
 
 // flowConfigured 报告是否尝试接入需求流转：全部流转键为空 = 未接入
 // （不装配、需求路由 503、轮询器不启动——裸开发启动不受影响）；任一键
