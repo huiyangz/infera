@@ -46,11 +46,17 @@ type TaskRun struct {
 
 // CreateIssueInput 是 POST /api/issues 的载荷面；Status 传 "backlog"
 // 不触发任何 run（spike 实证），指派时再置 todo 唤醒 agent。
+// Priority/Assignee* 是创建载荷扩展面（L202608230412-1-T01，本地 capture
+// 实证——官方 CLI `issue create --priority --assignee-id` 的同一载荷形状）；
+// 内联指派 + status=todo 由服务端入队该 agent 的 run（平台文档语义）。
 type CreateIssueInput struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Status      string `json:"status,omitempty"`
-	ProjectID   string `json:"project_id,omitempty"` // 固定 project（FR-2 项目固定）；空则整个省略
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Status       string `json:"status,omitempty"`
+	ProjectID    string `json:"project_id,omitempty"`    // 固定 project（FR-2 项目固定）；空则整个省略
+	Priority     string `json:"priority,omitempty"`      // urgent/high/medium/low/none；空则整个省略
+	AssigneeType string `json:"assignee_type,omitempty"` // 负责人类型（agent|member|squad）
+	AssigneeID   string `json:"assignee_id,omitempty"`   // 负责人 id；与 AssigneeType 成对
 }
 
 // CreateIssue 创建 issue（POST /api/issues）。

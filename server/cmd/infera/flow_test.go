@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tokfinity/infera/internal/config"
+	"github.com/tokfinity/infera/internal/store"
 )
 
 // fullFlowConfig 返回完整接入配置（真实值形态，非占位）：tasksource 三键 +
@@ -93,10 +94,11 @@ func TestAssembleFlowReachesReqservice(t *testing.T) {
 // TestAssembleTaskSyncNotConfigured：同步三键全空 = 未接入（不装配、不报错），
 // main 据此不注入同步服务（同步路由 503）也不启动调度器。
 func TestAssembleTaskSyncNotConfigured(t *testing.T) {
-	svc, sched, err := assembleTaskSync(config.Config{}, nil)
+	svc, sched, creator, err := assembleTaskSync(config.Config{}, nil)
 	require.NoError(t, err)
 	require.Nil(t, svc)
 	require.Nil(t, sched)
+	require.Nil(t, creator)
 }
 
 // TestAssembleTaskSyncFullConfig：三键齐 → 同步服务 + 自动同步调度器
@@ -104,13 +106,13 @@ func TestAssembleTaskSyncNotConfigured(t *testing.T) {
 func TestAssembleTaskSyncFullConfig(t *testing.T) {
 	base := fullFlowConfig()
 	for name, interval := range map[string]time.Duration{
-		"周期轮询":  5 * time.Minute,
+		"周期轮询":   5 * time.Minute,
 		"0 仅启动轮": 0,
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := base
 			cfg.TaskSyncInterval = interval
-			svc, sched, err := assembleTaskSync(cfg, nil)
+			svc, sched, _, err := assembleTaskSync(cfg, store.NewMemory())
 			require.NoError(t, err)
 			require.NotNil(t, svc)
 			require.NotNil(t, sched)
@@ -122,6 +124,22 @@ func TestAssembleTaskSyncFullConfig(t *testing.T) {
 func TestAssembleTaskSyncMisconfig(t *testing.T) {
 	cfg := fullFlowConfig()
 	cfg.TaskSyncToken = ""
-	_, _, err := assembleTaskSync(cfg, nil)
+	_, _, _, err := assembleTaskSync(cfg, nil)
 	require.ErrorContains(t, err, "Token")
+}
+
+// TestAssembleTaskSyncCreator：Tech Lead 已配置 → 创建编排器随同步装配一并
+// 构造（main 注入 api，创建端点可用）；未配置 Tech Lead → creator 为 nil
+// （同步面不受影响，创建端点 503）。
+func TestAssembleTaskSyncCreator(t *testing.T) {
+	cfg := fullFlowConfig()
+	svc, _, creator, err := assembleTaskSync(cfg, store.NewMemory())
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.NotNil(t, creator, "Tech Lead 已配置必须装配创建编排器")
+
+	cfg.TaskSyncTechLeadAgentID = ""
+	_, _, creator, err = assembleTaskSync(cfg, store.NewMemory())
+	require.NoError(t, err)
+	require.Nil(t, creator, "未配置 Tech Lead 不装配创建编排器（端点 503）")
 }

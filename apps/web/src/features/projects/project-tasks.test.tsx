@@ -13,9 +13,15 @@ import {
 } from 'vitest'
 import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
-import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
-import type { Project, TaskChild, TaskGroupRow } from '@/lib/infera-types'
+import { getProject, listProjectTaskGroups, listProjects } from '@/lib/infera-api'
+import type {
+  Delivery,
+  Project,
+  TaskChild,
+  TaskGroupRow,
+} from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { createProjectRequirement } from './api'
 import { ProjectTasks } from './project-tasks'
 
 vi.mock('@/lib/infera-api', async (importOriginal) => {
@@ -24,8 +30,21 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     ...actual,
     getProject: vi.fn(),
     listProjectTaskGroups: vi.fn(),
+    listProjects: vi.fn(),
   }
 })
+
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>()
+  return { ...actual, createProjectRequirement: vi.fn() }
+})
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
@@ -559,11 +578,17 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       .toBeInTheDocument()
   })
 
-  it('界面文案不出现「需求」', async () => {
+  it('任务内容文案不出现「需求」（唯一例外：新建需求入口按钮）', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '本地任务')
 
-    expect(await screen.getByText(/需求/).query()).toBeNull()
+    // 任务行/阶段/状态文案仍统一为「任务」口径；「需求」只允许出现在
+    // 创建入口按钮（INFERA-178 新增）上——全页唯一命中即该按钮
+    const hits = await screen.getByText(/需求/).all()
+    expect(hits).toHaveLength(1)
+    await expect
+      .element(screen.getByRole('button', { name: '新建需求' }))
+      .toBeInTheDocument()
   })
 
   it('面包屑回链项目详情', async () => {
@@ -657,5 +682,92 @@ describe('ProjectTasks 左右分栏 master-detail（INFERA-173：左父任务列
     expect(
       await screen.getByRole('button', { name: /本地任务|同步父任务/ }).query()
     ).toBeNull()
+  })
+})
+
+describe('ProjectTasks 新建需求入口（INFERA-178：与项目详情页共享对话框）', () => {
+  /** 创建成功响应（同步侧 Delivery 形状，契约 201） */
+  function makeCreatedDelivery(): Delivery {
+    return {
+      id: 'd-new',
+      project_id: 'p1',
+      title: '登录页改版',
+      description: '',
+      status: 'queued',
+      current_stage: '',
+      pending_gate: null,
+      fail_count: 0,
+      created_at: '2026-08-23T00:00:00Z',
+      updated_at: '2026-08-23T00:00:00Z',
+      external_issue_id: 'mi-9',
+      external_issue_key: 'INFERA-99',
+      assignee: 'agent:tech-lead',
+      priority: '',
+      external_synced_at: '2026-08-23T00:00:00Z',
+      parent_id: '',
+      wave: 0,
+      split_mode: false,
+      merge_state: '',
+      complexity: '',
+    }
+  }
+
+  it('页头「新建需求」按钮打开共享创建对话框（默认项目=当前项目）', async () => {
+    vi.mocked(listProjects).mockResolvedValue([makeProject()])
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    await screen.getByRole('button', { name: '新建需求' }).click()
+    await expect.element(screen.getByRole('dialog')).toBeInTheDocument()
+    await expect
+      .element(screen.getByLabelText('标题'))
+      .toBeInTheDocument()
+    const project = (await screen
+      .getByRole('combobox', { name: '项目', exact: true })
+      .element())!
+    expect(project.textContent).toContain('演示项目')
+  })
+
+  it('创建成功后对话框关闭、task-groups 刷新出新任务卡', async () => {
+    vi.mocked(listProjects).mockResolvedValue([makeProject()])
+    vi.mocked(createProjectRequirement).mockResolvedValue(makeCreatedDelivery())
+    // 首拉为空（空态）；创建成功失效缓存后的重拉给默认值（新任务）
+    vi.mocked(listProjectTaskGroups).mockResolvedValueOnce([])
+    const screen = await renderProjectTasks(
+      makeProject(),
+      [
+        makeGroup({
+          id: 'g-new',
+          title: '登录页改版',
+          status: 'queued',
+          current_stage: '',
+          external_issue_id: 'mi-9',
+          external_issue_key: 'INFERA-99',
+        }),
+      ]
+    )
+    await expect
+      .element(screen.getByText('还没有任务'))
+      .toBeInTheDocument()
+
+    await screen.getByRole('button', { name: '新建需求' }).click()
+    await screen.getByLabelText('标题').fill('登录页改版')
+    await screen.getByRole('button', { name: '创建需求' }).click()
+
+    // 缓存失效 → 重拉：空态消失，新任务出现在左栏列表（父任务条目为按钮）
+    await expect
+      .element(screen.getByRole('button', { name: /登录页改版/ }))
+      .toBeInTheDocument()
+    expect(
+      await screen.getByText('还没有任务', { exact: true }).query()
+    ).toBeNull()
+    expect(vi.mocked(createProjectRequirement)).toHaveBeenCalledWith('p1', {
+      title: '登录页改版',
+      description: '',
+      status: 'backlog',
+      priority: 'none',
+      auto_merge: false,
+      agent_id: '',
+    })
   })
 })

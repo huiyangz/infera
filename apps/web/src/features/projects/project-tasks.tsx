@@ -25,6 +25,7 @@ import { assigneeLabel } from '@/features/task-sync/display'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
+import { CreateRequirementDialog } from './requirement-create-dialog'
 
 /**
  * 项目任务列表页（INFERA-173 左右分栏 master-detail）：左栏为父级任务列表
@@ -56,25 +57,28 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
   return (
     <>
       <Header fixed>
-        <div className='flex w-full min-w-0 flex-col gap-1'>
-          <div className='flex items-center gap-2 text-sm text-muted-foreground'>
-            <Link to='/' className='hover:text-foreground'>
-              项目
-            </Link>
-            <span>/</span>
-            <Link
-              to='/projects/$id'
-              params={{ id: projectId }}
-              className='truncate hover:text-foreground'
-            >
-              {proj?.name ?? <Skeleton className='h-4 w-24' />}
-            </Link>
-            <span>/</span>
-            <span className='truncate font-medium text-foreground'>任务</span>
+        <div className='flex w-full min-w-0 items-start justify-between gap-4'>
+          <div className='flex min-w-0 flex-col gap-1'>
+            <div className='flex items-center gap-2 text-sm text-muted-foreground'>
+              <Link to='/' className='hover:text-foreground'>
+                项目
+              </Link>
+              <span>/</span>
+              <Link
+                to='/projects/$id'
+                params={{ id: projectId }}
+                className='truncate hover:text-foreground'
+              >
+                {proj?.name ?? <Skeleton className='h-4 w-24' />}
+              </Link>
+              <span>/</span>
+              <span className='truncate font-medium text-foreground'>任务</span>
+            </div>
+            <p className='text-sm text-muted-foreground'>
+              本项目的父任务与子任务，子任务按阶段分组（只读）
+            </p>
           </div>
-          <p className='text-sm text-muted-foreground'>
-            本项目的父任务与子任务，子任务按阶段分组（只读）
-          </p>
+          <CreateRequirementDialog projectId={projectId} />
         </div>
       </Header>
 
