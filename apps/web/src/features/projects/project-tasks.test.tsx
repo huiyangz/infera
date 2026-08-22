@@ -269,6 +269,32 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02：子任务按阶�
     }
   })
 
+  it('INFERA-145 返工: 四态图标 class 逐属性钉死（尺寸/单色/进行中 spin），重构前后渲染一致', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '第二批阻塞任务')
+
+    // role='img' + aria-label 已由 AC1-d 覆盖；这里钉 class 全串
+    // （含 lucide 自身前缀——连图标组件名一并钉死）
+    const cases: Array<[string, string]> = [
+      ['已完成', 'lucide lucide-circle-check size-3.5 shrink-0 text-foreground'],
+      [
+        '进行中',
+        'lucide lucide-loader-circle size-3.5 shrink-0 animate-spin text-foreground',
+      ],
+      ['已阻塞', 'lucide lucide-circle-alert size-3.5 shrink-0 text-foreground'],
+      [
+        '未启动',
+        'lucide lucide-circle-dashed size-3.5 shrink-0 text-muted-foreground',
+      ],
+    ]
+    for (const [label, cls] of cases) {
+      const el = (await screen
+        .getByRole('img', { name: label, exact: true })
+        .element())!
+      expect(el.getAttribute('class')).toBe(cls)
+    }
+  })
+
   it('AC1-e: 子任务行单行展示：粗体 issue key + 标题（对齐参考图行式）', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '同步子任务甲')

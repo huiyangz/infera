@@ -235,4 +235,17 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
       .element(screen.getByText('（无补充描述）', { exact: true }))
       .toBeInTheDocument()
   })
+
+  it('INFERA-145 返工: 镜像任务 current_stage 为空串时阶段位给占位，不留悬空「阶段」标签', async () => {
+    // 同步镜像任务无 current_stage：stageLabel('') 为空串，旧版元信息行渲染成「阶段 · 创建 …」
+    const screen = await renderDetail(
+      makeDelivery({ current_stage: '', multica_issue_key: 'INFERA-77' })
+    )
+    await waitForLoad(screen)
+
+    // 对齐 project-tasks 的 `stageLabel(...) || '—'` 占位写法：阶段位显示占位符
+    await expect
+      .element(screen.getByText('阶段 — ·', { exact: false }))
+      .toBeInTheDocument()
+  })
 })

@@ -309,7 +309,8 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
               {delivery.title}
             </CardTitle>
             <CardDescription>
-              阶段 {stageLabel(delivery.current_stage)} · 创建{' '}
+              {/* 镜像任务无 current_stage：占位符顶替，不留悬空「阶段」标签（对齐项目任务页写法） */}
+              阶段 {stageLabel(delivery.current_stage) || '—'} · 创建{' '}
               {dateTime(delivery.created_at)} · 更新{' '}
               {dateTime(delivery.updated_at)}
             </CardDescription>
