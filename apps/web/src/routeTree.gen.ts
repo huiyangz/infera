@@ -23,6 +23,7 @@ import { Route as AuthenticatedRequirementsIdRouteImport } from './routes/_authe
 import { Route as AuthenticatedProjectsIdRouteImport } from './routes/_authenticated/projects/$id'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedDeliveriesIdRouteImport } from './routes/_authenticated/deliveries/$id'
+import { Route as AuthenticatedProjectsIdIndexRouteImport } from './routes/_authenticated/projects/$id/index'
 import { Route as AuthenticatedDeliveriesIdIndexRouteImport } from './routes/_authenticated/deliveries/$id/index'
 import { Route as AuthenticatedProjectsIdTasksRouteImport } from './routes/_authenticated/projects/$id/tasks'
 import { Route as AuthenticatedDeliveriesIdGateRouteImport } from './routes/_authenticated/deliveries/$id/gate'
@@ -100,6 +101,12 @@ const AuthenticatedDeliveriesIdRoute =
     path: '/deliveries/$id',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedProjectsIdIndexRoute =
+  AuthenticatedProjectsIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedProjectsIdRoute,
+  } as any)
 const AuthenticatedDeliveriesIdIndexRoute =
   AuthenticatedDeliveriesIdIndexRouteImport.update({
     id: '/',
@@ -136,6 +143,7 @@ export interface FileRoutesByFullPath {
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
   '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
+  '/projects/$id/': typeof AuthenticatedProjectsIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/sign-in': typeof authSignInRoute
@@ -147,12 +155,12 @@ export interface FileRoutesByTo {
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
-  '/projects/$id': typeof AuthenticatedProjectsIdRouteWithChildren
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/requirements': typeof AuthenticatedRequirementsIndexRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
   '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdIndexRoute
+  '/projects/$id': typeof AuthenticatedProjectsIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -173,6 +181,7 @@ export interface FileRoutesById {
   '/_authenticated/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
   '/_authenticated/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/_authenticated/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
+  '/_authenticated/projects/$id/': typeof AuthenticatedProjectsIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -193,6 +202,7 @@ export interface FileRouteTypes {
     | '/deliveries/$id/gate'
     | '/projects/$id/tasks'
     | '/deliveries/$id/'
+    | '/projects/$id/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/sign-in'
@@ -204,12 +214,12 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/'
     | '/errors/$error'
-    | '/projects/$id'
     | '/requirements/$id'
     | '/requirements'
     | '/deliveries/$id/gate'
     | '/projects/$id/tasks'
     | '/deliveries/$id'
+    | '/projects/$id'
   id:
     | '__root__'
     | '/_authenticated'
@@ -229,6 +239,7 @@ export interface FileRouteTypes {
     | '/_authenticated/deliveries/$id/gate'
     | '/_authenticated/projects/$id/tasks'
     | '/_authenticated/deliveries/$id/'
+    | '/_authenticated/projects/$id/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -341,6 +352,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDeliveriesIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/projects/$id/': {
+      id: '/_authenticated/projects/$id/'
+      path: '/'
+      fullPath: '/projects/$id/'
+      preLoaderRoute: typeof AuthenticatedProjectsIdIndexRouteImport
+      parentRoute: typeof AuthenticatedProjectsIdRoute
+    }
     '/_authenticated/deliveries/$id/': {
       id: '/_authenticated/deliveries/$id/'
       path: '/'
@@ -383,11 +401,13 @@ const AuthenticatedDeliveriesIdRouteWithChildren =
 
 interface AuthenticatedProjectsIdRouteChildren {
   AuthenticatedProjectsIdTasksRoute: typeof AuthenticatedProjectsIdTasksRoute
+  AuthenticatedProjectsIdIndexRoute: typeof AuthenticatedProjectsIdIndexRoute
 }
 
 const AuthenticatedProjectsIdRouteChildren: AuthenticatedProjectsIdRouteChildren =
   {
     AuthenticatedProjectsIdTasksRoute: AuthenticatedProjectsIdTasksRoute,
+    AuthenticatedProjectsIdIndexRoute: AuthenticatedProjectsIdIndexRoute,
   }
 
 const AuthenticatedProjectsIdRouteWithChildren =

@@ -11,7 +11,7 @@ import {
 
 /** 成功反馈文案：导入计数，有跳过才提跳过（smoke 单 / 无项目单等） */
 function summary(r: MulticaSyncResult): string {
-  let s = `同步完成：导入 ${r.projects_imported} 个项目 / ${r.issues_imported} 条需求`
+  let s = `同步完成：导入 ${r.projects_imported} 个项目 / ${r.issues_imported} 条任务`
   if (r.issues_skipped > 0) s += `，跳过 ${r.issues_skipped} 条`
   return s
 }
@@ -51,7 +51,7 @@ export function MulticaSyncButton() {
   const hint = running
     ? '同步进行中…'
     : last
-      ? `上次同步 ${timeAgo(last.finished_at)} · 导入 ${last.projects_imported} 个项目 / ${last.issues_imported} 条需求`
+      ? `上次同步 ${timeAgo(last.finished_at)} · 导入 ${last.projects_imported} 个项目 / ${last.issues_imported} 条任务`
       : '从未同步'
 
   return (

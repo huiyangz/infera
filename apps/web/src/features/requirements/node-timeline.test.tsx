@@ -30,7 +30,7 @@ describe('NodeTimeline 大节点时间线（4+1）', () => {
   it('in_progress：此前节点 done、当前 active、其后 upcoming（节点推进）', async () => {
     const screen = await render(<NodeTimeline node='in_progress' />)
     await expect.element(screen.getByText('执行中')).toBeInTheDocument()
-    expect(await stateOf(screen, '需求受理')).toBe('done')
+    expect(await stateOf(screen, '任务受理')).toBe('done')
     expect(await stateOf(screen, '已派发')).toBe('done')
     expect(await stateOf(screen, '执行中')).toBe('active')
     expect(await stateOf(screen, '待验收')).toBe('upcoming')
@@ -40,7 +40,7 @@ describe('NodeTimeline 大节点时间线（4+1）', () => {
   it('delivered：五个节点全部 done', async () => {
     const screen = await render(<NodeTimeline node='delivered' />)
     await expect.element(screen.getByText('已交付')).toBeInTheDocument()
-    for (const label of ['需求受理', '已派发', '执行中', '待验收', '已交付']) {
+    for (const label of ['任务受理', '已派发', '执行中', '待验收', '已交付']) {
       expect(await stateOf(screen, label)).toBe('done')
     }
   })

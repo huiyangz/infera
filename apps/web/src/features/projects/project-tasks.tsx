@@ -2,8 +2,13 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronDown, ChevronRight, Inbox } from 'lucide-react'
-import { getProject, listProjectDeliveries } from '@/lib/infera-api'
-import { type Delivery, stageLabel } from '@/lib/infera-types'
+import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
+import {
+  type TaskChild,
+  type TaskGroupRow,
+  type TaskStageGroup,
+  stageLabel,
+} from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { assigneeLabel } from '@/features/multica-sync/display'
@@ -12,25 +17,22 @@ import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
 
 /**
- * 项目任务列表页（L202608221241-2-T04）：以父子结构只读展示项目下的
- * 需求与任务（父需求 + 子任务，沿用 GET /api/projects/{id}/deliveries），
- * 每条可点击进入需求详情；不提供任何创建/审批等操作。
+ * 项目任务列表页（L202608221704-2-T02）：父任务卡片 + 子任务按阶段分组，
+ * Multica 式父子展示。唯一数据源 GET /api/projects/{id}/task-groups
+ * （契约冻结于 server/internal/api/taskgroups.go）；只读，每条可点击进入
+ * 任务详情。口径统一为「任务/父任务/子任务」，界面不出现「需求」。
  */
 export function ProjectTasks({ projectId }: { projectId: string }) {
   const { data: proj } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => getProject(projectId),
   })
-  const { data: deliveries, isLoading } = useQuery({
-    queryKey: ['project-deliveries', projectId],
-    queryFn: () => listProjectDeliveries(projectId),
+  const { data: groups, isLoading } = useQuery({
+    queryKey: ['project-task-groups', projectId],
+    queryFn: () => listProjectTaskGroups(projectId),
   })
-  // 拆分父子树的折叠态（per-parent，默认展开）
+  // 每个父任务卡片的子任务折叠态（默认展开）
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-
-  const parents = (deliveries ?? []).filter((d) => !d.parent_id)
-  const childrenOf = (pid: string) =>
-    (deliveries ?? []).filter((d) => d.parent_id === pid)
 
   return (
     <>
@@ -52,175 +54,206 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
             <span className='truncate font-medium text-foreground'>任务</span>
           </div>
           <p className='text-sm text-muted-foreground'>
-            本项目的父需求与子任务（只读）
+            本项目的父任务与子任务，子任务按阶段分组（只读）
           </p>
         </div>
       </Header>
 
-      <div className='mx-auto w-full max-w-4xl p-6'>
+      <div className='mx-auto w-full max-w-4xl space-y-4 p-6'>
         {isLoading ? (
-          <div className='space-y-2'>
-            <Skeleton className='h-14 w-full' />
-            <Skeleton className='h-14 w-full' />
+          <div className='space-y-4'>
+            <Skeleton className='h-24 w-full rounded-lg' />
+            <Skeleton className='h-24 w-full rounded-lg' />
           </div>
-        ) : !parents.length ? (
+        ) : !groups?.length ? (
           <div className='flex flex-col items-center gap-2 p-16 text-center'>
             <Inbox className='size-5 text-muted-foreground' />
             <p className='text-sm text-muted-foreground'>还没有任务</p>
           </div>
         ) : (
-          <div className='border-t'>
-            {parents.map((p) => {
-              const kids = childrenOf(p.id)
-              const isCollapsed = collapsed.has(p.id)
-              return (
-                <div key={p.id}>
-                  <TaskRow
-                    d={p}
-                    childrenDone={
-                      kids.length
-                        ? `${kids.filter((c) => c.status === 'completed').length}/${kids.length}`
-                        : undefined
-                    }
-                    conflict={p.split_mode && p.merge_state === 'conflict'}
-                    expandable={kids.length > 0}
-                    expanded={!isCollapsed}
-                    onToggleExpand={
-                      kids.length
-                        ? () =>
-                            setCollapsed((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(p.id)) next.delete(p.id)
-                              else next.add(p.id)
-                              return next
-                            })
-                        : undefined
-                    }
-                  />
-                  {kids.length > 0 &&
-                    !isCollapsed &&
-                    kids.map((c) => <ChildTaskRow key={c.id} d={c} />)}
-                </div>
-              )
-            })}
-          </div>
+          groups.map((g) => {
+            const isCollapsed = collapsed.has(g.id)
+            return (
+              <ParentTaskCard
+                key={g.id}
+                g={g}
+                expanded={!isCollapsed}
+                onToggle={
+                  g.child_total
+                    ? () =>
+                        setCollapsed((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(g.id)) next.delete(g.id)
+                          else next.add(g.id)
+                          return next
+                        })
+                    : undefined
+                }
+              />
+            )
+          })
         )}
       </div>
     </>
   )
 }
 
-function TaskRow({
-  d,
-  childrenDone,
-  conflict,
-  expandable,
-  expanded,
-  onToggleExpand,
-}: {
-  d: Delivery
-  /** 拆分父：「已完成子任务/全部子任务」 */
-  childrenDone?: string
-  conflict?: boolean
-  expandable?: boolean
-  expanded?: boolean
-  onToggleExpand?: () => void
-}) {
-  const assignee = assigneeLabel(d.assignee)
+/** 来源标识小徽：multica 同步行专用 */
+function MulticaChip() {
   return (
-    <div className='relative block w-full border-b transition-colors hover:bg-accent/50'>
-      <div className='flex items-start'>
-        {expandable ? (
-          <button
-            type='button'
-            aria-label={expanded ? '收起子任务' : '展开子任务'}
-            className='flex size-7 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground'
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggleExpand?.()
-            }}
-          >
-            {expanded ? (
-              <ChevronDown className='size-3.5' />
-            ) : (
-              <ChevronRight className='size-3.5' />
-            )}
-          </button>
-        ) : (
-          <span className='w-7 shrink-0' />
-        )}
-        <Link
-          to='/deliveries/$id'
-          params={{ id: d.id }}
-          className='min-w-0 flex-1 py-2.5 pe-4 text-start'
-        >
-          <span className='flex items-center justify-between gap-2'>
-            <span className='flex min-w-0 items-center gap-1.5'>
-              {d.multica_issue_id && (
-                <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-                  Multica
-                </span>
-              )}
-              <span className='truncate text-sm font-medium'>{d.title}</span>
-            </span>
-            <StatusBadge status={d.status} />
-          </span>
-          <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
-            {/* 同步镜像无 current_stage：issue key 顶替阶段位展示 */}
-            <span>{stageLabel(d.current_stage) || d.multica_issue_key}</span>
-            {assignee && <span>· {assignee}</span>}
-            {childrenDone && <span>· 子任务 {childrenDone} 完成</span>}
-            <span className='ms-auto tabular-nums'>{timeAgo(d.updated_at)}</span>
-          </span>
-          <span className='mt-1.5 flex items-center gap-1.5'>
-            {d.pending_gate && (
-              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
-                待审批
-              </span>
-            )}
-            {conflict && (
-              <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
-                合并冲突
-              </span>
-            )}
-          </span>
-        </Link>
-      </div>
-    </div>
+    <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
+      Multica
+    </span>
   )
 }
 
-/** 子任务行：缩进 + 「子」chip，样式更轻。 */
-function ChildTaskRow({ d }: { d: Delivery }) {
+/**
+ * 父任务卡片：卡片头（标题链接 + 状态徽标 + 阶段/负责人/时间）+
+ * 子任务区（进度条 + 按阶段分组的子任务列表），可整卡收起子任务。
+ */
+function ParentTaskCard({
+  g,
+  expanded,
+  onToggle,
+}: {
+  g: TaskGroupRow
+  expanded: boolean
+  onToggle?: () => void
+}) {
+  const assignee = assigneeLabel(g.assignee)
+  const hasChildren = g.child_total > 0
+  return (
+    <article className='rounded-lg border bg-card'>
+      <div className='flex items-start'>
+        {hasChildren ? (
+          <button
+            type='button'
+            aria-label={expanded ? '收起子任务' : '展开子任务'}
+            className='flex size-9 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground'
+            onClick={onToggle}
+          >
+            {expanded ? (
+              <ChevronDown className='size-4' />
+            ) : (
+              <ChevronRight className='size-4' />
+            )}
+          </button>
+        ) : (
+          <span className='w-9 shrink-0' />
+        )}
+        <Link
+          to='/deliveries/$id'
+          params={{ id: g.id }}
+          className='min-w-0 flex-1 py-3 pe-4 text-start'
+        >
+          <span className='flex items-center justify-between gap-2'>
+            <span className='flex min-w-0 items-center gap-1.5'>
+              {g.multica_issue_id && <MulticaChip />}
+              <span className='truncate text-sm font-medium'>{g.title}</span>
+            </span>
+            <StatusBadge status={g.status} />
+          </span>
+          <span className='mt-1 flex items-center gap-2 text-xs text-muted-foreground'>
+            {/* 同步镜像无 current_stage：issue key 顶替阶段位展示 */}
+            <span>
+              {stageLabel(g.current_stage) || g.multica_issue_key || '—'}
+            </span>
+            {assignee && <span>· {assignee}</span>}
+            <span className='ms-auto tabular-nums'>
+              {timeAgo(g.updated_at)}
+            </span>
+          </span>
+          {(g.pending_gate || (g.split_mode && g.merge_state === 'conflict')) && (
+            <span className='mt-1.5 flex items-center gap-1.5'>
+              {g.pending_gate && (
+                <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
+                  待审批
+                </span>
+              )}
+              {g.split_mode && g.merge_state === 'conflict' && (
+                <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
+                  合并冲突
+                </span>
+              )}
+            </span>
+          )}
+        </Link>
+      </div>
+
+      {hasChildren && (
+        <div className='border-t px-4 py-3'>
+          {/* 子任务进度：hairline 轨道 + 墨色填充（DESIGN.md 单色语言） */}
+          <div className='flex items-center gap-3'>
+            <div className='h-1 min-w-16 flex-1 overflow-hidden rounded-full bg-muted'>
+              <div
+                className='h-full rounded-full bg-foreground'
+                style={{
+                  width: `${Math.round((g.child_completed / g.child_total) * 100)}%`,
+                }}
+              />
+            </div>
+            <span className='shrink-0 text-xs tabular-nums text-muted-foreground'>
+              子任务 {g.child_completed}/{g.child_total}
+            </span>
+          </div>
+
+          {expanded &&
+            g.stages.map((s) => <StageGroup key={s.stage} group={s} />)}
+        </div>
+      )}
+    </article>
+  )
+}
+
+/** 一个阶段（批次）组：组头（阶段号 + 任务计数）+ 组内子任务行列表 */
+function StageGroup({ group }: { group: TaskStageGroup }) {
+  return (
+    <section className='mt-3'>
+      <h4 className='text-[11px] font-medium tracking-wide text-muted-foreground'>
+        阶段 {group.stage} · {group.tasks.length} 个子任务
+      </h4>
+      <ul className='mt-1.5 overflow-hidden rounded-md border'>
+        {group.tasks.map((t) => (
+          <li key={t.id}>
+            <ChildTaskRow d={t} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/** 子任务行：列表行式（hairline 分隔），状态徽标 + 阶段位 + 时间 */
+function ChildTaskRow({ d }: { d: TaskChild }) {
+  const assignee = assigneeLabel(d.assignee)
   return (
     <Link
       to='/deliveries/$id'
       params={{ id: d.id }}
       className={cn(
-        'relative block w-full border-b px-4 py-2 pl-10 text-start transition-colors hover:bg-accent/50',
+        'flex items-center justify-between gap-2 border-b px-3 py-2 text-start',
+        'transition-colors last:border-b-0 hover:bg-accent/50'
       )}
     >
-      <span className='flex items-center justify-between gap-2'>
+      <span className='flex min-w-0 flex-col gap-0.5'>
         <span className='flex min-w-0 items-center gap-1.5'>
-          <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-            子
-          </span>
-          {d.multica_issue_id && (
-            <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-              Multica
-            </span>
-          )}
+          {d.multica_issue_id && <MulticaChip />}
           <span className='truncate text-xs font-medium'>{d.title}</span>
         </span>
-        <StatusBadge status={d.status} />
-      </span>
-      <span className='mt-1 flex items-center justify-between text-[11px] text-muted-foreground'>
-        <span>
-          {d.current_stage
-            ? `批次 ${d.wave || 1} · ${stageLabel(d.current_stage)}`
-            : d.multica_issue_key}
+        <span className='flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground'>
+          {/* 有 current_stage 展示阶段 label；同步镜像以 issue key 顶替 */}
+          <span>
+            {stageLabel(d.current_stage) || d.multica_issue_key || '—'}
+          </span>
+          {d.pending_gate && <span>· 待审批</span>}
+          {assignee && <span className='truncate'>· {assignee}</span>}
         </span>
-        <span className='tabular-nums'>{timeAgo(d.updated_at)}</span>
+      </span>
+      <span className='flex shrink-0 items-center gap-2'>
+        <span className='text-[11px] tabular-nums text-muted-foreground'>
+          {timeAgo(d.updated_at)}
+        </span>
+        <StatusBadge status={d.status} />
       </span>
     </Link>
   )

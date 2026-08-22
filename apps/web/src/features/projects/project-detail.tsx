@@ -137,7 +137,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             <Card className='gap-1 py-5'>
               <CardHeader className='px-5'>
                 <CardTitle className='text-sm font-normal text-muted-foreground'>
-                  需求总数
+                  任务总数
                 </CardTitle>
               </CardHeader>
               <CardContent className='px-5'>
@@ -244,7 +244,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
             </CardHeader>
             <CardContent className='px-5'>
               <p className='flex items-center gap-1 text-sm text-muted-foreground'>
-                以父子结构查看本项目的父需求与子任务
+                以父子结构查看本项目的父任务与子任务
                 <ChevronRight className='size-4' />
               </p>
             </CardContent>

@@ -145,9 +145,9 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     const screen = await renderProjectDetail(makeProject(), makeStats())
     await waitForProject(screen)
 
-    // 头部数字：需求总数 / 待决策 / 已交付
+    // 头部数字：任务总数 / 待决策 / 已交付
     await expect
-      .element(screen.getByText('需求总数', { exact: true }))
+      .element(screen.getByText('任务总数', { exact: true }))
       .toBeInTheDocument()
     await expect
       .element(screen.getByText('待决策', { exact: true }))

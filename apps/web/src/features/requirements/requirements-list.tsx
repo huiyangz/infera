@@ -98,7 +98,7 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
         priority: '',
         acceptors: '',
       })
-      toast.success(`需求「${r.title}」已派发`)
+      toast.success(`任务「${r.title}」已派发`)
       qc.invalidateQueries({ queryKey: ['requirements'] })
     },
     onError: (e: Error) => toast.error(e.message),
@@ -111,9 +111,9 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
       <Header fixed>
         <div className='flex w-full items-center justify-between'>
           <div className='flex flex-col gap-1'>
-            <h1 className='text-lg font-semibold tracking-[-0.2px]'>需求</h1>
+            <h1 className='text-lg font-semibold tracking-[-0.2px]'>任务</h1>
             <p className='text-sm text-muted-foreground'>
-              在这里发起需求并跟进交付：批准计划、决策异常、确认合并
+              在这里发起任务并跟进交付：批准计划、决策异常、确认合并
             </p>
           </div>
           <div className='flex items-center gap-1'>
@@ -121,12 +121,12 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button size='lg'>
-                  <Plus /> 发起需求
+                  <Plus /> 发起任务
                 </Button>
               </DialogTrigger>
               <DialogContent className='sm:max-w-lg'>
                 <DialogHeader>
-                  <DialogTitle>发起需求</DialogTitle>
+                  <DialogTitle>发起任务</DialogTitle>
                   <DialogDescription>
                     提交即派发给 Agent 团队执行；描述与验收标准只保存在
                     infera，不会外发
@@ -200,7 +200,7 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
                       type='submit'
                       disabled={!form.title.trim() || create.isPending}
                     >
-                      提交需求
+                      提交任务
                     </Button>
                   </DialogFooter>
                 </form>
@@ -223,9 +223,9 @@ export function RequirementsList({ pollMs = 10_000 }: { pollMs?: number }) {
               <Inbox className='size-6 text-muted-foreground' />
             </div>
             <div>
-              <p className='font-medium'>还没有需求</p>
+              <p className='font-medium'>还没有任务</p>
               <p className='mt-1 text-sm text-muted-foreground'>
-                点右上角「发起需求」，提交后会自动派发给 Agent 团队
+                点右上角「发起任务」，提交后会自动派发给 Agent 团队
               </p>
             </div>
           </div>

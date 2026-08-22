@@ -21,7 +21,7 @@ export function NodeTimeline({ node }: { node: FlowNode }) {
           className='flex items-center gap-2 rounded-lg border bg-muted/50 px-4 py-3 text-sm'
         >
           <AlertTriangle className='size-4 shrink-0' />
-          <span className='font-medium'>需求需决策</span>
+          <span className='font-medium'>任务需决策</span>
           <span className='text-muted-foreground'>
             {NODE_META.needs_decision.hint}，处理决策卡后恢复推进
           </span>

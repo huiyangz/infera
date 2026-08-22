@@ -171,7 +171,7 @@ describe('RequirementDetailPage 需求详情', () => {
     )
     const screen = await mount()
     await expect
-      .element(screen.getByText(/需求不存在或已删除/))
+      .element(screen.getByText(/任务不存在或已删除/))
       .toBeInTheDocument()
   })
 

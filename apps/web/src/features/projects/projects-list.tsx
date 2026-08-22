@@ -103,7 +103,7 @@ function ProjectCard({
             </Badge>
           ) : null}
           {s && !s.pending && !s.active && (
-            <span className='text-xs text-muted-foreground'>没有活跃需求</span>
+            <span className='text-xs text-muted-foreground'>没有活跃任务</span>
           )}
           {!s && <Skeleton className='h-5 w-24' />}
         </div>
@@ -174,7 +174,7 @@ export function ProjectsList() {
           <div className='flex flex-col gap-1'>
             <h1 className='text-lg font-semibold tracking-[-0.2px]'>项目</h1>
             <p className='text-sm text-muted-foreground'>
-              每个项目对应一个代码仓库，需求在项目内流转交付
+              每个项目对应一个代码仓库，任务在项目内流转交付
             </p>
           </div>
           <DefaultOrchestrationDialog />
@@ -253,7 +253,7 @@ export function ProjectsList() {
             <div>
               <p className='font-medium'>还没有项目</p>
               <p className='mt-1 text-sm text-muted-foreground'>
-                点右上角「新建项目」，绑定仓库后即可提交需求
+                点右上角「新建项目」，绑定仓库后即可提交任务
               </p>
             </div>
           </div>

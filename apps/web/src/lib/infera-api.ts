@@ -12,6 +12,7 @@ import type {
   Project,
   ProjectPipeline,
   RequirementStats,
+  TaskGroupRow,
   TaskSpec,
 } from './infera-types'
 
@@ -100,6 +101,12 @@ export async function patchProjectPinned(
 }
 export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
   return json(await fetch(`/api/projects/${id}/deliveries`))
+}
+/** 项目任务分组列表（L202608221704-1-T01 冻结契约，形状见 TaskGroupRow） */
+export async function listProjectTaskGroups(
+  id: string
+): Promise<TaskGroupRow[]> {
+  return json(await fetch(`/api/projects/${id}/task-groups`))
 }
 /** 项目维度需求统计（T01 冻结契约，形状见 RequirementStats） */
 export async function getProjectStats(id: string): Promise<RequirementStats> {
