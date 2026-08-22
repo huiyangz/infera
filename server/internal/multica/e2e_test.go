@@ -1,3 +1,7 @@
+//go:build e2e
+
+// 本文件所有测试默认不参与编译执行（go test ./... 时不存在），需要显式
+// -tags=e2e 才会构建。双重门禁：构建标签 + MULTICA_* 环境变量两者齐备才真实执行。
 package multica
 
 import (
@@ -26,7 +30,7 @@ func TestE2ELocalLoop(t *testing.T) {
 	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
 	agentID := os.Getenv("MULTICA_AGENT_ID")
 	if token == "" || wsID == "" || agentID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID 未全部设置（token=%t ws=%t agent=%t），跳过 E2E 闭环",
+		t.Skipf("需构建标签（go test -tags=e2e）+ MULTICA_TOKEN / MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID 两者齐备才执行；当前变量未全设置（token=%t ws=%t agent=%t），跳过 E2E 闭环",
 			token != "", wsID != "", agentID != "")
 	}
 	// E2E 默认打本地实例；MULTICA_SERVER_URL 可覆盖（生产配置本身无默认值，坑4）。
@@ -99,7 +103,7 @@ func TestE2ESmokeListSurface(t *testing.T) {
 	token := os.Getenv("MULTICA_TOKEN")
 	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
 	if token == "" || wsID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过拉取面冒烟",
+		t.Skipf("需构建标签（go test -tags=e2e）+ MULTICA_TOKEN / MULTICA_WORKSPACE_ID 两者齐备才执行；当前变量未设置（token=%t ws=%t），跳过拉取面冒烟",
 			token != "", wsID != "")
 	}
 	baseURL := os.Getenv("MULTICA_SERVER_URL")
@@ -177,7 +181,7 @@ func TestE2ESmokeProxySurface(t *testing.T) {
 	token := os.Getenv("MULTICA_TOKEN")
 	wsID := os.Getenv("MULTICA_WORKSPACE_ID")
 	if token == "" || wsID == "" {
-		t.Skipf("MULTICA_TOKEN / MULTICA_WORKSPACE_ID 未设置（token=%t ws=%t），跳过代发面冒烟",
+		t.Skipf("需构建标签（go test -tags=e2e）+ MULTICA_TOKEN / MULTICA_WORKSPACE_ID 两者齐备才执行；当前变量未设置（token=%t ws=%t），跳过代发面冒烟",
 			token != "", wsID != "")
 	}
 	baseURL := os.Getenv("MULTICA_SERVER_URL")
