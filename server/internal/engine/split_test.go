@@ -196,3 +196,91 @@ func TestContinueOnParkedSplitParentRoutesToMerge(t *testing.T) {
 		t.Fatal("split parent must never run the code_gen agent step")
 	}
 }
+
+// --- INFERA-146 回归：无阶段（wave 0）子任务不得干扰批次调度 ---
+//
+// wave 0 = multica 同步镜像无阶段子任务（见 syncsvc 字段约定）。startDueWaves
+// 以 nextWave==0 作「无 queued 批次」哨兵，且前序检查按 Wave<nextWave 判定；
+// wave 0 的 queued 镜像若混入扫描会（a）误触哨兵静默禁用调度、（b）被当成
+// 永不完成的「前序批次」卡死后续批次。引擎自身拆分的孩子恒 wave>=1
+// （normalizeSplit 归一），混入只可能来自同步镜像挂到拆分父，扫描侧跳过
+// Wave<=0 防御。
+
+// seedWaveChildren 建拆分父 + 指定 (wave, status) 的子任务并从库里读回
+// （ListChildDeliveries 按 wave 升序返回新鲜副本，UpdateDelivery 乐观锁可过）。
+func seedWaveChildren(t *testing.T, st *store.Memory, parentID, projectID string, spec []struct {
+	id     string
+	wave   int
+	status string
+}) []store.Delivery {
+	t.Helper()
+	ctx := context.Background()
+	for _, s := range spec {
+		require.NoError(t, st.CreateDelivery(ctx, &store.Delivery{
+			ID: s.id, ProjectID: projectID, ParentID: parentID,
+			Wave: s.wave, Title: s.id, Status: s.status, CurrentStage: "intake",
+		}))
+	}
+	kids, err := st.ListChildDeliveries(ctx, parentID)
+	require.NoError(t, err)
+	return kids
+}
+
+// TestStartDueWavesSkipsNoStageChildren：queued 的 wave 0 镜像子任务在场时，
+// 最小 queued 批次照常点火——哨兵不被误触，wave 0 自身保持原状不被点火。
+func TestStartDueWavesSkipsNoStageChildren(t *testing.T) {
+	e, st, started := splitEnv(t)
+	ctx := context.Background()
+	parent := seed(t, st)
+	parent.SplitMode = true
+	parent.CurrentStage = "code_gen"
+	parent.Status = StatusActive
+	require.NoError(t, st.UpdateDelivery(ctx, parent))
+
+	kids := seedWaveChildren(t, st, parent.ID, parent.ProjectID, []struct {
+		id     string
+		wave   int
+		status string
+	}{
+		{"k-w0", 0, StatusQueued},  // 同步镜像：无阶段
+		{"k-w1a", 1, StatusQueued}, // 引擎批次 1
+		{"k-w1b", 1, StatusQueued},
+		{"k-w2", 2, StatusQueued},
+	})
+	e.startDueWaves(ctx, kids, map[string]bool{})
+
+	require.Equal(t, StatusActive, get(t, st, "k-w1a").Status, "wave 1 照常点火")
+	require.Equal(t, StatusActive, get(t, st, "k-w1b").Status)
+	require.Equal(t, StatusQueued, get(t, st, "k-w2").Status, "wave 2 未到批次")
+	require.Equal(t, StatusQueued, get(t, st, "k-w0").Status, "wave 0 镜像不被点火")
+	require.ElementsMatch(t, []string{"k-w1a", "k-w1b"}, *started)
+	require.Contains(t, eventTypes(t, st, "k-w1a"), "wave_started")
+	require.NotContains(t, eventTypes(t, st, "k-w0"), "wave_started")
+}
+
+// TestStartDueWavesNoStageChildDoesNotBlockLaterWave：wave 1 全部完成并合并后，
+// queued 的 wave 0 镜像不构成「前序批次」，wave 2 照常启动。
+func TestStartDueWavesNoStageChildDoesNotBlockLaterWave(t *testing.T) {
+	e, st, started := splitEnv(t)
+	ctx := context.Background()
+	parent := seed(t, st)
+	parent.SplitMode = true
+	parent.CurrentStage = "code_gen"
+	parent.Status = StatusActive
+	require.NoError(t, st.UpdateDelivery(ctx, parent))
+
+	kids := seedWaveChildren(t, st, parent.ID, parent.ProjectID, []struct {
+		id     string
+		wave   int
+		status string
+	}{
+		{"k-w0", 0, StatusQueued},
+		{"k-w1", 1, StatusCompleted},
+		{"k-w2", 2, StatusQueued},
+	})
+	e.startDueWaves(ctx, kids, map[string]bool{"k-w1": true})
+
+	require.Equal(t, StatusActive, get(t, st, "k-w2").Status, "wave 2 不被 wave 0 卡死")
+	require.Equal(t, []string{"k-w2"}, *started)
+	require.Equal(t, StatusQueued, get(t, st, "k-w0").Status)
+}

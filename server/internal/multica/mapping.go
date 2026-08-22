@@ -35,6 +35,7 @@ type IssueSnapshot struct {
 	Assignee          ActorRef  // 负责人（assignee_type/assignee_id）
 	ParentExternalID  string    // 父子关系：父 issue 的 multica id；空 = 顶层
 	ProjectExternalID string    // 项目归属：所属项目的 multica id；空 = 未挂项目
+	Stage             int       // 子任务所属阶段（multica stage 1..N 原值透传；顶层/未带 = 0，兜底归消费方）
 	UpdatedAt         time.Time // 同步新鲜度（幂等 upsert 的比较面）
 }
 
@@ -65,6 +66,7 @@ func MapIssue(i Issue) IssueSnapshot {
 		Assignee:          actorRef(i.AssigneeType, i.AssigneeID),
 		ParentExternalID:  derefOrEmpty(i.ParentIssueID),
 		ProjectExternalID: derefOrEmpty(i.ProjectID),
+		Stage:             i.Stage,
 		UpdatedAt:         i.UpdatedAt,
 	}
 }

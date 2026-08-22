@@ -86,7 +86,8 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	require.NotNil(t, child)
 	require.Equal(t, "completed", child.Status)
 	require.Equal(t, parent.ID, child.ParentID, "父子关系经外部 ID → 内部 ID 解析后落库")
-	require.Equal(t, 1, child.Wave)
+	// fixture 未设置 stage：0 = 无阶段，原样落库不兜底 1（INFERA-146 语义）。
+	require.Equal(t, 0, child.Wave)
 
 	// infera 侧推进引擎字段后重同步：行数不变、标题更新、引擎字段保留。
 	first := findByExtID(t, st, "m-iss-1")

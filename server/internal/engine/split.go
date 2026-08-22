@@ -293,10 +293,16 @@ func (e *Engine) finalizeParent(ctx context.Context, parent *store.Delivery, chi
 
 // startDueWaves 批次调度：最小的 queued 批次，若其所有更低批次都已 completed+merged，
 // 则启动该批次全部 queued 子需求（status→active + OnStartDelivery 点火）。
+// wave<=0（multica 同步镜像的无阶段子任务）不参与批次：既不进 nextWave 扫描
+// （0 会误触 nextWave==0 的「无 queued 批次」哨兵，静默禁用调度），也不算
+// 前序批次（否则永不完成，卡死全部后续批次）。引擎自身拆分的孩子恒 wave>=1。
 func (e *Engine) startDueWaves(ctx context.Context, children []store.Delivery, merged map[string]bool) {
 	nextWave := 0
 	for i := range children {
 		c := &children[i]
+		if c.Wave <= 0 {
+			continue // 无阶段子任务：不参与批次调度
+		}
 		if c.Status == StatusQueued && (nextWave == 0 || c.Wave < nextWave) {
 			nextWave = c.Wave
 		}
@@ -306,6 +312,9 @@ func (e *Engine) startDueWaves(ctx context.Context, children []store.Delivery, m
 	}
 	for i := range children {
 		c := &children[i]
+		if c.Wave <= 0 {
+			continue // 同上：不构成前序批次
+		}
 		if c.Wave < nextWave && (c.Status != StatusCompleted || !merged[c.ID]) {
 			return // 前序批次未全部完成并合并，还不能启动
 		}

@@ -251,7 +251,7 @@ func TestListIssuesServerError(t *testing.T) {
 }
 
 // TestListIssuesDecodesFetchFields：拉取面字段解码——映射消费的最小字段面
-// （标题/描述/状态/优先级/负责人/父子关系/项目归属），可空字段按指针保真。
+// （标题/描述/状态/优先级/负责人/父子关系/项目归属/阶段），可空字段按指针保真。
 func TestListIssuesDecodesFetchFields(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -261,6 +261,7 @@ func TestListIssuesDecodesFetchFields(t *testing.T) {
 				"description":"薄 client 补拉取","status":"in_progress","priority":"high",
 				"assignee_type":"agent","assignee_id":"a-1",
 				"parent_issue_id":"i-0","project_id":"p-1",
+				"stage":2,
 				"updated_at":"2026-08-22T06:00:00Z"
 			},
 			{
@@ -295,6 +296,7 @@ func TestListIssuesDecodesFetchFields(t *testing.T) {
 	require.Equal(t, "i-0", *first.ParentIssueID)
 	require.NotNil(t, first.ProjectID)
 	require.Equal(t, "p-1", *first.ProjectID)
+	require.Equal(t, 2, first.Stage, "stage 解码进拉取面（子任务阶段沿同步链传递的起点）")
 	require.Equal(t, time.Date(2026, 8, 22, 6, 0, 0, 0, time.UTC), first.UpdatedAt)
 
 	second := issues[1]
@@ -302,6 +304,7 @@ func TestListIssuesDecodesFetchFields(t *testing.T) {
 	require.Nil(t, second.AssigneeID)
 	require.Nil(t, second.ParentIssueID)
 	require.Nil(t, second.ProjectID)
+	require.Zero(t, second.Stage, "响应未带 stage（或 0）解码为 0，语义兜底归消费方")
 }
 
 // TestListIssuesSendsQueryShape：翻页请求的查询串形态——limit 恒取服务端

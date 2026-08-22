@@ -130,11 +130,11 @@ func TestSyncHappyPathImportsProjectsAndIssues(t *testing.T) {
 	require.Empty(t, parent.ParentID)
 	require.Zero(t, parent.Wave, "顶层需求 wave=0")
 
-	// 子需求：ParentID 解析为父的 infera 内部 ID，wave=1。
+	// 子需求：ParentID 解析为父的 infera 内部 ID；未带 stage → wave 0（无阶段）。
 	child := findByMulticaIssueID(t, st, "m-iss-2")
 	require.NotNil(t, child)
 	require.Equal(t, parent.ID, child.ParentID)
-	require.Equal(t, 1, child.Wave)
+	require.Zero(t, child.Wave, "无 stage 子任务 wave=0（无阶段），不兜底 1")
 
 	// 终态翻译：done → completed。
 	done := findByMulticaIssueID(t, st, "m-iss-3")
@@ -274,6 +274,81 @@ func TestTranslateStatus(t *testing.T) {
 	for _, in := range []string{"todo", "backlog", "in_progress", "in_review", "done", "blocked", "cancelled", "", "active", "xxx"} {
 		require.NotEqual(t, "active", translateStatus(in), "multica 状态 %q 不得映射为 active", in)
 	}
+}
+
+// --- AC: 同步保留子任务的真实阶段（multica stage → wave，不再全部落阶段 1） ---
+
+// TestSyncChildStagePreserved：含多阶段子任务的项目同步后，子任务在 infera
+// 侧的 stage 与 multica 侧一致——原生表示即拆分批次 wave（编号阶段>=1），
+// 同步镜像沿用同一字段，不发明平行入口。无 stage 子任务 = 「无阶段」，wave 0
+// 原样落库（不兜底 1，否则显示层会把它混进「阶段 1」）；顶层的 stage
+// 不上行（顶层恒 wave=0）。
+func TestSyncChildStagePreserved(t *testing.T) {
+	st := store.NewMemory()
+	f := &fakeFetch{
+		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
+		issues: []multica.Issue{
+			{
+				ID: "m-parent", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
+				Priority: "urgent", ProjectID: ptr("m-prj-1"), Stage: 1, UpdatedAt: time.Now(),
+			},
+			{
+				ID: "m-c1", Identifier: "INFERA-2", Title: "阶段 2 子任务", Status: "todo",
+				Priority: "low", ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-parent"), Stage: 2,
+				UpdatedAt: time.Now(),
+			},
+			{
+				ID: "m-c2", Identifier: "INFERA-3", Title: "阶段 3 子任务", Status: "todo",
+				Priority: "low", ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-parent"), Stage: 3,
+				UpdatedAt: time.Now(),
+			},
+			{
+				ID: "m-c3", Identifier: "INFERA-4", Title: "无阶段子任务", Status: "todo",
+				Priority: "low", ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-parent"),
+				UpdatedAt: time.Now(),
+			},
+		},
+	}
+	svc := New(f, st)
+	res, err := svc.SyncNow(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 4, res.IssuesImported)
+
+	require.Zero(t, findByMulticaIssueID(t, st, "m-parent").Wave, "顶层恒 wave=0：multica stage 不上行到顶层")
+	require.Equal(t, 2, findByMulticaIssueID(t, st, "m-c1").Wave, "子任务 wave = multica stage")
+	require.Equal(t, 3, findByMulticaIssueID(t, st, "m-c2").Wave, "子任务 wave = multica stage")
+	require.Zero(t, findByMulticaIssueID(t, st, "m-c3").Wave, "无 stage 子任务 wave 0 原样落库（0=无阶段，不兜底 1）")
+}
+
+// TestSyncChildStageUpdatedOnResync：multica 侧改阶段后再同步 → 镜像行 wave
+// 跟进（upsert 冲突分支更新 wave，幂等重放不卡在旧阶段）。
+func TestSyncChildStageUpdatedOnResync(t *testing.T) {
+	st := store.NewMemory()
+	child := multica.Issue{
+		ID: "m-c1", Identifier: "INFERA-2", Title: "子任务", Status: "todo",
+		Priority: "low", ProjectID: ptr("m-prj-1"), ParentIssueID: ptr("m-parent"), Stage: 2,
+		UpdatedAt: time.Now(),
+	}
+	parent := multica.Issue{
+		ID: "m-parent", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
+		Priority: "urgent", ProjectID: ptr("m-prj-1"), UpdatedAt: time.Now(),
+	}
+	f := &fakeFetch{
+		projects: []multica.Project{proj("m-prj-1", "自动闭环")},
+		issues:   []multica.Issue{parent, child},
+	}
+	svc := New(f, st)
+	_, err := svc.SyncNow(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, findByMulticaIssueID(t, st, "m-c1").Wave)
+
+	// multica 侧把子任务挪到阶段 3，再同步。
+	child.Stage = 3
+	f.issues = []multica.Issue{parent, child}
+	_, err = svc.SyncNow(context.Background())
+	require.NoError(t, err)
+	got := findByMulticaIssueID(t, st, "m-c1")
+	require.Equal(t, 3, got.Wave, "重同步跟进了新阶段，且不产生重复行")
 }
 
 // --- 父子成环：环上成员跳过，环外正常导入 ---

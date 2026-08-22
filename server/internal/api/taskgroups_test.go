@@ -99,6 +99,58 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 	require.Equal(t, float64(0), rows[1]["child_completed"])
 }
 
+// --- AC（INFERA-146）：同父下无阶段（wave 0）子任务独立分组，排在编号阶段之后 ---
+
+// TestBuildTaskGroupsNoStageBucketLast：同父下既有编号阶段子任务（wave 1/2）
+// 又有无阶段子任务（wave 0，multica 同步镜像）时：wave 0 不混进「阶段 1」，
+// 独立成组且位于全部编号阶段之后；JSON 仍输出 stage:0，编号阶段顺序不变。
+func TestBuildTaskGroupsNoStageBucketLast(t *testing.T) {
+	parent := store.Delivery{ID: "p1", ProjectID: "prj", Title: "父", Status: "active", SplitMode: true}
+	kids := []store.Delivery{
+		{ID: "k-w1", ProjectID: "prj", ParentID: "p1", Wave: 1, Title: "阶段1子任务", Status: "completed", CurrentStage: "unit_test"},
+		{ID: "k-w0", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "无阶段子任务", Status: "queued",
+			MulticaIssueID: "mi-0", MulticaIssueKey: "INFERA-0"},
+		{ID: "k-w2", ProjectID: "prj", ParentID: "p1", Wave: 2, Title: "阶段2子任务", Status: "active", CurrentStage: "code_gen"},
+	}
+	// 顶层平表顺序刻意打乱：分组只由 wave 决定，与入序无关。
+	rows := buildTaskGroups([]store.Delivery{kids[1], parent, kids[2], kids[0]})
+
+	require.Len(t, rows, 1, "仅父为顶层行")
+	stages := rows[0].Stages
+	require.Len(t, stages, 3, "三个 wave 三个组")
+	require.Equal(t, 1, stages[0].Stage, "编号阶段升序在前")
+	require.Equal(t, 2, stages[1].Stage)
+	require.Equal(t, 0, stages[2].Stage, "无阶段（wave 0）独立分组垫底")
+	require.Equal(t, []string{"k-w1"}, childIDs(stages[0]))
+	require.Equal(t, []string{"k-w2"}, childIDs(stages[1]))
+	require.Equal(t, []string{"k-w0"}, childIDs(stages[2]), "wave 0 子任务不混进阶段 1")
+	require.Equal(t, 3, rows[0].ChildTotal, "计数照常含无阶段子任务")
+	require.Equal(t, 1, rows[0].ChildCompleted)
+}
+
+// TestBuildTaskGroupsOnlyNoStageChildren：全部子任务无阶段 → 只有「无阶段」一组。
+func TestBuildTaskGroupsOnlyNoStageChildren(t *testing.T) {
+	parent := store.Delivery{ID: "p1", ProjectID: "prj", Title: "父", Status: "active"}
+	kids := []store.Delivery{
+		{ID: "k-a", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "甲", Status: "queued"},
+		{ID: "k-b", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "乙", Status: "completed", CurrentStage: "unit_test"},
+	}
+	rows := buildTaskGroups([]store.Delivery{parent, kids[0], kids[1]})
+	stages := rows[0].Stages
+	require.Len(t, stages, 1)
+	require.Equal(t, 0, stages[0].Stage)
+	require.Equal(t, []string{"k-a", "k-b"}, childIDs(stages[0]), "组内保持创建序")
+}
+
+// childIDs 提取组内子任务 ID 序列（断言分组归属与组内顺序）。
+func childIDs(g taskStageGroup) []string {
+	ids := make([]string, 0, len(g.Tasks))
+	for _, c := range g.Tasks {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
 func TestProjectTaskGroupsNotFoundAndAuth(t *testing.T) {
 	ts, _ := newServer(t)
 	c := login(t, ts.URL)
