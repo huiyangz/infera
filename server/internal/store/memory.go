@@ -84,9 +84,10 @@ func (m *Memory) PatchProjectPinned(ctx context.Context, id string, pinned bool)
 }
 
 // UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Pg 一致）：
-// 不存在则插入（整行走入参）、存在则只更新外部来源字段 name——repo_url/default_branch/pinned
-// 归 infera 侧配置，冲突分支不覆盖。重复执行不产生重复行。
-// MulticaProjectID 为空 → ErrInvalid。
+// 不存在则插入（整行走入参）、存在则更新外部来源字段 name 与（非空时的）repo_url——
+// repo_url 覆写契约（INFERA-175）：multica 侧解析出绑定（非空）覆写现值，解析不出
+// （空）保留现值不清空；default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
+// 重复执行不产生重复行。MulticaProjectID 为空 → ErrInvalid。
 func (m *Memory) UpsertProjectByMulticaID(_ context.Context, p *Project) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -99,6 +100,9 @@ func (m *Memory) UpsertProjectByMulticaID(_ context.Context, p *Project) error {
 			continue
 		}
 		ex.Name = p.Name
+		if p.RepoURL != "" {
+			ex.RepoURL = p.RepoURL
+		}
 		ex.UpdatedAt = now
 		ex.MulticaSyncedAt = &now
 		*p = *ex

@@ -156,6 +156,9 @@ func (f *e2eSyncFetch) ListProjects(context.Context) ([]multica.Project, error) 
 	return f.projects, nil
 }
 func (f *e2eSyncFetch) ListIssues(context.Context) ([]multica.Issue, error) { return f.issues, nil }
+func (f *e2eSyncFetch) ListProjectResources(_ context.Context, _ string) ([]multica.ProjectResource, error) {
+	return nil, nil // 资源面默认无绑定（repo_url 保留现值）
+}
 
 func TestMulticaSyncEndToEnd(t *testing.T) {
 	st := store.NewMemory()

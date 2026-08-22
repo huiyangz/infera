@@ -227,8 +227,9 @@ func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, erro
 }
 
 // UpsertProjectByMulticaID 按 multica 项目 ID 幂等导入（同步链路唯一入口，语义与 Memory 一致）：
-// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新 name 与 synced_at，
-// repo_url/default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
+// ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 更新 name、synced_at 与
+// repo_url（覆写契约 INFERA-175：EXCLUDED 非空覆写现值，空串保留现值不清空，
+// COALESCE+NULLIF 一处收口）；default_branch/pinned 归 infera 侧配置，冲突分支不覆盖。
 // RETURNING id 两个分支都回行 ID，回读整行填充结构体。
 // MulticaProjectID 为空 → ErrInvalid。
 func (pg *Pg) UpsertProjectByMulticaID(ctx context.Context, p *Project) error {
@@ -243,7 +244,9 @@ func (pg *Pg) UpsertProjectByMulticaID(ctx context.Context, p *Project) error {
 		`INSERT INTO projects (id,name,repo_url,default_branch,pinned,multica_project_id,multica_synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,now())
 		 ON CONFLICT (multica_project_id) WHERE multica_project_id <> ''
-		 DO UPDATE SET name=EXCLUDED.name, multica_synced_at=now()
+		 DO UPDATE SET name=EXCLUDED.name,
+		               repo_url=COALESCE(NULLIF(EXCLUDED.repo_url, ''), projects.repo_url),
+		               multica_synced_at=now()
 		 RETURNING id`,
 		p.ID, p.Name, p.RepoURL, p.DefaultBranch, p.Pinned, p.MulticaProjectID).Scan(&id)
 	if err != nil {
