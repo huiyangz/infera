@@ -6,6 +6,7 @@ import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
 import {
   type TaskChild,
   type TaskGroupRow,
+  type TaskStageGroup,
   stageLabel,
 } from '@/lib/infera-types'
 import { timeAgo } from '@/lib/time'
@@ -205,7 +206,7 @@ function ParentTaskCard({
 }
 
 /** 一个阶段（批次）组：组头（阶段号 + 任务计数）+ 组内子任务行列表 */
-function StageGroup({ group }: { group: TaskGroupRow['stages'][number] }) {
+function StageGroup({ group }: { group: TaskStageGroup }) {
   return (
     <section className='mt-3'>
       <h4 className='text-[11px] font-medium tracking-wide text-muted-foreground'>
