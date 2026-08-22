@@ -15,9 +15,9 @@ export interface PendingDecisionRow {
   /** 停在的审批门（spec_approval / design_approval / tasks_approval…） */
   pending_gate: string
   current_stage: string
-  /** '' = 本地需求（非 multica 同步来源） */
-  multica_issue_key: string
-  /** multica 同步展示数据；'' = 无 */
+  /** '' = 本地需求（非同步来源） */
+  external_issue_key: string
+  /** 同步展示数据；'' = 无 */
   assignee: string
   priority: string
   created_at: string

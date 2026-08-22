@@ -42,7 +42,7 @@ function row(over: Partial<PendingDecisionRow>): PendingDecisionRow {
     status: 'active',
     pending_gate: 'spec_approval',
     current_stage: 'spec',
-    multica_issue_key: 'INFERA-108',
+    external_issue_key: 'INFERA-108',
     assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
     priority: '',
     created_at: '2026-08-22T05:00:00Z',
@@ -88,7 +88,7 @@ describe('DecisionsPage 需要决策列表', () => {
         title: '本地需求等设计审批',
         project_name: 'infera',
         pending_gate: 'design_approval',
-        multica_issue_key: '',
+        external_issue_key: '',
       }),
     ])
     const screen = await mount()
@@ -119,13 +119,13 @@ describe('DecisionsPage 需要决策列表', () => {
     ).toBe('/deliveries/9f2f9f34-1a2b-4c3d-8e9f-000000000002')
   })
 
-  it('multica 来源键随行展示（本地需求不展示）', async () => {
+  it('同步来源键随行展示（本地需求不展示）', async () => {
     vi.mocked(listPendingDecisions).mockResolvedValue([
       row({}),
       row({
         id: '9f2f9f34-1a2b-4c3d-8e9f-000000000002',
         title: '本地需求',
-        multica_issue_key: '',
+        external_issue_key: '',
       }),
     ])
     const screen = await mount()

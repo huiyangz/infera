@@ -43,7 +43,7 @@ describe('decisions API client（契约冻结于 INFERA-108 T01）', () => {
         status: 'active',
         pending_gate: 'spec_approval',
         current_stage: 'spec',
-        multica_issue_key: 'INFERA-108',
+        external_issue_key: 'INFERA-108',
         assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
         priority: '',
         created_at: '2026-08-22T05:00:00Z',
