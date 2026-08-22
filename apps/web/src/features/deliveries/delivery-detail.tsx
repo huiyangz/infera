@@ -196,13 +196,7 @@ const STAGE_STATUS_TEXT: Record<StageState, string> = {
 const EMPTY_TIMELINE: TimelineEvent[] = []
 const EMPTY_ARTIFACTS: Artifact[] = []
 
-export function DeliveryDetail({
-  deliveryId,
-  embedded = false,
-}: {
-  deliveryId: string
-  embedded?: boolean
-}) {
+export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
@@ -250,13 +244,7 @@ export function DeliveryDetail({
 
   if (isLoading || !data)
     return (
-      <div
-        className={
-          embedded
-            ? 'w-full space-y-6 px-8 pt-4 pb-8'
-            : 'mx-auto max-w-4xl space-y-6 p-6'
-        }
-      >
+      <div className='mx-auto max-w-4xl space-y-6 p-6'>
         <Skeleton className='h-36 w-full rounded-xl' />
         <Skeleton className='h-72 w-full rounded-xl' />
       </div>
@@ -287,66 +275,58 @@ export function DeliveryDetail({
   const eventsOf = (s: StageName) => timeline.filter((e) => e.stage === s)
   const doneCount = stages.filter((s, i) => stateOf(s, i) === 'done').length
 
-  const titleBlock = (
-    <div className='flex w-full items-start justify-between gap-4'>
-      <div className='min-w-0'>
-        <h1 className='truncate text-lg font-semibold tracking-[-0.2px]'>
-          {delivery.title}
-        </h1>
-        <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
-          {delivery.description || '（无补充描述）'}
-        </p>
-      </div>
-      <StatusBadge
-        status={delivery.status}
-        className='mt-1 shrink-0 px-3 py-1 text-sm'
-      />
-    </div>
-  )
-
   return (
     <>
-      {embedded ? (
-        <div className='border-b px-8 pt-4 pb-3'>{titleBlock}</div>
-      ) : (
-        <Header fixed>
-          <div className='flex w-full items-start justify-between gap-4'>
-            <div className='min-w-0'>
-              <div className='flex items-center gap-1 text-sm text-muted-foreground'>
-                <ChevronLeft className='size-4' />
-                <Link
-                  to='/projects/$id/tasks'
-                  params={{ id: delivery.project_id }}
-                  className='hover:text-foreground'
-                >
-                  返回项目任务
-                </Link>
-              </div>
-              <h1 className='mt-1 truncate text-lg font-semibold tracking-[-0.2px]'>
-                {delivery.title}
-              </h1>
-              <p className='mt-1 max-w-2xl text-sm text-muted-foreground'>
-                {delivery.description || '（无补充描述）'}
-              </p>
-            </div>
-            <StatusBadge
-              status={delivery.status}
-              className='mt-1 shrink-0 px-3 py-1 text-sm'
-            />
+      {/* 顶栏保持单行紧凑（h-16 固定高塞不下描述——描述面板归位到正文信息卡） */}
+      <Header fixed>
+        <div className='flex w-full min-w-0 items-center gap-2'>
+          <div className='flex shrink-0 items-center gap-1 text-sm text-muted-foreground'>
+            <ChevronLeft className='size-4' />
+            <Link
+              to='/projects/$id/tasks'
+              params={{ id: delivery.project_id }}
+              className='hover:text-foreground'
+            >
+              返回项目任务
+            </Link>
           </div>
-        </Header>
-      )}
+          <span className='shrink-0 text-sm text-muted-foreground'>/</span>
+          <span
+            className='min-w-0 truncate text-sm font-medium text-foreground'
+            title={delivery.title}
+          >
+            {delivery.title}
+          </span>
+          <StatusBadge status={delivery.status} className='shrink-0' />
+        </div>
+      </Header>
 
-      <div
-        className={
-          embedded
-            ? 'w-full space-y-6 px-8 pt-4 pb-8'
-            : 'mx-auto max-w-4xl space-y-6 p-6'
-        }
-      >
+      <div className='mx-auto w-full max-w-4xl space-y-6 p-6'>
+        {/* 任务信息：标题全文 + 元信息 + 描述面板（换行保留，对齐需求详情的信息卡形态） */}
+        <Card className='gap-4 py-5'>
+          <CardHeader className='px-5'>
+            <CardTitle className='text-base font-semibold tracking-[-0.2px]'>
+              {delivery.title}
+            </CardTitle>
+            <CardDescription>
+              阶段 {stageLabel(delivery.current_stage)} · 创建{' '}
+              {dateTime(delivery.created_at)} · 更新{' '}
+              {dateTime(delivery.updated_at)}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className='px-5'>
+            <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
+              描述
+            </h3>
+            <p className='text-sm leading-relaxed whitespace-pre-wrap'>
+              {delivery.description || '（无补充描述）'}
+            </p>
+          </CardContent>
+        </Card>
+
         {/* 合并冲突横幅（拆分父专属） */}
         {delivery.merge_state === 'conflict' && (
-          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+          <Card>
             <CardHeader className='pb-0'>
               <CardTitle className='text-sm font-medium'>合并冲突</CardTitle>
               <CardDescription>
@@ -387,7 +367,7 @@ export function DeliveryDetail({
         )}
 
         {/* 阶段推进 */}
-        <Card className={embedded ? 'gap-3 py-4' : undefined}>
+        <Card>
           <CardHeader className='pb-0'>
             <div className='flex items-center justify-between'>
               <CardTitle className='text-sm font-medium'>阶段推进</CardTitle>
@@ -514,7 +494,7 @@ export function DeliveryDetail({
 
         {/* 任务进度（large 模式逐任务实现；task_done 持久推进） */}
         {taskProgressData && (
-          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+          <Card>
             <CardHeader className='pb-0'>
               <div className='flex items-center justify-between'>
                 <CardTitle className='text-sm font-medium'>任务进度</CardTitle>
@@ -568,7 +548,7 @@ export function DeliveryDetail({
 
         {/* 子任务清单（拆分父专属） */}
         {delivery.split_mode && children.length > 0 && (
-          <Card className={embedded ? 'gap-3 py-4' : undefined}>
+          <Card>
             <CardHeader className='pb-0'>
               <div className='flex items-center justify-between'>
                 <CardTitle className='text-sm font-medium'>
@@ -611,7 +591,7 @@ export function DeliveryDetail({
         )}
 
         {/* 阶段档案 */}
-        <Card className={embedded ? 'gap-3 py-4' : undefined}>
+        <Card>
           <CardHeader className='pb-0'>
             <CardTitle className='text-sm font-medium'>交付档案</CardTitle>
             <CardDescription>
