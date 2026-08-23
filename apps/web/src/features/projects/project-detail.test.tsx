@@ -185,14 +185,17 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
       .toBeInTheDocument()
   })
 
-  it('AC1-3: last_synced_at null 显示「从未同步」，非 null 显示同步时间', async () => {
+  it('AC1-3: 时间信息中性展示为「最近活动」——null 显示「暂无活动」，非 null 显示时间且无「同步」字样', async () => {
     const never = await renderProjectDetail(
       makeProject(),
       makeStats({ last_synced_at: null })
     )
     await waitForProject(never)
     await expect
-      .element(never.getByText('从未同步', { exact: true }))
+      .element(never.getByText('最近活动', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(never.getByText('暂无活动', { exact: true }))
       .toBeInTheDocument()
     await never.unmount()
 
@@ -202,10 +205,15 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     )
     await waitForProject(synced)
     await expect
-      .element(synced.getByText('从未同步', { exact: true }).query())
-      .toBeNull()
+      .element(synced.getByText('最近活动', { exact: true }))
+      .toBeInTheDocument()
+    expect(
+      await synced.getByText('暂无活动', { exact: true }).query()
+    ).toBeNull()
     // dateTime 输出含绝对年份
     await expect.element(synced.getByText(/2026/)).toBeInTheDocument()
+    // 页面不出现「同步」字样（INFERA-194 中性展示）
+    expect(await synced.getByText(/同步/).query()).toBeNull()
   })
 
   it('AC1-4: 必需配置呈现项目已有配置字段（本地路径/Git 仓库/默认分支）', async () => {

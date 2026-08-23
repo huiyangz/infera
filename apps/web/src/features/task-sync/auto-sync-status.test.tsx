@@ -81,50 +81,51 @@ afterEach(async () => {
   await cleanup()
 })
 
-describe('AutoSyncStatus 自动同步状态（默认全自动，立即同步仅为补充）', () => {
-  it('无任何手动触发即自动展示「自动同步 · 上次同步 …」，且不发 POST', async () => {
+describe('AutoSyncStatus 中性展示（INFERA-194：不暴露同步机制，时间类信息以「最近活动」呈现）', () => {
+  it('无任何手动触发即自动展示「最近活动 …」，页面无「同步」字样，且不发 POST', async () => {
     const screen = await mount()
     await expect
-      .element(screen.getByText(/自动同步 · 上次同步/))
+      .element(screen.getByText(/最近活动/))
       .toBeInTheDocument()
+    expect(await screen.getByText(/同步|multica/i).query()).toBeNull()
     await vi.waitFor(() => expect(getTaskSyncStatus).toHaveBeenCalled())
     expect(triggerTaskSync).not.toHaveBeenCalled()
   })
 
-  it('lastSyncAt=null（从未完成过同步）展示「自动同步 · 从未同步」', async () => {
+  it('lastSyncAt=null（从未完成过同步）展示「暂无活动」', async () => {
     vi.mocked(getTaskSyncStatus).mockResolvedValue(
       statusOf({ lastSyncAt: null, status: 'idle' }),
     )
     const screen = await mount()
     await expect
-      .element(screen.getByText('自动同步 · 从未同步'))
+      .element(screen.getByText('暂无活动'))
       .toBeInTheDocument()
   })
 
-  it('status=running 展示同步中，立即同步入口禁用防重复触发', async () => {
+  it('status=running 展示「正在更新…」，刷新入口禁用防重复触发', async () => {
     vi.mocked(getTaskSyncStatus).mockResolvedValue(
       statusOf({ status: 'running' }),
     )
     const screen = await mount()
     await expect
-      .element(screen.getByText(/同步中/))
+      .element(screen.getByText('正在更新…'))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByRole('button', { name: /立即同步/ }))
+      .element(screen.getByRole('button', { name: '刷新数据' }))
       .toBeDisabled()
   })
 
-  it('status=error 可见失败提示：状态行变失败 + 展示 error 字段原文', async () => {
+  it('status=error 展示「上次更新失败」，后端原始错误文案（含上游细节）不外露', async () => {
     vi.mocked(getTaskSyncStatus).mockResolvedValue(
       statusOf({ status: 'error', error: '上游 502: 拉取任务列表失败' }),
     )
     const screen = await mount()
     await expect
-      .element(screen.getByText(/自动同步 · 上次同步失败/))
+      .element(screen.getByText('上次更新失败'))
       .toBeInTheDocument()
-    await expect
-      .element(screen.getByText('上游 502: 拉取任务列表失败'))
-      .toBeInTheDocument()
+    expect(
+      await screen.getByText('上游 502: 拉取任务列表失败').query(),
+    ).toBeNull()
   })
 
   it('轮询发现新一轮同步完成（lastSyncAt 变化）→ 自动失效 projects / requirements 等视图查询', async () => {
@@ -141,18 +142,21 @@ describe('AutoSyncStatus 自动同步状态（默认全自动，立即同步仅�
     expect(triggerTaskSync).not.toHaveBeenCalled()
   })
 
-  it('低调「立即同步」补充入口：点击 POST，成功反馈导入计数并刷新数据视图', async () => {
+  it('低调手动刷新补充入口：点击 POST，成功反馈更新计数并刷新数据视图', async () => {
     vi.mocked(getTaskSyncStatus)
       .mockResolvedValueOnce(statusOf({ lastSyncAt: T1 }))
       .mockResolvedValue(statusOf({ lastSyncAt: T2 }))
     vi.mocked(triggerTaskSync).mockResolvedValue(result())
     const screen = await mount()
-    await screen.getByRole('button', { name: /立即同步/ }).click()
+    await screen.getByRole('button', { name: /刷新/ }).click()
     await vi.waitFor(() => expect(triggerTaskSync).toHaveBeenCalledTimes(1))
     await vi.waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith(
-        expect.stringContaining('导入 2 个项目 / 5 条任务'),
+        expect.stringContaining('数据已更新'),
       ),
+    )
+    expect(toastSuccess).toHaveBeenCalledWith(
+      expect.stringContaining('2 个项目 / 5 条任务'),
     )
     expect(toastSuccess).toHaveBeenCalledWith(
       expect.stringContaining('跳过 1 条'),
@@ -160,14 +164,17 @@ describe('AutoSyncStatus 自动同步状态（默认全自动，立即同步仅�
     await vi.waitFor(() => expect(probeProjects).toHaveBeenCalledTimes(2))
   })
 
-  it('立即同步失败：透传后端错误文案（409/502/503 同道），无成功提示', async () => {
+  it('手动刷新失败：toast 给中性失败提示，不透传后端同步相关文案', async () => {
     vi.mocked(triggerTaskSync).mockRejectedValue(
       new Error('任务同步未装配（需配置 TASK_SYNC_SERVER_URL / TASK_SYNC_TOKEN / TASK_SYNC_WORKSPACE_ID）'),
     )
     const screen = await mount()
-    await screen.getByRole('button', { name: /立即同步/ }).click()
+    await screen.getByRole('button', { name: /刷新/ }).click()
     await vi.waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(expect.stringContaining('未装配')),
+      expect(toastError).toHaveBeenCalledWith('刷新失败，请稍后重试'),
+    )
+    expect(toastError).not.toHaveBeenCalledWith(
+      expect.stringContaining('未装配'),
     )
     expect(toastSuccess).not.toHaveBeenCalled()
   })

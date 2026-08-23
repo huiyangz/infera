@@ -95,7 +95,10 @@ export function CreateRequirementDialog({ projectId }: { projectId: string }) {
       reset()
       qc.invalidateQueries({ queryKey: ['project-task-groups'] })
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: () =>
+      // 后端错误文案可能含上游/同步细节（如「项目未绑定上游映射」），
+      // 一律给中性提示不透传（INFERA-194）；对话框保持打开可修改重试
+      toast.error('创建失败，请稍后重试'),
   })
 
   const canSubmit =
@@ -114,7 +117,7 @@ export function CreateRequirementDialog({ projectId }: { projectId: string }) {
         <DialogHeader>
           <DialogTitle>新建需求</DialogTitle>
           <DialogDescription>
-            在任务源建卡并回流同步；状态选「待办」会立即唤醒智能体
+            状态选「待办」会立即唤醒智能体
           </DialogDescription>
         </DialogHeader>
         <form
@@ -215,7 +218,7 @@ export function CreateRequirementDialog({ projectId }: { projectId: string }) {
             <div>
               <Label htmlFor='req-automerge'>自动合并</Label>
               <p className='text-xs text-muted-foreground'>
-                开启后建卡自动打 auto 标签
+                开启后自动打 auto 标签
               </p>
             </div>
             <Switch

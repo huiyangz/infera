@@ -74,9 +74,7 @@ function ProjectCard({
           {proj.repo_url || '（未绑仓库）'}
         </p>
         <div className='flex min-h-6 flex-wrap items-center gap-1.5'>
-          {proj.external_project_id && (
-            <Badge variant='outline'>已同步</Badge>
-          )}
+          {/* 来源徽标已移除（INFERA-194）：同步来源信息不做用户可见展示 */}
           {s?.pending ? (
             <Badge>
               <Link
