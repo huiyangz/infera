@@ -149,9 +149,7 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
 
     expect(listProjectDeliveries).not.toHaveBeenCalled()
     // 需求列表栏（旧左栏标题「需求」）不复存在
-    expect(
-      await screen.getByText('需求', { exact: true }).query()
-    ).toBeNull()
+    expect(await screen.getByText('需求', { exact: true }).query()).toBeNull()
   })
 
   it('AC1-2: 项目统计展示 T01 冻结契约各字段（总数/四状态桶/待决策/已交付）', async () => {
@@ -210,27 +208,18 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     await expect.element(synced.getByText(/2026/)).toBeInTheDocument()
   })
 
-  it('AC1-4: 必需配置只呈现项目已有配置字段（仓库地址/默认分支），未绑仓库给占位', async () => {
+  it('AC1-4: 必需配置呈现项目已有配置字段（本地路径/Git 仓库/默认分支）', async () => {
     const screen = await renderProjectDetail(makeProject())
     await waitForProject(screen)
 
     await expect
       .element(screen.getByText('必需配置', { exact: true }))
       .toBeInTheDocument()
-    // 仓库地址与默认分支原样呈现（顶栏与配置区各一次，取 .first()）
+    // git 地址（SHORT_REPO）与默认分支原样呈现（顶栏与配置区各一次，取 .first()）
     await expect
       .element(screen.getByText(SHORT_REPO).first())
       .toBeInTheDocument()
     await expect.element(screen.getByText('main').first()).toBeInTheDocument()
-    await screen.unmount()
-
-    // 未绑仓库：占位文案，不渲染空值
-    const unbound = await renderProjectDetail(
-      makeProject({ repo_url: '', default_branch: '' })
-    )
-    await expect
-      .element(unbound.getByText('（未绑仓库）', { exact: true }).first())
-      .toBeInTheDocument()
   })
 
   it('AC1-5: 任务列表入口链到 /projects/{id}/tasks', async () => {
@@ -281,9 +270,7 @@ describe('ProjectDetail 新建需求入口（INFERA-178：与任务列表页共�
 
     await screen.getByRole('button', { name: '新建需求' }).click()
     await expect.element(screen.getByRole('dialog')).toBeInTheDocument()
-    await expect
-      .element(screen.getByLabelText('标题'))
-      .toBeInTheDocument()
+    await expect.element(screen.getByLabelText('标题')).toBeInTheDocument()
 
     // 共享对话框默认值：项目 = 当前项目
     const project = (await screen
@@ -355,13 +342,17 @@ describe('ProjectDetail 编排对话框项目级唯一定义（INFERA-181）', (
       bindings: { spec: 'a1' },
     })
     expect(await screen.getByText(/全局默认/).query()).toBeNull()
-    expect(await screen.getByText('恢复默认', { exact: true }).query()).toBeNull()
+    expect(
+      await screen.getByText('恢复默认', { exact: true }).query()
+    ).toBeNull()
     await expect
       .element(screen.getByRole('button', { name: '清空项目编排' }))
       .toBeInTheDocument()
     // 来源列（默认/项目覆盖徽标）不复存在
     expect(await screen.getByText('来源', { exact: true }).query()).toBeNull()
-    expect(await screen.getByText('项目覆盖', { exact: true }).query()).toBeNull()
+    expect(
+      await screen.getByText('项目覆盖', { exact: true }).query()
+    ).toBeNull()
   })
 
   it('保存提交全量绑定（项目级唯一定义，非增量覆盖）', async () => {
@@ -387,5 +378,87 @@ describe('ProjectDetail 编排对话框项目级唯一定义（INFERA-181）', (
     await vi.waitFor(() => {
       expect(putProjectPipeline).toHaveBeenCalledWith('p1', {})
     })
+  })
+})
+
+// —— INFERA-191：项目信息同时展示本地目录与 git 仓库地址 ——
+// repo_url 单字段承载本地路径（/ 开头）或 git 地址（https/ssh/git@），
+// 按形态归类到「本地路径」「Git 仓库」两行；空值给「未绑定」占位不隐藏整行。
+
+/** 定位「必需配置」区（section）的 DOM 节点，行内断言都以它为作用域 */
+async function configSection(screen: RenderResult): Promise<HTMLElement> {
+  const heading = await screen.getByText('必需配置', { exact: true }).element()
+  return heading?.closest('section') as HTMLElement
+}
+
+/** 取配置区中指定标签行的值单元格（dd）文本 */
+async function configRowValue(
+  screen: RenderResult,
+  label: string
+): Promise<string> {
+  const section = await configSection(screen)
+  const dts = Array.from(section.querySelectorAll('dt'))
+  const row = dts.find((dt) => dt.textContent?.trim() === label)?.parentElement
+  return row?.querySelector('dd')?.textContent?.trim() ?? ''
+}
+
+describe('ProjectDetail 项目信息双行展示本地目录与 Git 仓库（INFERA-191）', () => {
+  it('AC1: repo_url 为本地路径时，「本地路径」行显示路径、「Git 仓库」行显示「未绑定」', async () => {
+    const LOCAL = '/Users/dev/demo-project'
+    const screen = await renderProjectDetail(makeProject({ repo_url: LOCAL }))
+    await waitForProject(screen)
+
+    expect(await configRowValue(screen, '本地路径')).toBe(LOCAL)
+    expect(await configRowValue(screen, 'Git 仓库')).toBe('未绑定')
+    // 旧单行标签「仓库地址」不复存在（由双行取代）
+    const section = await configSection(screen)
+    expect(
+      Array.from(section.querySelectorAll('dt')).some(
+        (dt) => dt.textContent?.trim() === '仓库地址'
+      )
+    ).toBe(false)
+  })
+
+  it('AC1: repo_url 为 git 地址时归「Git 仓库」行（git@ 与 https 形态），「本地路径」行显示「未绑定」', async () => {
+    const screen = await renderProjectDetail(makeProject())
+    await waitForProject(screen)
+    expect(await configRowValue(screen, 'Git 仓库')).toBe(SHORT_REPO)
+    expect(await configRowValue(screen, '本地路径')).toBe('未绑定')
+    await screen.unmount()
+
+    const HTTPS = 'https://github.com/acme/repo2.git'
+    const httpsScreen = await renderProjectDetail(
+      makeProject({ repo_url: HTTPS })
+    )
+    await waitForProject(httpsScreen)
+    expect(await configRowValue(httpsScreen, 'Git 仓库')).toBe(HTTPS)
+    expect(await configRowValue(httpsScreen, '本地路径')).toBe('未绑定')
+  })
+
+  it('AC2: repo_url 为空时两行均可见、各显示「未绑定」占位（不隐藏整行）', async () => {
+    const screen = await renderProjectDetail(
+      makeProject({ repo_url: '', default_branch: '' })
+    )
+    await waitForProject(screen)
+
+    const section = await configSection(screen)
+    const labels = Array.from(section.querySelectorAll('dt')).map((dt) =>
+      dt.textContent?.trim()
+    )
+    expect(labels).toContain('本地路径')
+    expect(labels).toContain('Git 仓库')
+    expect(await configRowValue(screen, '本地路径')).toBe('未绑定')
+    expect(await configRowValue(screen, 'Git 仓库')).toBe('未绑定')
+  })
+
+  it('AC3: 必需配置区只读——无编辑入口（不含按钮/输入框/链接/可编辑节点）', async () => {
+    const screen = await renderProjectDetail(makeProject())
+    await waitForProject(screen)
+
+    const section = await configSection(screen)
+    expect(section.querySelectorAll('button')).toHaveLength(0)
+    expect(section.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(section.querySelectorAll('a')).toHaveLength(0)
+    expect(section.querySelectorAll('[contenteditable="true"]')).toHaveLength(0)
   })
 })
