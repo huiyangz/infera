@@ -107,6 +107,12 @@ describe('CreateRequirementDialog 入口与字段（INFERA-178：项目详情/�
     await openDialog(screen)
   })
 
+  it('对话框文案中性（INFERA-194）：不出现「同步 / 任务源」字样', async () => {
+    const screen = await mount()
+    await openDialog(screen)
+    expect(await screen.getByText(/同步|任务源/).query()).toBeNull()
+  })
+
   it('字段齐全：标题/描述/状态/优先级/智能体/项目/自动合并', async () => {
     const screen = await mount()
     await openDialog(screen)
@@ -177,7 +183,7 @@ describe('CreateRequirementDialog 提交（INFERA-178 AC3）', () => {
     expect(vi.mocked(toast.success)).toHaveBeenCalledTimes(1)
   })
 
-  it('失败：toast 展示后端错误文案，对话框保持打开可修改重试', async () => {
+  it('失败：toast 给中性失败提示（不透传后端上游/同步相关文案），对话框保持打开可修改重试', async () => {
     vi.mocked(createProjectRequirement).mockRejectedValue(
       new ApiError(409, '项目未绑定上游映射'),
     )
@@ -188,7 +194,10 @@ describe('CreateRequirementDialog 提交（INFERA-178 AC3）', () => {
     await expect
       .element(screen.getByRole('dialog'))
       .toBeInTheDocument()
-    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('项目未绑定上游映射')
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith('创建失败，请稍后重试')
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalledWith(
+      expect.stringContaining('上游'),
+    )
   })
 
   it('改字段全量映射：状态=待办、优先级=高、自动合并开、智能体自定义、项目切换', async () => {
