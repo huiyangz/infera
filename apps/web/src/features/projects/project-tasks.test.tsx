@@ -469,7 +469,7 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       .toBeInTheDocument()
   })
 
-  it('同步来源: 选中同步父卡片带「已同步」标识；子任务行以粗体 issue key 标识来源', async () => {
+  it('来源标识不可见化: 父卡片不带「已同步」徽标（INFERA-194）；子任务行保留粗体 issue key', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '本地任务')
 
@@ -478,9 +478,13 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
 
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '同步子任务甲')
-    // 来源徽只出现在选中父卡片（子行信息由粗体 key 承担，对齐参考图行式）
-    const chips = await screen.getByText('已同步', { exact: true }).all()
-    expect(chips).toHaveLength(1)
+    // 带 external_issue_id 的父卡片也不渲染来源徽标（同步信息不可见）
+    expect(
+      await screen.getByText('已同步', { exact: true }).query(),
+    ).toBeNull()
+    await expect
+      .element(screen.getByText('INFERA-77', { exact: true }))
+      .toBeInTheDocument()
   })
 
   it('导航: 选中父与子任务均可点击进入任务详情 /deliveries/{id}', async () => {

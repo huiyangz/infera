@@ -26,22 +26,25 @@ const SYNCED_DATA_KEYS = [
   ['pending-decisions'],
 ]
 
-/** 成功反馈文案：导入计数，有跳过才提跳过（smoke 单 / 无项目单等） */
+/** 成功反馈文案（INFERA-194 中性口径，不暴露同步机制）：更新计数，
+ * 有跳过才提跳过（smoke 单 / 无项目单等） */
 function summary(r: TaskSyncResult): string {
-  let s = `同步完成：导入 ${r.projects_imported} 个项目 / ${r.issues_imported} 条任务`
+  let s = `数据已更新：${r.projects_imported} 个项目 / ${r.issues_imported} 条任务`
   if (r.issues_skipped > 0) s += `，跳过 ${r.issues_skipped} 条`
   return s
 }
 
 /**
- * 「自动同步」状态条（INFERA-170）：同步由服务端调度全自动执行，本组件
- * 只做两件事——
- * 1. 轮询 GET /api/task-sync/status 展示「自动同步 · 上次同步 …」；
- *    status=error 时状态行变失败并透出 error 字段原文（可见失败提示）。
+ * 数据状态条（INFERA-170 建立轮询/失效机制；INFERA-194 起展示层全面中性化，
+ * 不暴露同步机制——用户可见的只有「最近活动 / 正在更新 / 上次更新失败」
+ * 与一个刷新按钮）：本组件做两件事——
+ * 1. 轮询 GET /api/task-sync/status 展示中性的「最近活动 …」；
+ *    status=error 时状态行变「上次更新失败」（后端 error 原文可能含
+ *    上游细节，不再外露）。
  * 2. 发现 lastSyncAt 变化（服务端完成了一轮新同步）即整体失效
  *    SYNCED_DATA_KEYS，requirements / projects 等视图随同步自动刷新；
- *    手动「立即同步」POST 成功后失效状态查询，走同一刷新路径。
- * 不点任何按钮，任务数据自动到位；「立即同步」仅为低调补充入口。
+ *    手动「刷新数据」POST 成功后失效状态查询，走同一刷新路径。
+ * 不点任何按钮，任务数据自动到位；「刷新数据」仅为低调补充入口。
  */
 export function AutoSyncStatus({ pollMs = 15_000 }: { pollMs?: number }) {
   const qc = useQueryClient()
@@ -75,19 +78,20 @@ export function AutoSyncStatus({ pollMs = 15_000 }: { pollMs?: number }) {
       // 状态查询重拉后 lastSyncAt 前移，由上面的 effect 统一刷新数据视图
       qc.invalidateQueries({ queryKey: ['task-sync-status'] })
     },
-    // 409 运行中 / 502 上游失败 / 503 未装配：文案由后端给足，直接透传
-    onError: (e: Error) => toast.error(e.message),
+    // 409 运行中 / 502 上游失败 / 503 未装配：后端文案含同步/装配细节，
+    // 一律给中性提示，不透传（INFERA-194）
+    onError: () => toast.error('刷新失败，请稍后重试'),
   })
 
   const busy = running || sync.isPending
   const hint = running
-    ? '自动同步 · 同步中…'
+    ? '正在更新…'
     : st?.status === 'error'
-      ? '自动同步 · 上次同步失败'
+      ? '上次更新失败'
       : st?.lastSyncAt
-        ? `自动同步 · 上次同步 ${timeAgo(st.lastSyncAt)}`
+        ? `最近活动 ${timeAgo(st.lastSyncAt)}`
         : st
-          ? '自动同步 · 从未同步'
+          ? '暂无活动'
           : null
 
   // 状态查询失败（未装配 503 / 网络异常）不渲染：那是装配态问题而非同步失败，
@@ -115,18 +119,13 @@ export function AutoSyncStatus({ pollMs = 15_000 }: { pollMs?: number }) {
           variant='ghost'
           size='icon'
           className='size-6 shrink-0'
-          aria-label='立即同步'
+          aria-label='刷新数据'
           disabled={busy}
           onClick={() => sync.mutate()}
         >
           <RefreshCw className='size-3' />
         </Button>
       </div>
-      {st.status === 'error' && st.error && (
-        <p className='mt-1 truncate text-xs text-destructive' title={st.error}>
-          {st.error}
-        </p>
-      )}
     </div>
   )
 }

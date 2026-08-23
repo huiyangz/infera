@@ -221,13 +221,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </div>
               ))}
               <div className='flex items-center justify-between gap-4 px-5 py-2.5'>
-                <dt className='text-sm text-muted-foreground'>最近同步</dt>
+                <dt className='text-sm text-muted-foreground'>最近活动</dt>
                 <dd className='text-sm text-muted-foreground tabular-nums'>
                   {stats ? (
                     stats.last_synced_at ? (
                       dateTime(stats.last_synced_at)
                     ) : (
-                      '从未同步'
+                      '暂无活动'
                     )
                   ) : (
                     <Skeleton className='h-4 w-20' />

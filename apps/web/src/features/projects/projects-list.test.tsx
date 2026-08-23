@@ -89,22 +89,23 @@ describe('ProjectsList 默认编排入口移除（INFERA-181）', () => {
 })
 
 describe('ProjectsList 来源标识与自动加载', () => {
-  it('同步进来的项目带「已同步」徽标，本地项目不带', async () => {
+  it('项目卡不带任何「已同步」来源徽标——同步信息不可见（INFERA-194）', async () => {
     vi.mocked(listProjects).mockResolvedValue([
       makeProject({ id: 'p1', name: '本地项目' }),
       makeProject({
         id: 'p2',
-        name: '同步项目',
+        name: '外部项目',
         repo_url: '',
         external_project_id: 'mp-2',
         external_synced_at: '2026-08-22T03:00:05Z',
       }),
     ])
     const screen = await mount()
-    await expect.element(screen.getByText('同步项目')).toBeInTheDocument()
-    // 只有一张卡（同步进来的那张）带来源徽标
-    const badges = await screen.getByText('已同步', { exact: true }).all()
-    expect(badges).toHaveLength(1)
+    await expect.element(screen.getByText('外部项目')).toBeInTheDocument()
+    // 带 external_project_id 的项目也不渲染来源徽标
+    expect(
+      await screen.getByText('已同步', { exact: true }).query(),
+    ).toBeNull()
   })
 
   it('无任何手动触发：挂载即自动加载项目数据，页面上没有同步按钮门槛', async () => {

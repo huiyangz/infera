@@ -170,18 +170,11 @@ function ParentListItem({
   )
 }
 
-/** 来源标识小徽：同步进来的任务行专用（父卡片；子任务行以粗体 key 标识来源） */
-function SyncedChip() {
-  return (
-    <span className='shrink-0 rounded-full border px-1.5 text-[10px] leading-4 text-muted-foreground'>
-      已同步
-    </span>
-  )
-}
-
 /**
  * 父任务卡片：卡片头（标题链接 + 状态徽标 + 阶段/负责人/时间）+
  * 子任务区（「子任务 n/n」进度头 + 按阶段分组的缩进行列表），可整卡收起子任务。
+ * 来源徽标已移除（INFERA-194）：同步来源不做用户可见展示，
+ * 子任务行仍以粗体 issue key 标识。
  */
 function ParentTaskCard({
   g,
@@ -220,7 +213,6 @@ function ParentTaskCard({
         >
           <span className='flex items-center justify-between gap-2'>
             <span className='flex min-w-0 items-center gap-1.5'>
-              {g.external_issue_id && <SyncedChip />}
               <span className='truncate text-sm font-medium'>{g.title}</span>
             </span>
             <StatusBadge status={g.status} />
