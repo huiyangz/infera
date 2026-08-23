@@ -43,6 +43,8 @@ export default defineConfig({
       enabled: true,
       provider: playwright(),
       instances: [{ browser: 'chromium' }],
+      // 本地跑测试不弹可见浏览器窗口，统一 headless
+      headless: true,
     },
     coverage: {
       // include: ['src/**/*.{js,jsx,ts,tsx}'], // Uncomment to expand the report to all src/**/* so untested modules appear as 0% coverage.
