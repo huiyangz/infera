@@ -153,6 +153,57 @@ func childIDs(g taskStageGroup) []string {
 	return ids
 }
 
+// --- INFERA-228 / L202608241931-1-T01：左侧列表契约冻结（回归钉，非新实现） ---
+
+// TestProjectTaskGroupsLeftListContract 冻结「项目任务列表左侧列表」数据契约：
+// 每个任务项（顶层父任务行 + stages[].tasks[] 子任务行）均可取 id / title /
+// status（四态词表）；父子关系由结构表达——顶层行即父任务（parent_id 恒空串），
+// 子任务只嵌于其父行的 stages 下且不重复出现在顶层；stage 于子任务行为
+// stage（=wave，0=无阶段）+ current_stage，于父任务行为 current_stage。
+// 前端第 2 层（L202608241931-2-T01）只读本契约对齐的字段，不得旁路取数。
+func TestProjectTaskGroupsLeftListContract(t *testing.T) {
+	ts, st := newServer(t)
+	c := login(t, ts.URL)
+	parent, w1done, w2synced, plain := seedTaskGroups(t, st)
+
+	r, _ := c.Get(ts.URL + "/api/projects/" + parent.ProjectID + "/task-groups")
+	require.Equal(t, 200, r.StatusCode)
+	var rows []map[string]any
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&rows))
+
+	vocab := map[string]bool{"active": true, "queued": true, "completed": true, "blocked": true}
+	seen := map[string]string{} // 任务 id -> status：左侧列表可见的全部任务项
+	for _, row := range rows {
+		// 顶层行 = 父任务：无更上层；id/title/status/current_stage 可取。
+		require.Equal(t, "", row["parent_id"], "顶层行即父任务")
+		for _, k := range []string{"id", "title", "status", "current_stage"} {
+			require.Contains(t, row, k, "父任务行缺 %s", k)
+		}
+		require.True(t, vocab[row["status"].(string)], "status 须在四态词表内")
+		seen[row["id"].(string)] = row["status"].(string)
+
+		for _, sg := range row["stages"].([]any) {
+			group := sg.(map[string]any)
+			groupStage := group["stage"].(float64)
+			for _, tc := range group["tasks"].([]any) {
+				child := tc.(map[string]any)
+				// 子任务项：id/title/status/stage/current_stage 齐备；
+				// 父子关系 = 嵌于本父行 stages 下（结构表达，无平行 parent 字段）。
+				for _, k := range []string{"id", "title", "status", "stage", "current_stage"} {
+					require.Contains(t, child, k, "子任务行缺 %s", k)
+				}
+				require.True(t, vocab[child["status"].(string)], "status 须在四态词表内")
+				require.Equal(t, groupStage, child["stage"], "子任务 stage 与所在分组一致")
+				seen[child["id"].(string)] = child["status"].(string)
+			}
+		}
+	}
+	// 父 + 三个子 + 普通需求全部可见（子任务不占顶层行，但都在其父行内）。
+	for _, id := range []string{parent.ID, w1done.ID, w2synced.ID, plain.ID} {
+		require.Contains(t, seen, id)
+	}
+}
+
 func TestProjectTaskGroupsNotFoundAndAuth(t *testing.T) {
 	ts, _ := newServer(t)
 	c := login(t, ts.URL)
