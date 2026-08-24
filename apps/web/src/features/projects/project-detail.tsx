@@ -64,10 +64,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     queryFn: () => getProjectStats(projectId),
   })
 
-  // 必需配置双行归类（INFERA-191）：repo_url 单字段只承载其一（/ 开头 =
-  // 本地目录绝对路径，https/ssh/git@ = git 仓库地址，与后端 validRepoURL
-  // 白名单对齐），按形态择一入行，另一行给「未绑定」占位。
-  const localPath = proj?.repo_url.startsWith('/') ? proj.repo_url : ''
+  // Git 仓库行归类（INFERA-191 / INFERA-209）：repo_url 为 / 开头的本地
+  // 路径时不再入卡（本地路径行已移除），仅 git 地址（https/ssh/git@，
+  // 与后端 validRepoURL 白名单对齐）入行，空值给「未绑定」占位。
   const gitURL =
     proj?.repo_url && !proj.repo_url.startsWith('/') ? proj.repo_url : ''
 
@@ -111,23 +110,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       </Header>
 
       <div className='mx-auto w-full max-w-4xl space-y-6 p-6'>
-        {/* 必需配置：只读呈现项目已有配置字段（INFERA-191 双行） */}
+        {/* 必需配置：只读呈现项目已有配置字段（INFERA-209 移除本地路径行） */}
         <section>
           <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
             必需配置
           </h2>
           <Card className='gap-0 py-2'>
             <dl className='divide-y'>
-              <div className='flex items-center justify-between gap-4 px-5 py-3'>
-                <dt className='shrink-0 text-sm text-muted-foreground'>
-                  本地路径
-                </dt>
-                <dd className='min-w-0 truncate font-mono text-sm'>
-                  {localPath || (
-                    <span className='text-muted-foreground'>未绑定</span>
-                  )}
-                </dd>
-              </div>
               <div className='flex items-center justify-between gap-4 px-5 py-3'>
                 <dt className='shrink-0 text-sm text-muted-foreground'>
                   Git 仓库
