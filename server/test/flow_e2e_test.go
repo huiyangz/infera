@@ -162,7 +162,7 @@ func newFlowHarness(t *testing.T) *flowHarness {
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	_, err = pool.Exec(context.Background(),
-		`TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+		`TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	require.NoError(t, err, "TRUNCATE 清库失败（勿用共享脏库，见文件头）")
 
 	mc, err := tasksource.New(e.serverURL, e.token, e.wsID)

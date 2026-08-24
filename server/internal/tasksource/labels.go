@@ -7,11 +7,14 @@ import (
 	"net/http"
 )
 
-// Label 是 workspace 标签的最小字段面（GET /api/labels 元素）。创建编排
-// 只按 Name 找目标标签（如 auto）再拿 ID 打标，其余字段不消费。
+// Label 是 workspace 标签的最小字段面（GET /api/labels 元素；issue 载荷内嵌
+// 的标签对象同形，INFERA-219 T02 对真实服务端实测均带 color hex 原值）。
+// 创建编排只按 Name 找目标标签（如 auto）再拿 ID 打标；同步链路额外消费
+// Color 落库"名称+颜色与上游一致"。
 type Label struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color"`
 }
 
 // ListLabels 拉取 workspace 标签列表（GET /api/labels）。

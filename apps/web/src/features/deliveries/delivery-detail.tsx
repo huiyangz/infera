@@ -43,6 +43,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
+import { LabelChipRow } from '@/components/label-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { LocalHandleButton } from '@/features/deliveries/local-handle-button'
 import {
@@ -314,6 +315,8 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
               {dateTime(delivery.created_at)} · 更新{' '}
               {dateTime(delivery.updated_at)}
             </CardDescription>
+            {/* 标签 chip（INFERA-220）：Multica hex 原值底色；空标签不占位 */}
+            <LabelChipRow labels={delivery.labels} className='mt-1.5 gap-1.5' />
           </CardHeader>
           <CardContent className='px-5'>
             <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
@@ -576,7 +579,9 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
                       >
                         批次 {c.wave || 1}
                       </Badge>
-                      <span className='truncate text-sm'>{c.title}</span>
+                      <span className='min-w-0 truncate text-sm'>{c.title}</span>
+                      {/* 子需求各自的标签，单行展示（INFERA-220） */}
+                      <LabelChipRow labels={c.labels} nowrap />
                     </span>
                     <span className='flex shrink-0 items-center gap-2'>
                       <span className='text-xs text-muted-foreground'>

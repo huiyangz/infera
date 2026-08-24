@@ -91,13 +91,14 @@ function makeDelivery(overrides: Partial<Delivery> = {}): Delivery {
 }
 
 async function renderDetail(
-  delivery: Delivery
+  delivery: Delivery,
+  children: Delivery[] = []
 ): Promise<RenderResult> {
   vi.mocked(getDelivery).mockResolvedValue({
     delivery,
     timeline: [],
     artifacts: [],
-    children: [],
+    children,
   })
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -242,5 +243,93 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     await expect
       .element(screen.getByText('阶段 — ·', { exact: false }))
       .toBeInTheDocument()
+  })
+})
+
+/** 标签 fixture（INFERA-220）：Multica 标签库的真实三色——auto/候选/情报 */
+const LABELS = {
+  auto: { name: 'auto', color: '#22c55e' },
+  candidate: { name: '候选', color: '#a855f7' },
+  intel: { name: '情报', color: '#3b82f6' },
+}
+
+describe('DeliveryDetail 标签展示（INFERA-220：任务详情渲染 Multica 标签 chip）', () => {
+  it('AC1-a: 任务信息卡显示标签 chip，名称与底色（hex 原值）与后端一致', async () => {
+    const screen = await renderDetail(
+      makeDelivery({ labels: [LABELS.auto, LABELS.candidate] })
+    )
+    await waitForLoad(screen)
+
+    for (const name of ['auto', '候选']) {
+      await expect
+        .element(screen.getByText(name, { exact: true }))
+        .toBeInTheDocument()
+    }
+    const chip = (await screen.getByText('auto', { exact: true }).element())!
+    expect(getComputedStyle(chip).backgroundColor).toBe('rgb(34, 197, 94)')
+  })
+
+  it('AC2: 同步来源的交付（external 标记）同样显示标签', async () => {
+    const screen = await renderDetail(
+      makeDelivery({
+        external_issue_id: 'mi-2',
+        external_issue_key: 'INFERA-77',
+        current_stage: '',
+        labels: [LABELS.intel],
+      })
+    )
+    await waitForLoad(screen)
+
+    await expect
+      .element(screen.getByText('情报', { exact: true }))
+      .toBeInTheDocument()
+    const chip = (await screen.getByText('情报', { exact: true }).element())!
+    expect(getComputedStyle(chip).backgroundColor).toBe('rgb(59, 130, 246)')
+  })
+
+  it('AC3-a: 无标签的交付不渲染 chip 行（不占位、不留空壳 UI）', async () => {
+    const screen = await renderDetail(makeDelivery())
+    await waitForLoad(screen)
+
+    expect(document.querySelector('[data-slot="label-chip"]')).toBeNull()
+    expect(document.querySelector('[data-slot="label-chip-row"]')).toBeNull()
+  })
+
+  it('AC3-b: 超长标签名截断展示（完整名保留在 title），不撑破信息卡', async () => {
+    const long = '一个特别长的标签名称用来验证详情卡内截断'.repeat(3)
+    const screen = await renderDetail(
+      makeDelivery({ labels: [{ name: long, color: '#22c55e' }] })
+    )
+    await waitForLoad(screen)
+
+    const chip = document.querySelector('[data-slot="label-chip"]')!
+    expect(chip.getAttribute('title')).toBe(long)
+    expect(chip.scrollWidth).toBeGreaterThan(chip.clientWidth)
+  })
+
+  it('AC1-b: 拆分子任务清单的子需求行同样显示各自标签', async () => {
+    const screen = await renderDetail(
+      makeDelivery({ split_mode: true, current_stage: 'code_gen' }),
+      [
+        makeDelivery({
+          id: 'c1',
+          title: '子需求甲',
+          wave: 1,
+          labels: [LABELS.auto],
+        }),
+        makeDelivery({ id: 'c2', title: '子需求乙', wave: 2 }),
+      ]
+    )
+    await waitForLoad(screen)
+    await expect
+      .element(screen.getByText('子任务清单', { exact: true }))
+      .toBeInTheDocument()
+
+    // 带标签的子需求显示 chip；无标签的不显示（同一列表两种行都有）
+    await expect
+      .element(screen.getByText('auto', { exact: true }))
+      .toBeInTheDocument()
+    const chips = document.querySelectorAll('[data-slot="label-chip"]')
+    expect(chips).toHaveLength(1)
   })
 })

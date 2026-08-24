@@ -50,12 +50,13 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 	require.NoError(t, json.NewDecoder(r.Body).Decode(&rows))
 	require.Len(t, rows, 2, "子任务不作为顶层行，顶层只有父/普通需求")
 
-	// 顶层行键集冻结：Delivery 全字段内联 + 分组三键（parent_id 区分父子归属）。
+	// 顶层行键集冻结：Delivery 全字段内联 + 分组三键（parent_id 区分父子归属）
+	// + labels（INFERA-218：交付行携带标签）。
 	deliveryKeys := []string{"id", "project_id", "title", "description", "status", "current_stage", "pending_gate",
 		"fail_count", "base_commit", "reject_reason", "workspace_ready", "parent_id", "wave", "split_mode",
 		"merge_state", "complexity", "external_issue_id", "external_issue_key", "assignee", "priority",
 		"external_synced_at", "created_at", "updated_at"}
-	require.ElementsMatch(t, append(deliveryKeys, "child_total", "child_completed", "stages"), keys(rows[0]))
+	require.ElementsMatch(t, append(deliveryKeys, "child_total", "child_completed", "labels", "stages"), keys(rows[0]))
 
 	// 父行在前（顶层按 created_at 升序）。
 	require.Equal(t, parent.ID, rows[0]["id"])
@@ -87,10 +88,10 @@ func TestProjectTaskGroupsEndpoint(t *testing.T) {
 	require.Equal(t, "小鱼儿", synced["assignee"])
 	require.Equal(t, "high", synced["priority"])
 
-	// 子任务行键集冻结（AC：子任务带 stage 与 status 字段）。
+	// 子任务行键集冻结（AC：子任务带 stage 与 status 字段；labels 为 INFERA-218 增补）。
 	require.ElementsMatch(t,
 		[]string{"id", "title", "stage", "status", "current_stage", "pending_gate", "external_issue_id",
-			"external_issue_key", "assignee", "priority", "created_at", "updated_at"},
+			"external_issue_key", "assignee", "priority", "labels", "created_at", "updated_at"},
 		keys(first))
 
 	// 普通需求：无子任务 → stages 空数组（非 null）、计数 0。
@@ -113,7 +114,8 @@ func TestBuildTaskGroupsNoStageBucketLast(t *testing.T) {
 		{ID: "k-w2", ProjectID: "prj", ParentID: "p1", Wave: 2, Title: "阶段2子任务", Status: "active", CurrentStage: "code_gen"},
 	}
 	// 顶层平表顺序刻意打乱：分组只由 wave 决定，与入序无关。
-	rows := buildTaskGroups([]store.Delivery{kids[1], parent, kids[2], kids[0]})
+	// labels=nil：本组用例只断言分组归属，不涉及标签。
+	rows := buildTaskGroups([]store.Delivery{kids[1], parent, kids[2], kids[0]}, nil)
 
 	require.Len(t, rows, 1, "仅父为顶层行")
 	stages := rows[0].Stages
@@ -135,7 +137,7 @@ func TestBuildTaskGroupsOnlyNoStageChildren(t *testing.T) {
 		{ID: "k-a", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "甲", Status: "queued"},
 		{ID: "k-b", ProjectID: "prj", ParentID: "p1", Wave: 0, Title: "乙", Status: "completed", CurrentStage: "unit_test"},
 	}
-	rows := buildTaskGroups([]store.Delivery{parent, kids[0], kids[1]})
+	rows := buildTaskGroups([]store.Delivery{parent, kids[0], kids[1]}, nil)
 	stages := rows[0].Stages
 	require.Len(t, stages, 1)
 	require.Equal(t, 0, stages[0].Stage)

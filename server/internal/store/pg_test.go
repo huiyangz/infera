@@ -24,7 +24,8 @@ func testPool(t *testing.T) *Pg {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+	// delivery_labels 带 deliveries 的外键，必须与 deliveries 同批 TRUNCATE。
+	_, _ = pool.Exec(context.Background(), `TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	return NewPg(pool)
 }
 

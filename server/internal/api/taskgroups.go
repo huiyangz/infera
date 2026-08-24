@@ -18,18 +18,19 @@ import (
 // wave 1..N，任务同步镜像子任务=其 stage；status/current_stage/pending_gate
 // 驱动行内徽标）。
 type taskChild struct {
-	ID               string    `json:"id"`
-	Title            string    `json:"title"`
-	Stage            int       `json:"stage"`
-	Status           string    `json:"status"`
-	CurrentStage     string    `json:"current_stage"`
-	PendingGate      string    `json:"pending_gate"`
-	ExternalIssueID  string    `json:"external_issue_id"`
-	ExternalIssueKey string    `json:"external_issue_key"`
-	Assignee         string    `json:"assignee"`
-	Priority         string    `json:"priority"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string      `json:"id"`
+	Title            string      `json:"title"`
+	Stage            int         `json:"stage"`
+	Status           string      `json:"status"`
+	CurrentStage     string      `json:"current_stage"`
+	PendingGate      string      `json:"pending_gate"`
+	ExternalIssueID  string      `json:"external_issue_id"`
+	ExternalIssueKey string      `json:"external_issue_key"`
+	Assignee         string      `json:"assignee"`
+	Priority         string      `json:"priority"`
+	Labels           []labelJSON `json:"labels"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
 }
 
 // taskStageGroup 一个阶段（批次）下的子任务集合：tasks 按创建时间升序。
@@ -46,12 +47,15 @@ type taskGroupRow struct {
 	store.Delivery
 	ChildTotal     int              `json:"child_total"`
 	ChildCompleted int              `json:"child_completed"`
+	Labels         []labelJSON      `json:"labels"`
 	Stages         []taskStageGroup `json:"stages"`
 }
 
 // handleProjectTaskGroups 按项目返回「父任务 + 子任务按阶段分组」数据：
 // 顶层行 = parent_id 为空的交付（按创建时间升序），其子任务按 wave 归组
 // （编号阶段升序，无阶段 wave 0 分组垫底）。子任务不重复出现在顶层。
+// 每个交付行（顶层与子任务）都带挂的标签（INFERA-218 冻结形状 name+color），
+// 一次批量查询装配，免 N+1。
 func (s *Server) handleProjectTaskGroups(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "id")
 	if !validID(w, projectID) {
@@ -66,13 +70,18 @@ func (s *Server) handleProjectTaskGroups(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "读取任务列表失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, buildTaskGroups(ds))
+	byID, err := s.st.LabelsByDeliveryID(r.Context(), deliveryIDs(ds))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取任务标签失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, buildTaskGroups(ds, byID))
 }
 
 // buildTaskGroups 由项目交付平表（created_at 升序）装配分组视图：
 // 子任务先按父归集，再按 wave 分桶（桶内保持创建时间升序），编号阶段升序
-// 输出，无阶段（wave 0）分组垫底。
-func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
+// 输出，无阶段（wave 0）分组垫底。labels 为空时输出空数组（非 null）。
+func buildTaskGroups(ds []store.Delivery, labels map[string][]store.Label) []taskGroupRow {
 	children := make(map[string][]store.Delivery)
 	for _, d := range ds {
 		if d.ParentID != "" {
@@ -84,7 +93,7 @@ func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
 		if d.ParentID != "" {
 			continue
 		}
-		row := taskGroupRow{Delivery: d, Stages: []taskStageGroup{}}
+		row := taskGroupRow{Delivery: d, Stages: []taskStageGroup{}, Labels: labelsJSON(labels[d.ID])}
 		kids := children[d.ID]
 		buckets := make(map[int][]taskChild)
 		for _, k := range kids {
@@ -93,6 +102,7 @@ func buildTaskGroups(ds []store.Delivery) []taskGroupRow {
 				CurrentStage: k.CurrentStage, PendingGate: k.PendingGate,
 				ExternalIssueID: k.ExternalIssueID, ExternalIssueKey: k.ExternalIssueKey,
 				Assignee: k.Assignee, Priority: k.Priority,
+				Labels:    labelsJSON(labels[k.ID]),
 				CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
 			})
 			row.ChildTotal++

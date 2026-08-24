@@ -83,6 +83,33 @@ func TestMapIssue(t *testing.T) {
 	require.Equal(t, updatedAt, got.UpdatedAt)
 }
 
+// TestMapIssueLabels：逐 issue 标签映射（INFERA-219 T02）——LabelRef 携带
+// 上游标签 id（挂标幂等键）+ name/color（标签库 upsert 的名称颜色一致来源）。
+// 半截条目（空 id）不是合法状态，映射期丢弃，不透传带病引用；无标签归一为
+// 空切片，消费方免 nil 防御。
+func TestMapIssueLabels(t *testing.T) {
+	got := MapIssue(Issue{
+		ID: "i-1", Identifier: "INFERA-1", Title: "带标签", Status: "todo",
+		Labels: []Label{
+			{ID: "lbl-auto", Name: "auto", Color: "#22c55e"},
+			{ID: "lbl-intel", Name: "情报", Color: "#3b82f6"},
+			{ID: "", Name: "半截条目", Color: "#ff0000"}, // 空 id：不是合法引用
+		},
+	})
+	require.Equal(t, []LabelRef{
+		{ExternalID: "lbl-auto", Name: "auto", Color: "#22c55e"},
+		{ExternalID: "lbl-intel", Name: "情报", Color: "#3b82f6"},
+	}, got.Labels)
+
+	empty := MapIssue(Issue{ID: "i-2", Identifier: "INFERA-2", Title: "无标签", Status: "todo"})
+	require.Empty(t, empty.Labels)
+	require.NotNil(t, empty.Labels, "无标签归一为空切片，不是 nil")
+
+	onlyHalf := MapIssue(Issue{ID: "i-3", Title: "全是半截", Status: "todo",
+		Labels: []Label{{ID: "", Name: "x"}}})
+	require.Empty(t, onlyHalf.Labels, "空 id 条目映射期丢弃")
+}
+
 // TestMapIssueEmptyOptionals：顶层无父、未指派、无描述 → 全部归一为空值，
 // 消费方无需 nil 防御。
 func TestMapIssueEmptyOptionals(t *testing.T) {
@@ -92,6 +119,7 @@ func TestMapIssueEmptyOptionals(t *testing.T) {
 	require.Empty(t, got.ParentExternalID, "顶层 issue：无父")
 	require.Empty(t, got.ProjectExternalID, "未挂项目")
 	require.Zero(t, got.Stage, "stage 是普通 int 字段：未填 = 0，无指针语义")
+	require.Empty(t, got.Labels, "未带标签归一为空")
 }
 
 // TestMapIssueParentChildRoundTrip：父子两级映射后仍可按 ExternalID 重建

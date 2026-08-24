@@ -30,7 +30,7 @@ func testPgStore(t *testing.T) *PgStore {
 	}
 	t.Cleanup(pool.Close)
 	_, _ = pool.Exec(context.Background(),
-		`TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+		`TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	return NewPgStore(pool)
 }
 

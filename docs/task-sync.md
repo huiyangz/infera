@@ -1,7 +1,8 @@
 # 任务同步使用说明
 
 把外部任务源工作区的项目和 issue 同步进 infera：项目落 infera 项目列表，issue 落
-项目下的交付列表（带外部来源标记）。同步是**全量镜像**，幂等可重复。
+项目下的交付列表（带外部来源标记），issue 上挂的标签一并镜像。同步是**全量镜像**，
+幂等可重复。
 
 ## 同步机制（自动 + 手动）
 
@@ -14,7 +15,7 @@
 # 手动触发一轮全量同步（同步执行，完成即回结果）
 curl -b cookies -X POST http://localhost:8080/api/task-sync
 # → {"started_at":…,"finished_at":…,"projects_imported":1,"issues_imported":21,
-#    "issues_skipped":77,"skips":[…],"error":""}
+#    "issues_skipped":77,"labels_imported":3,"skips":[…],"error":""}
 # 进行中再触发 → 409；上游拉取/落库失败 → 502。
 
 # 查看最近一轮（running + last；结果存进程内存，重启即空）
@@ -52,6 +53,21 @@ TASK_SYNC_WORKSPACE_ID=<工作区 id>
 状态翻译（任务源 → infera）：`done`/`cancelled` → `completed`；`blocked` →
 `blocked`；**其余（todo/backlog/in_progress/in_review/未知）一律 `queued`**——
 同步镜像永不产生 `active`，镜像只排队、不被引擎点火（重启恢复不会替镜像跑管线）。
+
+## 标签镜像语义
+
+issue 上挂的标签随同步一并镜像：先落 infera 标签库（名称 + 颜色 hex 原值与任务源
+一致，幂等键 `labels.external_label_id`），再逐交付对齐挂标。要点：
+
+- **全量镜像含标签**：每轮把任务源当前挂标算成 desired，与 infera 侧现状做差集
+  ——缺的挂上、多的摘掉，两轮之间不积累。
+- **摘标只动镜像域**：只摘 `external_label_id` 非空的同步来源标签；infera 侧人工
+  挂的本地标签不归同步管，绝不摘除。
+- **skips 的单不挂标签**：`smoke` / `no_project` / `parent_cycle` 跳过的 issue
+  不落库，自然也不挂标。上游整单删除时，既有交付与其历史挂标维持上轮状态。
+- 响应里的 `labels_imported` 是本轮镜像进标签库的标签数。
+
+映射键、触发命令、幂等细节与验证步骤见 [labels-import.md](labels-import.md)。
 
 ## 同步进来的需求怎么绑定管线并驱动
 

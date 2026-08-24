@@ -29,7 +29,7 @@ func pgStore(t *testing.T) store.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+	_, _ = pool.Exec(context.Background(), `TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	return store.NewPg(pool)
 }
 
@@ -60,10 +60,12 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeFetch{
 		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		labels:   []tasksource.Label{lbl("lbl-auto", "auto", "#22c55e"), lbl("lbl-cand", "候选", "#a855f7")},
 		issues: []tasksource.Issue{
 			{
 				ID: "m-iss-1", Identifier: "INFERA-1", Title: "父需求", Status: "in_progress",
 				Priority: "urgent", Description: ptr("父描述"), ProjectID: ptr("m-prj-1"),
+				Labels:    []tasksource.Label{lbl("lbl-auto", "auto", "#22c55e"), lbl("lbl-cand", "候选", "#a855f7")},
 				UpdatedAt: time.Now(),
 			},
 			{
@@ -77,6 +79,7 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.ProjectsImported)
 	require.Equal(t, 2, res.IssuesImported)
+	require.Equal(t, 2, res.LabelsImported)
 
 	parent := findByExtID(t, st, "m-iss-1")
 	require.NotNil(t, parent)
@@ -89,6 +92,16 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	// fixture 未设置 stage：0 = 无阶段，原样落库不兜底 1（INFERA-146 语义）。
 	require.Equal(t, 0, child.Wave)
 
+	// 标签镜像打真 SQL：交付挂标 name+color 与上游一致（INFERA-219 T02）。
+	got, err := st.ListDeliveryLabels(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, "auto", got[0].Name)
+	require.Equal(t, "#22c55e", got[0].Color)
+	require.Equal(t, "lbl-auto", got[0].ExternalLabelID)
+	require.Equal(t, "候选", got[1].Name)
+	require.Equal(t, "#a855f7", got[1].Color)
+
 	// infera 侧推进引擎字段后重同步：行数不变、标题更新、引擎字段保留。
 	first := findByExtID(t, st, "m-iss-1")
 	first.CurrentStage = "code_gen"
@@ -98,10 +111,10 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, res2.IssuesImported)
 
-	got := findByExtID(t, st, "m-iss-1")
-	require.Equal(t, first.ID, got.ID, "同外部 ID 命中同一行")
-	require.Equal(t, "父需求（改名）", got.Title)
-	require.Equal(t, "code_gen", got.CurrentStage, "引擎字段不被同步覆盖")
+	renamed := findByExtID(t, st, "m-iss-1")
+	require.Equal(t, first.ID, renamed.ID, "同外部 ID 命中同一行")
+	require.Equal(t, "父需求（改名）", renamed.Title)
+	require.Equal(t, "code_gen", renamed.CurrentStage, "引擎字段不被同步覆盖")
 
 	projs, err := st.ListProjects(ctx)
 	require.NoError(t, err)
@@ -109,4 +122,24 @@ func TestPgSyncImportRoundtrip(t *testing.T) {
 	ds, err := st.ListProjectDeliveries(ctx, projs[0].ID)
 	require.NoError(t, err)
 	require.Len(t, ds, 2, "重复同步不产生重复需求行")
+
+	// 标签库幂等（真 SQL 唯一索引）：第二轮后行数不翻倍、名称颜色一致、
+	// 交付挂标不重复（关联表复合主键）。
+	labels, err := st.ListLabels(ctx)
+	require.NoError(t, err)
+	require.Len(t, labels, 2, "重复同步不产生重复标签行")
+	require.Equal(t, 2, res2.LabelsImported)
+	got, err = st.ListDeliveryLabels(ctx, first.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "重复同步不产生重复关联行")
+
+	// 上游摘标（auto）后第三轮：infera 侧同步摘除；标签库行保留。
+	f.issues[0].Labels = []tasksource.Label{lbl("lbl-cand", "候选", "#a855f7")}
+	res3, err := svc.SyncNow(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, res3.LabelsImported, "标签库镜像 workspace 库，摘标不删标签")
+	got, err = st.ListDeliveryLabels(ctx, first.ID)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "候选", got[0].Name, "上游已摘的 auto 同步摘除")
 }

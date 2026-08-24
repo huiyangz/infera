@@ -23,6 +23,7 @@ import (
 type Fetcher interface {
 	ListProjects(ctx context.Context) ([]tasksource.Project, error)
 	ListIssues(ctx context.Context) ([]tasksource.Issue, error)
+	ListLabels(ctx context.Context) ([]tasksource.Label, error)
 	ListProjectResources(ctx context.Context, projectID string) ([]tasksource.ProjectResource, error)
 }
 
@@ -51,6 +52,7 @@ type Result struct {
 	ProjectsImported int       `json:"projects_imported"`
 	IssuesImported   int       `json:"issues_imported"`
 	IssuesSkipped    int       `json:"issues_skipped"`
+	LabelsImported   int       `json:"labels_imported"` // 标签库本轮镜像的标签数（幂等：重复轮同值）
 	Skips            []Skip    `json:"skips"`
 	Error            string    `json:"error"`
 }
@@ -109,6 +111,10 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 	if err != nil {
 		return record(fmt.Errorf("拉取上游 issue 失败: %w", err))
 	}
+	labels, err := s.fetch.ListLabels(ctx)
+	if err != nil {
+		return record(fmt.Errorf("拉取上游标签库失败: %w", err))
+	}
 
 	// 项目导入：落上游标题 + 仓库绑定（资源解析见 resolveRepoURL）。
 	// store.Project 无 description/status/lead 列；default_branch/pinned 归
@@ -142,6 +148,13 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 		order = append(order, snap.ExternalID)
 	}
 
+	// 标签库镜像：按上游标签 id 幂等 upsert（T01 冻结的幂等键），名称+颜色
+	// 与上游一致。先于交付导入——挂标要拿 标签外部 id → infera 标签 id 的映射。
+	labelInternal, err := s.importLabels(ctx, &res, labels, snaps)
+	if err != nil {
+		return record(err)
+	}
+
 	// 父先子后排序：顶层/父不在导入集/父已定（导入或跳过）→ 可处理；
 	// 一轮下来无人可放置（互相等父）= 成环，环上成员跳过。
 	internal := make(map[string]string, len(order)) // 上游 issue id → infera delivery id（已导入的）
@@ -157,7 +170,7 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 				next = append(next, id)
 				continue
 			}
-			if err := s.importIssue(ctx, &res, snaps[id], projInternal, internal); err != nil {
+			if err := s.importIssue(ctx, &res, snaps[id], projInternal, internal, labelInternal); err != nil {
 				return record(err)
 			}
 			decided[id] = true
@@ -178,7 +191,7 @@ func (s *Service) SyncNow(ctx context.Context) (Result, error) {
 // importIssue 导入单条 issue 快照；无项目可落 → 计入 Skips 后返回（不视为
 // 错误）。父未导入（不在 internal）→ 折叠为顶层（wave=0、无父）。
 func (s *Service) importIssue(ctx context.Context, res *Result, snap tasksource.IssueSnapshot,
-	projInternal, internal map[string]string) error {
+	projInternal, internal, labelInternal map[string]string) error {
 	pid, ok := projInternal[snap.ProjectExternalID]
 	if !ok {
 		res.Skips = append(res.Skips, Skip{ExternalIssueID: snap.ExternalID, IssueKey: snap.Identifier, Reason: skipNoProject})
@@ -208,6 +221,77 @@ func (s *Service) importIssue(ctx context.Context, res *Result, snap tasksource.
 	}
 	internal[snap.ExternalID] = d.ID
 	res.IssuesImported++
+	// 镜像交付挂标：与上游逐 issue 标签对齐（缺的挂上、上游已摘的同步摘除）。
+	if err := s.reconcileDeliveryLabels(ctx, d.ID, snap.Labels, labelInternal); err != nil {
+		return fmt.Errorf("镜像 issue %s 标签失败: %w", snap.ExternalID, err)
+	}
+	return nil
+}
+
+// importLabels 把上游 workspace 标签库镜像进 infera 标签库：按 T01 冻结的
+// 幂等键（上游标签 id）upsert，名称+颜色与上游一致，重复轮不产生重复行。
+// issue 引用了库拉取面未见过的标签时（两端点数据不一致），按 issue 内嵌的
+// 标签对象兜底 upsert——同一 id 幂等命中同一行，不 fatal。返回 上游标签 id
+// → infera 标签 id 的映射（挂标定位用）。
+func (s *Service) importLabels(ctx context.Context, res *Result, library []tasksource.Label,
+	snaps map[string]tasksource.IssueSnapshot) (map[string]string, error) {
+	byExternal := make(map[string]tasksource.Label, len(library))
+	for _, l := range library {
+		if l.ID == "" {
+			continue // 半截条目（空 id）：不是合法标签，跳过不硬造
+		}
+		byExternal[l.ID] = l
+	}
+	// 库外引用兜底：库条目优先（标签库端点是标签面的权威来源）。
+	for _, snap := range snaps {
+		for _, ref := range snap.Labels {
+			if _, ok := byExternal[ref.ExternalID]; !ok {
+				byExternal[ref.ExternalID] = tasksource.Label{ID: ref.ExternalID, Name: ref.Name, Color: ref.Color}
+			}
+		}
+	}
+	labelInternal := make(map[string]string, len(byExternal))
+	for _, l := range byExternal {
+		sl := &store.Label{Name: l.Name, Color: l.Color, ExternalLabelID: l.ID}
+		if err := s.st.UpsertLabelByExternalID(ctx, sl); err != nil {
+			return nil, fmt.Errorf("导入上游标签 %s(%s) 失败: %w", l.ID, l.Name, err)
+		}
+		labelInternal[l.ID] = sl.ID
+	}
+	res.LabelsImported = len(byExternal)
+	return labelInternal, nil
+}
+
+// reconcileDeliveryLabels 全量镜像语义的挂标对齐：desired = 快照逐 issue 标签
+// 对应的 infera 标签；current 限定在镜像域（同步来源的标签，ExternalLabelID
+// 非空）——infera 侧手工挂的本地标签（外部 id 空）不归同步管，绝不摘除。
+// 缺的挂上（AttachLabel 幂等）、上游已摘的摘掉；两轮之间只做差集，重复同步
+// 不积累。DetachLabel 撞 ErrNotFound 视为已达目的（并发路径已摘）。
+func (s *Service) reconcileDeliveryLabels(ctx context.Context, deliveryID string,
+	refs []tasksource.LabelRef, labelInternal map[string]string) error {
+	desired := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		if internal, ok := labelInternal[ref.ExternalID]; ok {
+			desired[internal] = true
+		}
+	}
+	current, err := s.st.ListDeliveryLabels(ctx, deliveryID)
+	if err != nil {
+		return err
+	}
+	for _, l := range current {
+		if l.ExternalLabelID == "" || desired[l.ID] {
+			continue // 本地标签不动；上游仍挂着的也不动
+		}
+		if err := s.st.DetachLabel(ctx, deliveryID, l.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+	}
+	for id := range desired {
+		if err := s.st.AttachLabel(ctx, deliveryID, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

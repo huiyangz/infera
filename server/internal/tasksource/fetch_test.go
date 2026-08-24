@@ -307,6 +307,40 @@ func TestListIssuesDecodesFetchFields(t *testing.T) {
 	require.Zero(t, second.Stage, "响应未带 stage（或 0）解码为 0，语义兜底归消费方")
 }
 
+// TestListIssuesDecodesLabels：issue 载荷的 labels 解码（INFERA-219 T02，对
+// 真实服务端实测：GET /api/issues 与 GET /api/issues/{id} 的 issue 对象都内嵌
+// 完整标签对象 id/name/color）。载荷未带 labels 字段 → nil（形状容错：老服务端
+// 不因多一个字段面报错，语义归映射层）。
+func TestListIssuesDecodesLabels(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"issues":[
+			{
+				"id":"i-1","identifier":"INFERA-78","title":"带标签",
+				"labels":[
+					{"id":"lbl-auto","name":"auto","color":"#22c55e","usage_count":3},
+					{"id":"lbl-intel","name":"情报","color":"#3b82f6","usage_count":0}
+				],
+				"updated_at":"2026-08-22T06:00:00Z"
+			},
+			{"id":"i-2","identifier":"INFERA-77","title":"无标签","updated_at":"2026-08-22T07:00:00Z"}
+		],"total":2}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	issues, err := c.ListIssues(context.Background())
+	require.NoError(t, err)
+	require.Len(t, issues, 2)
+
+	require.Len(t, issues[0].Labels, 2)
+	require.Equal(t, Label{ID: "lbl-auto", Name: "auto", Color: "#22c55e"}, issues[0].Labels[0])
+	require.Equal(t, Label{ID: "lbl-intel", Name: "情报", Color: "#3b82f6"}, issues[0].Labels[1])
+	require.Empty(t, issues[1].Labels, "载荷未带 labels → 空，不报错")
+}
+
 // TestListIssuesSendsQueryShape：翻页请求的查询串形态——limit 恒取服务端
 // 上限 100（单页越大请求越少），offset 随累计条数推进。
 func TestListIssuesSendsQueryShape(t *testing.T) {
