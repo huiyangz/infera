@@ -219,6 +219,10 @@ type Store interface {
 	ListProjectDeliveries(ctx context.Context, projectID string) ([]Delivery, error)
 	ListActiveDeliveries(ctx context.Context) ([]Delivery, error)
 	ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error)
+	// ListDeliveriesByLabelNames 跨项目按标签名取交付（需求发现视图，
+	// INFERA-225 冻结契约）：挂有 names 中任一标签即命中（OR 语义），同一
+	// 交付多标签命中只返回一次，按 updated_at 降序。names 空 = 无命中。
+	ListDeliveriesByLabelNames(ctx context.Context, names []string) ([]Delivery, error)
 	UpdateDelivery(ctx context.Context, d *Delivery) error
 	UpsertDeliveryByExternalID(ctx context.Context, d *Delivery) error
 	// labels（标签库，INFERA-218 T01 冻结）：CreateLabel 外部 ID 已被占用 →

@@ -101,6 +101,8 @@ func (s *Server) Mux() http.Handler {
 		r.Get("/api/pending-decisions", s.handlePendingDecisions)
 		// 项目任务分组视图（L202608221704-1-T01 冻结契约）：父任务 + 子任务按阶段分组。
 		r.Get("/api/projects/{id}/task-groups", s.handleProjectTaskGroups)
+		// 需求发现视图（INFERA-225 冻结契约）：两类 agent 任务跨项目列表。
+		r.Get("/api/discovery-tasks", s.handleDiscoveryTasks)
 		r.Get("/api/deliveries/{id}", s.handleGetDelivery)
 		r.Get("/api/deliveries/{id}/gate", s.handleGate)
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)

@@ -302,6 +302,31 @@ func (pg *Pg) ListProjectDeliveries(ctx context.Context, projectID string) ([]De
 	return out, rows.Err()
 }
 
+// ListDeliveriesByLabelNames 跨项目按标签名取交付（需求发现视图，语义与
+// Memory 一致）：挂有 names 中任一标签即命中（OR），子查询 IN 天然去重
+// （同一交付多标签命中只出一行），按 updated_at 降序（created_at/id 升序
+// 保持稳定）。names 空 = ANY 空数组自然空集。
+func (pg *Pg) ListDeliveriesByLabelNames(ctx context.Context, names []string) ([]Delivery, error) {
+	rows, err := pg.pool.Query(ctx,
+		`SELECT `+deliveryCols+` FROM deliveries WHERE id IN (
+			SELECT dl.delivery_id FROM delivery_labels dl JOIN labels l ON l.id = dl.label_id
+			WHERE l.name = ANY($1))
+		 ORDER BY updated_at DESC, created_at, id`, names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Delivery, 0)
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	return out, rows.Err()
+}
+
 // ListActiveDeliveries 跨项目取所有 active 交付（重启恢复用），按创建时间升序。
 func (pg *Pg) ListActiveDeliveries(ctx context.Context) ([]Delivery, error) {
 	rows, err := pg.pool.Query(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE status='active' ORDER BY created_at`)

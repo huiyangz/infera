@@ -280,6 +280,45 @@ func (m *Memory) ListChildDeliveries(ctx context.Context, parentID string) ([]De
 	return out, nil
 }
 
+// ListDeliveriesByLabelNames 跨项目按标签名取交付（需求发现视图，语义与
+// Pg 一致）：任一标签名命中即返回（OR），同一交付只出现一次，按 updated_at
+// 降序（同瞬以 created_at/id 升序保持稳定）。names 空 = 无命中。
+func (m *Memory) ListDeliveriesByLabelNames(_ context.Context, names []string) ([]Delivery, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nameSet := make(map[string]bool, len(names))
+	for _, n := range names {
+		nameSet[n] = true
+	}
+	labelNames := make(map[string]string, len(m.labels)) // labelID → name
+	for id, l := range m.labels {
+		labelNames[id] = l.Name
+	}
+	out := make([]Delivery, 0)
+	for _, d := range m.deliveries {
+		hit := false
+		for labelID := range m.deliveryLabels[d.ID] {
+			if nameSet[labelNames[labelID]] {
+				hit = true
+				break
+			}
+		}
+		if hit {
+			out = append(out, *d)
+		}
+	}
+	slices.SortFunc(out, func(a, b Delivery) int {
+		if c := b.UpdatedAt.Compare(a.UpdatedAt); c != 0 {
+			return c
+		}
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out, nil
+}
+
 // UpdateDelivery 按读到的 UpdatedAt 条件更新（乐观锁，同 UpdateAgent）：
 // 并发读-改-写的后写者版本已过期 → ErrConflict，不静默覆盖（全行覆盖曾无版本校验）。
 // 外部来源映射字段归同步入口所有，全行覆盖不冲掉（同 Pg 的列集语义）。
