@@ -99,7 +99,7 @@ export interface GateReview {
   raw?: string
 }
 
-export interface ProjectStats {
+interface ProjectStats {
   active: number
   pending: number
   last_activity: string
@@ -166,7 +166,7 @@ export interface DeliveryDetail {
 }
 
 /** 全 11 阶段全序（与 server engine.StageOrder 对齐） */
-export const STAGE_ORDER = [
+const STAGE_ORDER = [
   'intake',
   'spec',
   'spec_approval',
@@ -268,7 +268,7 @@ export function stageLabel(s: string): string {
 
 // —— agent 编排 ——
 
-export type AgentRunner = 'cli' | 'http' | 'docker' | 'local'
+type AgentRunner = 'cli' | 'http' | 'docker' | 'local'
 
 /** 注册的执行者（本批前端只读展示，CRUD 走后端/seed） */
 export interface Agent {

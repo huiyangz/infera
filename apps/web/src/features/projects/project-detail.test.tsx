@@ -17,7 +17,6 @@ import {
   getProjectPipeline,
   getProjectStats,
   listAgents,
-  listProjectDeliveries,
   listProjects,
   putProjectPipeline,
 } from '@/lib/infera-api'
@@ -36,7 +35,6 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     ...actual,
     getProject: vi.fn(),
     getProjectStats: vi.fn(),
-    listProjectDeliveries: vi.fn(),
     listProjects: vi.fn(),
     getProjectPipeline: vi.fn(),
     putProjectPipeline: vi.fn(),
@@ -143,11 +141,10 @@ afterEach(async () => {
 })
 
 describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列表入口）', () => {
-  it('AC1-1: 不再拉取也不展示需求列表（listProjectDeliveries 不被调用）', async () => {
+  it('AC1-1: 不再拉取也不展示需求列表（listProjectDeliveries 已随死代码清理移除）', async () => {
     const screen = await renderProjectDetail(makeProject())
     await waitForProject(screen)
 
-    expect(listProjectDeliveries).not.toHaveBeenCalled()
     // 需求列表栏（旧左栏标题「需求」）不复存在
     expect(await screen.getByText('需求', { exact: true }).query()).toBeNull()
   })

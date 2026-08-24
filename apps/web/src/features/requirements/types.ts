@@ -13,13 +13,10 @@ export type FlowNode =
   | 'needs_decision'
 
 /** 闸门卡类型（值即 gate_cards.kind） */
-export type GateKind = 'approval' | 'decision' | 'merge' | 'update'
+type GateKind = 'approval' | 'decision' | 'merge' | 'update'
 
 /** 卡片待处理状态 */
-export type CardStatus = 'pending' | 'resolved'
-
-/** 决策卡固定选项（POST decide 的 choice 取值，冻结） */
-export type DecisionChoice = 'retry' | 'skip' | 'abort' | 'custom'
+type CardStatus = 'pending' | 'resolved'
 
 /** 合并策略档位 */
 export type MergePolicyMode = 'manual' | 'auto_pass' | 'threshold'
@@ -91,7 +88,7 @@ export interface MergeResult {
 }
 
 /** PR 行级评审评论（GET pr-review 的元素；删除行评论 line=0、行号在 original_line） */
-export interface PRReviewComment {
+interface PRReviewComment {
   id: number
   path: string
   line: number
@@ -106,7 +103,7 @@ export interface PRReviewComment {
 }
 
 /** PR diff 概要（文件数与 +/- 行数） */
-export interface PRDiffStats {
+interface PRDiffStats {
   files: number
   additions: number
   deletions: number
