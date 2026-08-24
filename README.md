@@ -27,6 +27,9 @@ cp .env.example .env        # 填 INFERA_PASSWORD 等
 ./run-dev.sh                # 后端 :8080 + 前端 vite :5173（/api 代理到 8080）
 ```
 
+前端 install/build 依赖 `apps/web/pnpm-workspace.yaml` 的 `allowBuilds: esbuild`
+（已入库）——没有它 pnpm 11 不放行 esbuild 的 postinstall，装不上也 build 不了。
+
 迁移在启动时自动执行；数据库默认指向 `infera_v2`（新后端 v1 起全新 schema；旧库 `infera` 保留 legacy 数据仅供查阅）。
 
 ## 环境变量
@@ -63,4 +66,11 @@ local 绑定节点的完整闭环：网页「在本地处理此阶段」按钮 �
 （[helper/](helper/)）→ 在交付 workdir 拉起带 MCP 配置与初始提示的 claude/codex →
 产出经 MCP `submit_stage_output` 交回 → 流水线自动推进。安装与使用见
 [helper/README.md](helper/README.md)。
+
+## 任务同步（任务源 → infera）
+
+配置 `TASK_SYNC_*` 三键后，infera 把任务源工作区的项目、issue 与标签全量镜像进来
+（含标签库与逐交付挂标，幂等可重复）。同步机制见
+[docs/task-sync.md](docs/task-sync.md)，标签导入与验证手册见
+[docs/labels-import.md](docs/labels-import.md)。
 
