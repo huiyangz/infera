@@ -216,7 +216,7 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     expect(await synced.getByText(/同步/).query()).toBeNull()
   })
 
-  it('AC1-4: 必需配置呈现项目已有配置字段（本地路径/Git 仓库/默认分支）', async () => {
+  it('AC1-4: 必需配置呈现项目已有配置字段（Git 仓库/默认分支）', async () => {
     const screen = await renderProjectDetail(makeProject())
     await waitForProject(screen)
 
@@ -389,9 +389,10 @@ describe('ProjectDetail 编排对话框项目级唯一定义（INFERA-181）', (
   })
 })
 
-// —— INFERA-191：项目信息同时展示本地目录与 git 仓库地址 ——
-// repo_url 单字段承载本地路径（/ 开头）或 git 地址（https/ssh/git@），
-// 按形态归类到「本地路径」「Git 仓库」两行；空值给「未绑定」占位不隐藏整行。
+// —— INFERA-209：必需配置卡片移除「本地路径」行 ——
+// repo_url 单字段仍承载本地路径（/ 开头）或 git 地址（https/ssh/git@），
+// 但本地路径不再入卡：配置卡只保留「Git 仓库」「默认分支」两行，
+// 本地形态 repo_url 时 Git 仓库行给「未绑定」占位。
 
 /** 定位「必需配置」区（section）的 DOM 节点，行内断言都以它为作用域 */
 async function configSection(screen: RenderResult): Promise<HTMLElement> {
@@ -410,28 +411,45 @@ async function configRowValue(
   return row?.querySelector('dd')?.textContent?.trim() ?? ''
 }
 
-describe('ProjectDetail 项目信息双行展示本地目录与 Git 仓库（INFERA-191）', () => {
-  it('AC1: repo_url 为本地路径时，「本地路径」行显示路径、「Git 仓库」行显示「未绑定」', async () => {
+/** 配置区全部行标签（dt 文本，按 DOM 顺序） */
+async function configLabels(screen: RenderResult): Promise<string[]> {
+  const section = await configSection(screen)
+  return Array.from(section.querySelectorAll('dt')).map((dt) =>
+    dt.textContent?.trim()
+  )
+}
+
+describe('ProjectDetail 必需配置卡片移除「本地路径」行（INFERA-209）', () => {
+  it('AC1: 配置卡只保留「Git 仓库」「默认分支」两行，整页不再出现「本地路径」文案', async () => {
+    const screen = await renderProjectDetail(makeProject())
+    await waitForProject(screen)
+
+    expect(await configLabels(screen)).toEqual(['Git 仓库', '默认分支'])
+    // 整页（含顶栏）不再出现「本地路径」文案
+    expect(
+      await screen.getByText('本地路径', { exact: true }).query()
+    ).toBeNull()
+  })
+
+  it('AC1: repo_url 为本地路径时不再入卡——Git 仓库行给「未绑定」，路径值与文案都不出现在配置卡', async () => {
     const LOCAL = '/Users/dev/demo-project'
     const screen = await renderProjectDetail(makeProject({ repo_url: LOCAL }))
     await waitForProject(screen)
 
-    expect(await configRowValue(screen, '本地路径')).toBe(LOCAL)
+    expect(await configLabels(screen)).toEqual(['Git 仓库', '默认分支'])
     expect(await configRowValue(screen, 'Git 仓库')).toBe('未绑定')
-    // 旧单行标签「仓库地址」不复存在（由双行取代）
+    // 路径值只留在顶栏 repo_url 展示，配置卡不呈现
     const section = await configSection(screen)
+    expect(section.textContent).not.toContain(LOCAL)
     expect(
-      Array.from(section.querySelectorAll('dt')).some(
-        (dt) => dt.textContent?.trim() === '仓库地址'
-      )
-    ).toBe(false)
+      await screen.getByText('本地路径', { exact: true }).query()
+    ).toBeNull()
   })
 
-  it('AC1: repo_url 为 git 地址时归「Git 仓库」行（git@ 与 https 形态），「本地路径」行显示「未绑定」', async () => {
+  it('AC1: repo_url 为 git 地址时归「Git 仓库」行（git@ 与 https 形态）', async () => {
     const screen = await renderProjectDetail(makeProject())
     await waitForProject(screen)
     expect(await configRowValue(screen, 'Git 仓库')).toBe(SHORT_REPO)
-    expect(await configRowValue(screen, '本地路径')).toBe('未绑定')
     await screen.unmount()
 
     const HTTPS = 'https://github.com/acme/repo2.git'
@@ -440,22 +458,15 @@ describe('ProjectDetail 项目信息双行展示本地目录与 Git 仓库（INF
     )
     await waitForProject(httpsScreen)
     expect(await configRowValue(httpsScreen, 'Git 仓库')).toBe(HTTPS)
-    expect(await configRowValue(httpsScreen, '本地路径')).toBe('未绑定')
   })
 
-  it('AC2: repo_url 为空时两行均可见、各显示「未绑定」占位（不隐藏整行）', async () => {
+  it('AC2: repo_url 为空时「Git 仓库」行仍可见、显示「未绑定」占位（不隐藏整行）', async () => {
     const screen = await renderProjectDetail(
       makeProject({ repo_url: '', default_branch: '' })
     )
     await waitForProject(screen)
 
-    const section = await configSection(screen)
-    const labels = Array.from(section.querySelectorAll('dt')).map((dt) =>
-      dt.textContent?.trim()
-    )
-    expect(labels).toContain('本地路径')
-    expect(labels).toContain('Git 仓库')
-    expect(await configRowValue(screen, '本地路径')).toBe('未绑定')
+    expect(await configLabels(screen)).toEqual(['Git 仓库', '默认分支'])
     expect(await configRowValue(screen, 'Git 仓库')).toBe('未绑定')
   })
 
