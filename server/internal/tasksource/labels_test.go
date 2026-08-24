@@ -45,6 +45,35 @@ func TestListLabels(t *testing.T) {
 	require.Equal(t, "auto", labels[0].Name)
 }
 
+// TestListLabelsDecodesColor：标签库元素的颜色解码（INFERA-219 T02，对真实
+// 服务端实测：GET /api/labels 的元素带 color hex 原值，如 #22c55e）。裸数组与
+// 包裹两形都要解出颜色——同步链路按它落库"名称+颜色与 Multica 一致"。
+func TestListLabelsDecodesColor(t *testing.T) {
+	cases := []struct {
+		name  string
+		body  string
+		id    string
+		color string
+	}{
+		{"裸数组", `[{"id":"lbl-auto","name":"auto","color":"#22c55e"}]`, "lbl-auto", "#22c55e"},
+		{"包裹", `{"labels":[{"id":"lbl-cand","name":"候选","color":"#a855f7"}],"total":1}`, "lbl-cand", "#a855f7"},
+	}
+	for _, tc := range cases {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		c, err := New(ts.URL, "mul_t", "ws-1")
+		require.NoError(t, err)
+
+		labels, err := c.ListLabels(context.Background())
+		require.NoError(t, err, tc.name)
+		require.Len(t, labels, 1, tc.name)
+		require.Equal(t, tc.id, labels[0].ID, tc.name)
+		require.Equal(t, tc.color, labels[0].Color, "%s：color hex 原值必须解出", tc.name)
+	}
+}
+
 // TestListLabelsWrappedShape：标签列表的裸数组/包裹双形兼容。CLI 会消费
 // GET /api/labels（capture 实证），但服务端裸数组还是 {"labels":[...]}
 // 包裹未在本机裸验过——按两种形状都解，任一命中即用，避免形状赌注。

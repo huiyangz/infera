@@ -17,9 +17,11 @@ import (
 type fakeFetch struct {
 	projects  []tasksource.Project
 	issues    []tasksource.Issue
+	labels    []tasksource.Label                      // workspace 标签库（nil = 上游无标签）
 	resources map[string][]tasksource.ProjectResource // 项目 id → 资源列表（nil = 无资源）
 	projErr   error
 	issErr    error
+	lblErr    error
 	resErr    error
 
 	// entered/release 非空时 ListProjects 先发信号再等放行（并发守卫测试）。
@@ -43,6 +45,13 @@ func (f *fakeFetch) ListIssues(ctx context.Context) ([]tasksource.Issue, error) 
 		return nil, f.issErr
 	}
 	return f.issues, nil
+}
+
+func (f *fakeFetch) ListLabels(ctx context.Context) ([]tasksource.Label, error) {
+	if f.lblErr != nil {
+		return nil, f.lblErr
+	}
+	return f.labels, nil
 }
 
 func (f *fakeFetch) ListProjectResources(_ context.Context, projectID string) ([]tasksource.ProjectResource, error) {

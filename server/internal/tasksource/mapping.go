@@ -22,21 +22,32 @@ type ProjectSnapshot struct {
 	UpdatedAt   time.Time // 同步新鲜度（幂等 upsert 的比较面）
 }
 
+// LabelRef 是逐 issue 标签引用的映射产物：ExternalID 是挂标的幂等键
+// （上游标签 id，与标签库快照同键），Name/Color 供同步轮 upsert 标签库
+// 保持"名称+颜色与上游一致"（含 issue 引用了标签库拉取面未见过的标签时
+// 的兜底落库）。
+type LabelRef struct {
+	ExternalID string
+	Name       string
+	Color      string
+}
+
 // IssueSnapshot 是 上游 issue → infera 的映射产物（纯数据，不落库）。
 // ProjectSnapshot 同款归一约定；父子关系以 ParentExternalID 表达
 // （子. ParentExternalID == 父.ExternalID，顶层为空串）。
 type IssueSnapshot struct {
-	ExternalID        string    // 上游 issue id（uuid）
-	Identifier        string    // 人读键，如 INFERA-78
-	Title             string    // 标题
-	Description       string    // 描述（未填归一为空串）
-	Status            string    // 状态：保留上游原词表透传
-	Priority          string    // 优先级：保留上游原词表透传
-	Assignee          ActorRef  // 负责人（assignee_type/assignee_id）
-	ParentExternalID  string    // 父子关系：父 issue 的上游 id；空 = 顶层
-	ProjectExternalID string    // 项目归属：所属项目的上游 id；空 = 未挂项目
-	Stage             int       // 子任务所属阶段（上游 stage 1..N 原值透传；顶层/未带 = 0，兜底归消费方）
-	UpdatedAt         time.Time // 同步新鲜度（幂等 upsert 的比较面）
+	ExternalID        string     // 上游 issue id（uuid）
+	Identifier        string     // 人读键，如 INFERA-78
+	Title             string     // 标题
+	Description       string     // 描述（未填归一为空串）
+	Status            string     // 状态：保留上游原词表透传
+	Priority          string     // 优先级：保留上游原词表透传
+	Assignee          ActorRef   // 负责人（assignee_type/assignee_id）
+	ParentExternalID  string     // 父子关系：父 issue 的上游 id；空 = 顶层
+	ProjectExternalID string     // 项目归属：所属项目的上游 id；空 = 未挂项目
+	Stage             int        // 子任务所属阶段（上游 stage 1..N 原值透传；顶层/未带 = 0，兜底归消费方）
+	Labels            []LabelRef // 逐 issue 标签引用（无标签 = 空切片；半截条目已丢弃）
+	UpdatedAt         time.Time  // 同步新鲜度（幂等 upsert 的比较面）
 }
 
 // MapProject 把拉取面的 上游项目映射为快照。纯函数：不落库、不写
@@ -67,8 +78,22 @@ func MapIssue(i Issue) IssueSnapshot {
 		ParentExternalID:  derefOrEmpty(i.ParentIssueID),
 		ProjectExternalID: derefOrEmpty(i.ProjectID),
 		Stage:             i.Stage,
+		Labels:            labelRefs(i.Labels),
 		UpdatedAt:         i.UpdatedAt,
 	}
+}
+
+// labelRefs 归一标签引用：空 id 的半截条目不是合法引用（挂标/落库都无从
+// 定位），映射期丢弃而不是带病透传；无标签归一为空切片。
+func labelRefs(ls []Label) []LabelRef {
+	out := make([]LabelRef, 0, len(ls))
+	for _, l := range ls {
+		if l.ID == "" {
+			continue
+		}
+		out = append(out, LabelRef{ExternalID: l.ID, Name: l.Name, Color: l.Color})
+	}
+	return out
 }
 
 // derefOrEmpty 解引用可空字符串：nil/未填 → ""。
