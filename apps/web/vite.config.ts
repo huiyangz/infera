@@ -51,7 +51,6 @@ export default defineConfig({
       exclude: [
         'src/components/ui/**',
         'src/assets/**',
-        'src/tanstack-table.d.ts',
         'src/routeTree.gen.ts',
         'src/test-utils/**',
         'src/routes/**',

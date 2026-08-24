@@ -83,20 +83,6 @@ func TestResolveIncompleteBindings(t *testing.T) {
 	require.ErrorAs(t, err, &incomplete)
 	require.Equal(t, []string{"test_gen", "code_review"}, incomplete.Missing)
 	require.Contains(t, err.Error(), "test_gen")
-
-	// ValidateComplete 只强校验基准节点：缺任一基准节点即失败，全基准节点通过。
-	partial := map[string]Effective{}
-	for i, n := range RequiredNodes {
-		if i < len(RequiredNodes)-1 {
-			partial[n] = Effective{}
-		}
-	}
-	require.Error(t, ValidateComplete(partial))
-	full := map[string]Effective{}
-	for _, n := range RequiredNodes {
-		full[n] = Effective{}
-	}
-	require.NoError(t, ValidateComplete(full))
 }
 
 // TestDesignTasksBindable（R11 冒烟阻塞点）：design/tasks 属 11 阶段链路的

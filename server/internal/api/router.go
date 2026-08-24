@@ -99,10 +99,8 @@ func (s *Server) Mux() http.Handler {
 		// 项目维度只读视图（INFERA-108 T01）：需求统计 + 跨项目待决策列表。
 		r.Get("/api/projects/{id}/stats", s.handleProjectStats)
 		r.Get("/api/pending-decisions", s.handlePendingDecisions)
-		r.Get("/api/projects/{id}/deliveries", s.handleListDeliveries)
 		// 项目任务分组视图（L202608221704-1-T01 冻结契约）：父任务 + 子任务按阶段分组。
 		r.Get("/api/projects/{id}/task-groups", s.handleProjectTaskGroups)
-		r.Post("/api/projects/{id}/deliveries", s.handleCreateDelivery)
 		r.Get("/api/deliveries/{id}", s.handleGetDelivery)
 		r.Get("/api/deliveries/{id}/gate", s.handleGate)
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)

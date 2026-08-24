@@ -8,7 +8,7 @@
 import { ApiError } from '@/lib/infera-api'
 
 /** 一条被跳过的 issue（不落库，计数可审计；reason: smoke|no_project|parent_cycle） */
-export interface TaskSyncSkip {
+interface TaskSyncSkip {
   external_issue_id: string
   issue_key: string
   reason: string

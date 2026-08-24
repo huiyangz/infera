@@ -85,8 +85,7 @@ esac
 	require.Equal(t, origin, proj.RepoURL)
 
 	// 2. 建需求 → 引擎异步推进到 spec 门禁
-	var d store.Delivery
-	post(t, client, base+"/api/projects/"+proj.ID+"/deliveries", `{"title":"打招呼","description":"写 hello"}`, &d)
+	d := seedDelivery(t, st, srv, proj.ID, "打招呼", "写 hello")
 	waitFor(t, client, base, d.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "应停在 spec 审批门")
@@ -195,8 +194,7 @@ fi
 	var proj store.Project
 	post(t, client, ts.URL+"/api/projects",
 		fmt.Sprintf(`{"name":"loop","repo_url":%q,"default_branch":"main"}`, newBare(t)), &proj)
-	var d store.Delivery
-	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries", `{"title":"回环","description":"x"}`, &d)
+	d := seedDelivery(t, st, srv, proj.ID, "回环", "x")
 
 	// 到 spec 门禁 → 批准；unit_test 会失败一次（attempt1 无 hello.txt）→ 驱动循环重试 code_gen → 第二次通过 → code_review 门
 	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
@@ -272,8 +270,7 @@ esac
 		fmt.Sprintf(`{"name":"repo-backed","repo_url":%q,"default_branch":"main"}`, origin), &proj)
 	require.Equal(t, origin, proj.RepoURL)
 
-	var d store.Delivery
-	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries", `{"title":"加功能","description":"x"}`, &d)
+	d := seedDelivery(t, st, srv, proj.ID, "加功能", "x")
 	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "停在 spec 门")
@@ -402,11 +399,36 @@ func waitFor(t *testing.T, c *http.Client, base, deliveryID string, cond func(de
 
 // --- split deliveries E2E ---
 
-// listDeliveries 拉项目交付列表。
-func listDeliveries(t *testing.T, c *http.Client, base, projectID string) []store.Delivery {
+// seedDelivery 直连 store 建交付并异步点火。POST /api/projects/{id}/deliveries
+// 已删除（生产创建入口 POST /api/projects/{id}/requirements 走上游同步，e2e
+// 无上游可用）；本 helper 复刻被删 handler 的落库形状（active + intake +
+// delivery_created 事件 + 后台驱动），后续推进/门禁仍全部走 HTTP 面。
+func seedDelivery(t *testing.T, st store.Store, srv *api.Server, projectID, title, description string) store.Delivery {
 	t.Helper()
-	var ds []store.Delivery
-	get(t, c, base+"/api/projects/"+projectID+"/deliveries", &ds)
+	d := &store.Delivery{
+		ProjectID:    projectID,
+		Title:        title,
+		Description:  description,
+		Status:       "active",
+		CurrentStage: "intake",
+	}
+	require.NoError(t, st.CreateDelivery(context.Background(), d))
+	require.NoError(t, st.AppendEvent(context.Background(), &store.Event{
+		DeliveryID: d.ID,
+		Stage:      "intake",
+		EventType:  "delivery_created",
+		Payload:    []byte(`{}`),
+	}))
+	go srv.RunDelivery(d.ID)
+	return *d
+}
+
+// listDeliveries 读项目交付列表（GET /api/projects/{id}/deliveries 已删除，
+// 改直连 store——断言的是数据而非 HTTP 形状）。
+func listDeliveries(t *testing.T, st store.Store, projectID string) []store.Delivery {
+	t.Helper()
+	ds, err := st.ListProjectDeliveries(context.Background(), projectID)
+	require.NoError(t, err)
 	return ds
 }
 
@@ -424,11 +446,11 @@ type tasksGateJSON struct {
 
 // driveChildren 轮询项目交付列表，给所有停在门禁的子需求放行；
 // 子需求全部完成后给父放行 code_review。父 completed 时返回。
-func driveChildren(t *testing.T, c *http.Client, base, projectID, parentID string) {
+func driveChildren(t *testing.T, st store.Store, c *http.Client, base, projectID, parentID string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		ds := listDeliveries(t, c, base, projectID)
+		ds := listDeliveries(t, st, projectID)
 		parentDone, childrenDone := false, true
 		for i := range ds {
 			d := &ds[i]
@@ -532,9 +554,7 @@ esac
 	post(t, client, ts.URL+"/api/projects",
 		fmt.Sprintf(`{"name":"split","repo_url":%q,"default_branch":"main"}`, origin), &proj)
 
-	var parent store.Delivery
-	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries",
-		`{"title":"父需求","description":"ROOT-SPEC 写三个文件"}`, &parent)
+	parent := seedDelivery(t, st, srv, proj.ID, "父需求", "ROOT-SPEC 写三个文件")
 	waitFor(t, client, ts.URL, parent.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "父停在 spec 门")
@@ -568,9 +588,9 @@ esac
 
 	// 父 + 3 子 = 4；wave1 两子 active，wave2 子 queued（批次门控）
 	require.Eventually(t, func() bool {
-		return len(listDeliveries(t, client, ts.URL, proj.ID)) == 4
+		return len(listDeliveries(t, st, proj.ID)) == 4
 	}, 5*time.Second, 100*time.Millisecond)
-	ds := listDeliveries(t, client, ts.URL, proj.ID)
+	ds := listDeliveries(t, st, proj.ID)
 	var w2 *store.Delivery
 	for i := range ds {
 		if ds[i].Wave == 2 {
@@ -595,10 +615,10 @@ esac
 	require.Len(t, *det.Children, 3)
 
 	// 驱动全部子需求过门 → 增量合并 → wave2 启动 → 父收尾完成
-	driveChildren(t, client, ts.URL, proj.ID, parent.ID)
+	driveChildren(t, st, client, ts.URL, proj.ID, parent.ID)
 
 	// wave2 曾被批次门控（上面断言过 queued），最终也启动并完成
-	ds = listDeliveries(t, client, ts.URL, proj.ID)
+	ds = listDeliveries(t, st, proj.ID)
 	completed := 0
 	for _, d := range ds {
 		if d.ParentID == parent.ID && d.Status == "completed" {
@@ -692,9 +712,7 @@ esac
 	var proj store.Project
 	post(t, client, ts.URL+"/api/projects",
 		fmt.Sprintf(`{"name":"large","repo_url":%q,"default_branch":"main"}`, newBare(t)), &proj)
-	var d store.Delivery
-	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries",
-		`{"title":"大需求","description":"写多个文件"}`, &d)
+	d := seedDelivery(t, st, srv, proj.ID, "大需求", "写多个文件")
 
 	// spec 门：建议 large；显式批准 large（人工可改判路径）→ 设计门
 	waitFor(t, client, ts.URL, d.ID, func(det detailJSON) bool {
@@ -841,9 +859,7 @@ esac
 	var proj store.Project
 	post(t, client, ts.URL+"/api/projects",
 		fmt.Sprintf(`{"name":"conflict","repo_url":%q,"default_branch":"main"}`, origin), &proj)
-	var parent store.Delivery
-	post(t, client, ts.URL+"/api/projects/"+proj.ID+"/deliveries",
-		`{"title":"父需求","description":"ROOT-SPEC 冲突场景"}`, &parent)
+	parent := seedDelivery(t, st, srv, proj.ID, "父需求", "ROOT-SPEC 冲突场景")
 	waitFor(t, client, ts.URL, parent.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "父停在 spec 门")
@@ -864,7 +880,7 @@ esac
 
 	// 驱动子需求过门（wave1 完成即触发增量合并 → 第二个合并冲突暂停队列，
 	// wave2 子需求保持 queued，父停在 merge_state=conflict）。
-	driveChildrenUntilConflict(t, client, ts.URL, proj.ID, parent.ID)
+	driveChildrenUntilConflict(t, st, client, ts.URL, proj.ID, parent.ID)
 	var conflictDet detailJSON
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID, &conflictDet)
 	var instructions string
@@ -896,7 +912,7 @@ esac
 	runGit("checkout", "-b", "infera/"+parent.ID[:8], "origin/main")
 	// 按完成顺序合子分支；第二个 same.txt 冲突 → 手写解决内容。
 	resolved := 0
-	for _, d := range listDeliveries(t, client, ts.URL, proj.ID) {
+	for _, d := range listDeliveries(t, st, proj.ID) {
 		if d.ParentID != parent.ID || d.Status != "completed" {
 			continue
 		}
@@ -915,7 +931,7 @@ esac
 
 	// 继续恢复：wave2 启动 → 驱动到底
 	post(t, client, ts.URL+"/api/deliveries/"+parent.ID+"/merge/resume", `{}`, nil)
-	driveChildren(t, client, ts.URL, proj.ID, parent.ID)
+	driveChildren(t, st, client, ts.URL, proj.ID, parent.ID)
 
 	var final detailJSON
 	get(t, client, ts.URL+"/api/deliveries/"+parent.ID, &final)
@@ -937,11 +953,11 @@ esac
 
 // driveChildrenUntilConflict 只驱动子需求门禁，不碰父；父进入 conflict 即返回
 // （wave2 子需求仍 queued，等恢复后才会启动）。
-func driveChildrenUntilConflict(t *testing.T, c *http.Client, base, projectID, parentID string) {
+func driveChildrenUntilConflict(t *testing.T, st store.Store, c *http.Client, base, projectID, parentID string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		for _, d := range listDeliveries(t, c, base, projectID) {
+		for _, d := range listDeliveries(t, st, projectID) {
 			if d.ParentID == parentID && d.Status == "active" && d.PendingGate != "" {
 				post(t, c, base+"/api/deliveries/"+d.ID+"/approve", `{}`, nil)
 			}

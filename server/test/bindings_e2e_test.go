@@ -109,8 +109,7 @@ esac
 		fmt.Sprintf(`{"name":"b","repo_url":%q,"default_branch":"main"}`, newBare(t)), &projB)
 	putProjectBindings(t, client, base, projA.ID, fullA)
 
-	var dA store.Delivery
-	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"A","description":"x"}`, &dA)
+	dA := seedDelivery(t, st, srv, projA.ID, "A", "x")
 	waitFor(t, client, base, dA.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "A 停在 spec 门")
@@ -129,8 +128,7 @@ esac
 		b["test_gen"] = idB
 		return b
 	}())
-	var dB store.Delivery
-	post(t, client, base+"/api/projects/"+projB.ID+"/deliveries", `{"title":"B","description":"x"}`, &dB)
+	dB := seedDelivery(t, st, srv, projB.ID, "B", "x")
 	waitFor(t, client, base, dB.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "B 停在 spec 门")
@@ -144,8 +142,7 @@ esac
 
 	// A 不受影响：A 的既有 delivery 已在上面断言过 AGENT_A；
 	// A 的新交付仍走自己的项目绑定。
-	var dA2 store.Delivery
-	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"A2","description":"x"}`, &dA2)
+	dA2 := seedDelivery(t, st, srv, projA.ID, "A2", "x")
 	waitFor(t, client, base, dA2.ID, func(det detailJSON) bool {
 		return det.Delivery.PendingGate == "spec_approval"
 	}, "A2 停在 spec 门")
@@ -163,8 +160,7 @@ esac
 		 VALUES (gen_random_uuid(), NULL, 'test_gen', $1)`, idB)
 	require.NoError(t, err)
 	require.NoError(t, st.DeleteBinding(context.Background(), projA.ID, "test_gen"))
-	var dC store.Delivery
-	post(t, client, base+"/api/projects/"+projA.ID+"/deliveries", `{"title":"C","description":"x"}`, &dC)
+	dC := seedDelivery(t, st, srv, projA.ID, "C", "x")
 	det = waitFor(t, client, base, dC.ID, func(det detailJSON) bool {
 		return det.Delivery.Status == "blocked"
 	}, "缺绑定的新交付应 blocked（全局遗留行不得兜底）")

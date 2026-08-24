@@ -98,9 +98,6 @@ export async function patchProjectPinned(
     })
   )
 }
-export async function listProjectDeliveries(id: string): Promise<Delivery[]> {
-  return json(await fetch(`/api/projects/${id}/deliveries`))
-}
 /** 项目任务分组列表（L202608221704-1-T01 冻结契约，形状见 TaskGroupRow） */
 export async function listProjectTaskGroups(
   id: string
@@ -136,19 +133,6 @@ export async function putProjectPipeline(
     })
   )
 }
-export async function createDelivery(
-  projectId: string,
-  input: { title: string; description?: string }
-): Promise<Delivery> {
-  return json(
-    await fetch(`/api/projects/${projectId}/deliveries`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    })
-  )
-}
-
 // —— delivery 详情 / gate ——
 export async function getDelivery(id: string): Promise<DeliveryDetail> {
   return json(await fetch(`/api/deliveries/${id}`))

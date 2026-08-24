@@ -104,6 +104,7 @@ func TestProjectsPinnedAndStats(t *testing.T) {
 type fakeEngine struct {
 	mu                  sync.Mutex
 	started             []string
+	startAttempts       []string // 进入 Start 即记（含 failStart 失败的尝试）
 	continued           []string
 	approved            []string
 	approveSplits       map[string][]store.ChildSpec
@@ -119,6 +120,7 @@ type fakeEngine struct {
 func (f *fakeEngine) Start(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.startAttempts = append(f.startAttempts, id)
 	if f.failStart {
 		return errors.New("engine boom")
 	}
@@ -188,6 +190,12 @@ func (f *fakeEngine) startCount() int {
 	return len(f.started)
 }
 
+func (f *fakeEngine) startAttemptCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.startAttempts)
+}
+
 func (f *fakeEngine) startedIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -243,43 +251,61 @@ func (f *fakeEngine) tasksFor(id string) []store.TaskSpec {
 }
 
 func newServerWithEngine(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine) {
+	ts, st, fe, _ := newEngineServer(t)
+	return ts, st, fe
+}
+
+// newEngineServer 同 newServerWithEngine，但额外返回 *Server——
+// 需要 RunDelivery（异步点火入口）的测试用这个。
+func newEngineServer(t *testing.T) (*httptest.Server, *store.Memory, *fakeEngine, *Server) {
 	st := store.NewMemory()
 	fe := &fakeEngine{}
 	srv := NewServer(st, "secret-pass", fe)
 	ts := httptest.NewServer(srv.Mux())
 	t.Cleanup(ts.Close)
-	return ts, st, fe
+	return ts, st, fe, srv
+}
+
+// seedDelivery 直连 store 建交付并异步点火。POST /api/projects/{id}/deliveries
+// 已删除（生产创建入口是 POST /api/projects/{id}/requirements，走上游同步），
+// 本 helper 只为读/驾驶面（详情、gate、approve/reject）造同款起点的测试数据：
+// active + intake + delivery_created 事件 + 后台驱动，与被删 handler 落库形状一致。
+func seedDelivery(t *testing.T, st *store.Memory, srv *Server, projectID, title string) store.Delivery {
+	t.Helper()
+	d := &store.Delivery{
+		ProjectID:    projectID,
+		Title:        title,
+		Status:       "active",
+		CurrentStage: "intake",
+	}
+	require.NoError(t, st.CreateDelivery(context.Background(), d))
+	require.NoError(t, st.AppendEvent(context.Background(), &store.Event{
+		DeliveryID: d.ID,
+		Stage:      "intake",
+		EventType:  "delivery_created",
+		Payload:    []byte(`{}`),
+	}))
+	go srv.RunDelivery(d.ID)
+	return *d
 }
 
 func TestDeliveryLifecycleAPI(t *testing.T) {
-	ts, st, fe := newServerWithEngine(t)
+	ts, st, fe, srv := newEngineServer(t)
 	c := login(t, ts.URL)
 	ctx := context.Background()
 
 	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
-	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"需求A","description":"描述"}`))
-	require.Equal(t, 201, r.StatusCode)
-	var d store.Delivery
-	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
+	d := seedDelivery(t, st, srv, p.ID, "需求A")
 	require.Equal(t, "intake", d.CurrentStage)
 	require.Equal(t, "active", d.Status)
 	require.NotEmpty(t, d.ID)
 	// 引擎被异步触发（至少一次 Start）
 	require.Eventually(t, func() bool { return fe.startCount() >= 1 }, 2*time.Second, 20*time.Millisecond)
 
-	// 列表
-	r, _ = c.Get(ts.URL + "/api/projects/" + p.ID + "/deliveries")
-	require.Equal(t, 200, r.StatusCode)
-	var list []store.Delivery
-	require.NoError(t, json.NewDecoder(r.Body).Decode(&list))
-	require.Len(t, list, 1)
-	require.Equal(t, "需求A", list[0].Title)
-
 	// 尚无门禁 → gate 400
-	r, _ = c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
+	r, _ := c.Get(ts.URL + "/api/deliveries/" + d.ID + "/gate")
 	require.Equal(t, 400, r.StatusCode)
 
 	// 引擎跑到 spec 门禁（直接改 store 模拟引擎推进）
@@ -346,31 +372,26 @@ func TestDeliveryLifecycleAPI(t *testing.T) {
 	require.Equal(t, 200, r.StatusCode)
 }
 
-// 引擎 Start 报错不拖垮创建：异步 driver 吞掉错误（状态由引擎自己承载）。
+// 引擎 Start 报错不拖垮异步驱动：driver 吞掉错误（状态由引擎自己承载）。
+// 创建端点删除后，该语义经 RunDelivery（引擎 OnStartDelivery 批次点火回调）
+// 与 approve 后的重点火同一路径进入 driveLocked。
 func TestDeliveryEngineStartErrorSwallowed(t *testing.T) {
-	ts, st, fe := newServerWithEngine(t)
+	_, st, fe, srv := newEngineServer(t)
 	fe.failStart = true
-	c := login(t, ts.URL)
 	ctx := context.Background()
 
 	p := &store.Project{Name: "p", RepoURL: "https://github.com/x/y"}
 	require.NoError(t, st.CreateProject(ctx, p))
 
-	r, _ := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"需求B"}`))
-	require.Equal(t, 201, r.StatusCode)
-	var d store.Delivery
-	require.NoError(t, json.NewDecoder(r.Body).Decode(&d))
+	d := seedDelivery(t, st, srv, p.ID, "需求B")
 	require.Equal(t, "active", d.Status)
+	// 异步 driver 确实点火过（尝试即算——失败也证明路径走到了引擎）
+	require.Eventually(t, func() bool { return fe.startAttemptCount() >= 1 }, 2*time.Second, 20*time.Millisecond)
 
-	// 缺 title → 400
-	r, _ = c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"  "}`))
-	require.Equal(t, 400, r.StatusCode)
-	// 项目不存在 → 404
-	r, _ = c.Post(ts.URL+"/api/projects/00000000-0000-0000-0000-000000000000/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"x"}`))
-	require.Equal(t, 404, r.StatusCode)
+	// driver 吞错不 panic、不改状态：交付仍 active，可继续被读取/驾驶。
+	got, err := st.GetDelivery(ctx, d.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", got.Status)
 }
 
 // 畸形 id（非 UUID）一律 404：不能把无效 UUID 传进 store 后以 500 泄漏驱动内部错误。
@@ -380,7 +401,6 @@ func TestMalformedIDReturns404(t *testing.T) {
 
 	for _, path := range []string{
 		"/api/projects/not-a-uuid",
-		"/api/projects/not-a-uuid/deliveries",
 		"/api/deliveries/not-a-uuid",
 		"/api/deliveries/not-a-uuid/gate",
 	} {
@@ -393,9 +413,7 @@ func TestMalformedIDReturns404(t *testing.T) {
 	r, _ := c.Do(req)
 	require.Equal(t, 404, r.StatusCode)
 
-	r, _ = c.Post(ts.URL+"/api/projects/not-a-uuid/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"x"}`))
-	require.Equal(t, 404, r.StatusCode)
+	r, _ = c.Post(ts.URL+"/api/deliveries/not-a-uuid/approve", "", nil)
 
 	r, _ = c.Post(ts.URL+"/api/deliveries/not-a-uuid/approve", "", nil)
 	require.Equal(t, 404, r.StatusCode)
@@ -778,22 +796,13 @@ func TestSplitParentDetailIncludesChildren(t *testing.T) {
 }
 
 func TestRepoRequired(t *testing.T) {
-	ts, st := newServer(t)
+	ts, _ := newServer(t)
 	c := login(t, ts.URL)
-	ctx := context.Background()
 
-	// 建项目必须绑仓库
+	// 建项目必须绑仓库。（原「未绑仓库的存量项目提需求被拒」走
+	// POST /api/projects/{id}/deliveries，该端点已删除——现在的创建入口
+	// POST /api/projects/{id}/requirements 由上游映射校验把关。）
 	r, _ := c.Post(ts.URL+"/api/projects", "application/json",
 		bytes.NewBufferString(`{"name":"green"}`))
 	require.Equal(t, 400, r.StatusCode)
-
-	// 未绑仓库的存量项目：提需求被拒
-	p := &store.Project{Name: "no-repo"}
-	require.NoError(t, st.CreateProject(ctx, p))
-	r, _ = c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"x"}`))
-	require.Equal(t, 400, r.StatusCode)
-	var e map[string]string
-	_ = json.NewDecoder(r.Body).Decode(&e)
-	require.Contains(t, e["error"], "未绑定仓库")
 }

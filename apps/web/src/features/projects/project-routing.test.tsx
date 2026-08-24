@@ -10,7 +10,6 @@ import { page } from 'vitest/browser'
 import {
   getProject,
   getProjectStats,
-  listProjectDeliveries,
   listProjectTaskGroups,
   listProjects,
   me,
@@ -36,7 +35,6 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     listProjects: vi.fn(),
     getProject: vi.fn(),
     getProjectStats: vi.fn(),
-    listProjectDeliveries: vi.fn(),
     listProjectTaskGroups: vi.fn(),
   }
 })
@@ -134,7 +132,6 @@ async function renderApp(initialPath: string) {
     by_status: { active: 1, queued: 1, completed: 1, blocked: 0 },
     last_synced_at: null,
   })
-  vi.mocked(listProjectDeliveries).mockResolvedValue([makeDelivery()])
   vi.mocked(listProjectTaskGroups).mockResolvedValue([makeTaskGroup()])
   vi.mocked(listRequirements).mockResolvedValue([])
   vi.mocked(getRequirement).mockResolvedValue({
