@@ -95,6 +95,7 @@ function makeChild(overrides: Partial<TaskChild> = {}): TaskChild {
     external_issue_key: '',
     assignee: '',
     priority: '',
+    labels: [],
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
     ...overrides,
@@ -601,6 +602,122 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
 
     const back = await screen.getByRole('link', { name: '演示项目' }).element()
     expect(back?.getAttribute('href')).toBe('/projects/p1')
+  })
+})
+
+/** 标签 fixture（INFERA-220）：Multica 标签库的真实三色——auto/候选/情报 */
+const LABELS = {
+  auto: { name: 'auto', color: '#22c55e' },
+  candidate: { name: '候选', color: '#a855f7' },
+  intel: { name: '情报', color: '#3b82f6' },
+}
+
+/** 带（可选）标签的分组 fixture：本地父 + 同步镜像父 + 其同步子任务 */
+function labeledGroupsFixture(
+  parentLabels: TaskGroupRow['labels'],
+  childLabels: TaskChild['labels']
+): TaskGroupRow[] {
+  return [
+    makeGroup({ id: 'g1', title: '本地任务', labels: parentLabels }),
+    makeGroup({
+      id: 'g2',
+      title: '同步父任务',
+      status: 'queued',
+      current_stage: '',
+      external_issue_id: 'mi-2',
+      external_issue_key: 'INFERA-77',
+      labels: parentLabels,
+      child_total: 1,
+      child_completed: 0,
+      stages: [
+        {
+          stage: 1,
+          tasks: [
+            makeChild({
+              id: 'c3',
+              title: '同步子任务甲',
+              current_stage: '',
+              external_issue_id: 'mi-3',
+              external_issue_key: 'INFERA-78',
+              labels: childLabels,
+            }),
+          ],
+        },
+      ],
+    }),
+  ]
+}
+
+describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica 标签 chip）', () => {
+  it('AC1-a: 父任务卡片显示标签 chip，名称与底色（hex 原值）与后端一致', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.auto, LABELS.candidate], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    await expect
+      .element(screen.getByText('auto', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('候选', { exact: true }))
+      .toBeInTheDocument()
+    const chip = (await screen.getByText('auto', { exact: true }).element())!
+    expect(getComputedStyle(chip).backgroundColor).toBe('rgb(34, 197, 94)')
+  })
+
+  it('AC1-b: 子任务行同样显示标签 chip', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([], [LABELS.intel])
+    )
+    await selectParent(screen, '同步父任务')
+    await waitForTasks(screen, '同步子任务甲')
+
+    await expect
+      .element(screen.getByText('情报', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('AC2: 同步来源的交付（external 标记）同样显示标签', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.auto], [LABELS.candidate])
+    )
+    await selectParent(screen, '同步父任务')
+    await waitForTasks(screen, '同步子任务甲')
+
+    // 镜像父卡片与其镜像子任务行都带标签（同步链路已把标签落库并随行返回）
+    await expect
+      .element(screen.getByText('auto', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('候选', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('AC3-a: 无标签的交付不渲染 chip 行（不占位、不留空壳 UI）', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    expect(document.querySelector('[data-slot="label-chip"]')).toBeNull()
+    expect(document.querySelector('[data-slot="label-chip-row"]')).toBeNull()
+  })
+
+  it('AC3-b: 超长标签名在行内截断（完整名保留在 title），不撑破卡片', async () => {
+    const long = '一个特别长的标签名称用来验证列表行内截断'.repeat(3)
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([{ name: long, color: '#22c55e' }], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    const chip = document.querySelector('[data-slot="label-chip"]')!
+    expect(chip.getAttribute('title')).toBe(long)
+    expect(chip.scrollWidth).toBeGreaterThan(chip.clientWidth)
   })
 })
 

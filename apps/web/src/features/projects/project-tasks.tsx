@@ -22,6 +22,7 @@ import {
 import { timeAgo } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { assigneeLabel } from '@/features/task-sync/display'
+import { LabelChipRow } from '@/components/label-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -227,8 +228,12 @@ function ParentTaskCard({
               {timeAgo(g.updated_at)}
             </span>
           </span>
-          {(g.pending_gate || (g.split_mode && g.merge_state === 'conflict')) && (
-            <span className='mt-1.5 flex items-center gap-1.5'>
+          {(g.labels?.length ||
+            g.pending_gate ||
+            (g.split_mode && g.merge_state === 'conflict')) && (
+            <span className='mt-1.5 flex flex-wrap items-center gap-1.5'>
+              {/* 标签 chip（INFERA-220）：Multica hex 原值底色，空标签不占位 */}
+              <LabelChipRow labels={g.labels} />
               {g.pending_gate && (
                 <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
                   待审批
@@ -322,6 +327,8 @@ function ChildTaskRow({ d }: { d: TaskChild }) {
         <span>{d.title}</span>
         {d.pending_gate && <span> · 待审批</span>}
       </span>
+      {/* 单行式行内标签：保持单行，超长名由 chip 截断（INFERA-220） */}
+      <LabelChipRow labels={d.labels} nowrap />
       <span className='shrink-0 text-[11px] tabular-nums text-muted-foreground'>
         {timeAgo(d.updated_at)}
       </span>

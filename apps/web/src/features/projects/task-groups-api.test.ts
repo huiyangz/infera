@@ -50,6 +50,7 @@ function makeChild(overrides: Partial<TaskChild> = {}): TaskChild {
     external_issue_key: '',
     assignee: '',
     priority: '',
+    labels: [],
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
     ...overrides,

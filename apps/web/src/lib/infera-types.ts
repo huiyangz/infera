@@ -1,5 +1,15 @@
 export type DeliveryStatus = 'active' | 'completed' | 'blocked' | 'queued'
 
+/**
+ * 交付所挂标签（契约冻结于 INFERA-218：server/internal/api/labels.go 的
+ * labelJSON）——仅 name + color，color 是上游（Multica）hex 原值如 #22c55e，
+ * 不做色彩换算，也不带内部 id。
+ */
+export interface DeliveryLabel {
+  name: string
+  color: string
+}
+
 export interface Delivery {
   id: string
   project_id: string
@@ -29,6 +39,11 @@ export interface Delivery {
   merge_state: '' | 'conflict'
   /** 需求复杂度：''（老数据，按 small 走）| small | large（规格审批门裁定） */
   complexity: '' | 'small' | 'large'
+  /**
+   * 挂的标签。任务分组列表 / 任务详情 / 合并恢复响应恒为数组（未挂 = 空数组）；
+   * 新建需求 201 响应是裸 Delivery 不带该字段，故为可选，展示层按空处理。
+   */
+  labels?: DeliveryLabel[]
 }
 
 /** 拆分子需求条目（设计审批时的拆分方案行） */
@@ -52,6 +67,8 @@ export interface TaskChild {
   external_issue_key: string
   assignee: string
   priority: string
+  /** 挂的标签（task-groups 契约恒为数组，未挂 = 空数组） */
+  labels: DeliveryLabel[]
   created_at: string
   updated_at: string
 }
