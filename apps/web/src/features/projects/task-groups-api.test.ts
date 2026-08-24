@@ -67,6 +67,10 @@ function makeGroup(overrides: Partial<TaskGroupRow> = {}): TaskGroupRow {
     current_stage: 'spec',
     pending_gate: null,
     fail_count: 0,
+    // 与 server 冻结键集一致的响应样本（store.Delivery 内联全字段）
+    base_commit: '',
+    reject_reason: '',
+    workspace_ready: false,
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
     external_issue_id: '',
@@ -145,5 +149,94 @@ describe('口径统一：任务页可见的阶段 label 不出现「需求」', 
     for (const key of Object.keys(STAGE_META)) {
       expect(stageLabel(key), `stage ${key}`).not.toContain('需求')
     }
+  })
+})
+
+// —— 左侧列表契约冻结（INFERA-228 / L202608241931-1-T01）：唯一数据源
+// GET /api/projects/{id}/task-groups 的响应须完整支撑父子层级 / stage / status
+// 三类信息。第 2 层（project-tasks.tsx 左侧列表）只读本块对齐的字段。 ——
+
+describe('左侧列表契约（INFERA-228）：父子层级 / stage / status 齐备', () => {
+  /** 与 server 响应同构的契约样本：父任务（两阶段子任务）+ 无子独立任务 */
+  function contractBody(): TaskGroupRow[] {
+    return [
+      makeGroup({
+        id: 'g9',
+        title: '父任务',
+        status: 'active',
+        current_stage: 'code_gen',
+        base_commit: 'abc1204',
+        workspace_ready: true,
+        child_total: 3,
+        child_completed: 1,
+        stages: [
+          {
+            stage: 1,
+            tasks: [
+              makeChild({ id: 'c1', title: '子任务甲', stage: 1, status: 'completed', current_stage: 'unit_test' }),
+              makeChild({ id: 'c2', title: '子任务乙', stage: 1, status: 'active', current_stage: 'code_gen' }),
+            ],
+          },
+          {
+            stage: 2,
+            tasks: [makeChild({ id: 'c3', title: '子任务丙', stage: 2, status: 'blocked' })],
+          },
+        ],
+      }),
+      makeGroup({ id: 'g10', title: '独立任务', status: 'queued', current_stage: '' }),
+    ]
+  }
+
+  it('每个任务项可取 id/title/status；顶层行即父任务（parent_id 空），子任务嵌于其 stages 下', async () => {
+    stubFetch({ body: contractBody() })
+    const rows = await listProjectTaskGroups('p9')
+
+    // 左侧列表可派生的全部任务项：顶层父行 + 各阶段组内子行
+    const items: Array<{
+      id: string
+      title: string
+      status: string
+      stage: number | null
+      parentId: string | null
+    }> = []
+    for (const g of rows) {
+      expect(g.parent_id).toBe('')
+      items.push({ id: g.id, title: g.title, status: g.status, stage: null, parentId: null })
+      for (const s of g.stages) {
+        for (const t of s.tasks) {
+          // 父子关系由结构表达：子行嵌于父行 stages 下，父行 id 即其归属
+          items.push({ id: t.id, title: t.title, status: t.status, stage: t.stage, parentId: g.id })
+        }
+      }
+    }
+    expect(items.map((i) => i.id)).toEqual(['g9', 'c1', 'c2', 'c3', 'g10'])
+    // status 四态词表内逐项可判（样本覆盖 active/completed/queued/blocked）
+    const vocab = new Set(['active', 'completed', 'blocked', 'queued'])
+    for (const i of items) expect(vocab.has(i.status)).toBe(true)
+    // stage：子行 = 所在分组编号（wave），父行/无阶段 = null 由 UI 自行口径
+    expect(items.find((i) => i.id === 'c3')?.stage).toBe(2)
+  })
+
+  it('父行子任务集合完备：child_total = 各阶段组 tasks 数之和', async () => {
+    stubFetch({ body: contractBody() })
+    const rows = await listProjectTaskGroups('p9')
+    for (const g of rows) {
+      expect(g.child_total).toBe(g.stages.reduce((n, s) => n + s.tasks.length, 0))
+    }
+    expect(rows[0].child_completed).toBe(1)
+    expect(rows[1].stages).toEqual([])
+  })
+
+  it('类型层：TaskGroupRow / TaskChild 覆盖 server 冻结键集（tsc -b 兜底，vitest 不查类型）', () => {
+    const g: TaskGroupRow = makeGroup()
+    // Delivery 内联全字段在类型上可寻址（INFERA-228 对齐 server 顶层键集）
+    const rowFields = [
+      g.id, g.title, g.status, g.current_stage, g.parent_id, g.wave,
+      g.base_commit, g.reject_reason, g.workspace_ready, g.stages,
+    ]
+    const c: TaskChild = makeChild()
+    const childFields = [c.id, c.title, c.status, c.stage, c.current_stage]
+    expect(rowFields).toHaveLength(10)
+    expect(childFields).toHaveLength(5)
   })
 })

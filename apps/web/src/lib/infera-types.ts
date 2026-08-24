@@ -19,6 +19,14 @@ export interface Delivery {
   current_stage: string
   pending_gate: string | null
   fail_count: number
+  /**
+   * 流水线内部字段（server store.Delivery 内联返回，INFERA-228 对齐
+   * task-groups 冻结键集）：列表展示不消费；声明为可选，本地构造的
+   * 测试替身可省。
+   */
+  base_commit?: string
+  reject_reason?: string
+  workspace_ready?: boolean
   created_at: string
   updated_at: string
   /** 外部任务源映射：issue ID 空 = 非同步来源；key 为展示键（如 INFERA-79） */
@@ -53,7 +61,11 @@ export interface ChildSpec {
   wave: number
 }
 
-// —— 项目任务分组列表（契约冻结于 L202608221704-1-T01：server/internal/api/taskgroups.go） ——
+// —— 项目任务分组列表（契约冻结于 L202608221704-1-T01：server/internal/api/taskgroups.go；
+// INFERA-228 / L202608241931-1-T01 复核冻结左侧列表口径：顶层行即父任务
+// （parent_id 空串），子任务嵌于父行 stages[].tasks[]（父子关系由结构表达），
+// 每个任务项带 id / title / status，子行另带 stage（=wave，0=无阶段），
+// 父行带 current_stage —— 三类信息齐备，无需旁路取数） ——
 
 /** 子任务行：阶段组内的展示字段（stage=所属阶段，即拆分批次 wave 1..N） */
 export interface TaskChild {

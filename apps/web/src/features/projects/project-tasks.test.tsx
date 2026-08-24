@@ -217,16 +217,47 @@ async function waitForTasks(screen: RenderResult, title: string) {
     .toBeInTheDocument()
 }
 
-/** 文档流顺序断言：a 元素需在 b 之前 */
+/** 左/右两栏的 data-slot（INFERA-229 起左栏也渲染子任务标题与状态图标，
+ *  断言某一栏的结构时按面板收窄查询，避免跨栏同名元素互相干扰） */
+const MASTER_SLOT = 'task-master-list'
+const DETAIL_SLOT = 'task-detail-pane'
+
+/** 面板内按 role 命中的元素列表：.all() 给全部命中的 Locator，逐个取
+ *  element() 后按「是否落在目标面板内」过滤 */
+async function paneRoleEls(
+  screen: RenderResult,
+  slot: string,
+  role: string,
+  opts: Parameters<RenderResult['getByRole']>[1] = {}
+) {
+  return (await screen.getByRole(role, opts).all())
+    .map((l) => l.element())
+    .filter((el) => el.closest(`[data-slot="${slot}"]`) !== null)
+}
+
+/** 面板内按文本（全匹配）命中的元素列表 */
+async function paneTextEls(
+  screen: RenderResult,
+  slot: string,
+  text: Parameters<RenderResult['getByText']>[0]
+) {
+  return (await screen.getByText(text, { exact: true }).all())
+    .map((l) => l.element())
+    .filter((el) => el.closest(`[data-slot="${slot}"]`) !== null)
+}
+
+/** 文档流顺序断言（右栏 detail 面板内）：a 元素需在 b 之前 */
 async function expectBefore(
   screen: RenderResult,
   a: Parameters<RenderResult['getByText']>[0],
   b: Parameters<RenderResult['getByText']>[0]
 ) {
-  const ea = (await screen.getByText(a, { exact: true }).element())!
-  const eb = (await screen.getByText(b, { exact: true }).element())!
+  const ea = (await paneTextEls(screen, DETAIL_SLOT, a))[0]
+  const eb = (await paneTextEls(screen, DETAIL_SLOT, b))[0]
+  expect(ea).toBeTruthy()
+  expect(eb).toBeTruthy()
   expect(
-    ea.compareDocumentPosition(eb) & Node.DOCUMENT_POSITION_FOLLOWING
+    ea!.compareDocumentPosition(eb!) & Node.DOCUMENT_POSITION_FOLLOWING
   ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
 }
 
@@ -286,7 +317,9 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
     await waitForTasks(screen, '同步子任务甲')
 
     const stage = (await screen.getByText('阶段 1', { exact: true }).element())!
-    const icon = (await screen.getByRole('img', { name: '已完成' }).element())!
+    const icon = (
+      await paneRoleEls(screen, DETAIL_SLOT, 'img', { name: '已完成' })
+    )[0]!
     // 行内状态图标（行内容最左元素）明显右于阶段标题文本
     const dx = icon.getBoundingClientRect().x - stage.getBoundingClientRect().x
     expect(dx).toBeGreaterThan(8)
@@ -298,9 +331,13 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
     await waitForTasks(screen, '第二批阻塞任务')
 
     for (const label of ['已完成', '未启动', '进行中', '已阻塞']) {
-      await expect
-        .element(screen.getByRole('img', { name: label, exact: true }))
-        .toBeInTheDocument()
+      // 左栏（INFERA-229）也渲染同名状态图标——收窄到右栏断言
+      expect(
+        (await paneRoleEls(screen, DETAIL_SLOT, 'img', {
+          name: label,
+          exact: true,
+        })).length
+      ).toBeGreaterThan(0)
     }
   })
 
@@ -324,9 +361,12 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       ],
     ]
     for (const [label, cls] of cases) {
-      const el = (await screen
-        .getByRole('img', { name: label, exact: true })
-        .element())!
+      const el = (
+        await paneRoleEls(screen, DETAIL_SLOT, 'img', {
+          name: label,
+          exact: true,
+        })
+      )[0]!
       expect(el.getAttribute('class')).toBe(cls)
     }
   })
@@ -803,6 +843,169 @@ describe('ProjectTasks 左右分栏 master-detail（INFERA-173：左父任务列
     expect(
       await screen.getByRole('button', { name: /本地任务|同步父任务/ }).query()
     ).toBeNull()
+  })
+})
+
+describe('ProjectTasks 左栏主/子层级列表（INFERA-229：图标区分 + 缩进连线 + 状态可视化）', () => {
+  /** 左栏某父/子行按钮（按可访问名收窄到 master 面板） */
+  async function masterRow(
+    screen: RenderResult,
+    name: RegExp
+  ): Promise<HTMLElement> {
+    const el = (await paneRoleEls(screen, MASTER_SLOT, 'button', { name }))[0]
+    expect(el).toBeTruthy()
+    return el as HTMLElement
+  }
+
+  /** 行内标题 span：状态图标是 svg（非 span），行内第一个 span 即标题 */
+  const rowTitle = (row: HTMLElement) =>
+    row.querySelector('span') as HTMLElement
+
+  it('AC1-a: 左栏在父任务行之下渲染其子任务行（父行在前，子行按 stages 展平跟随）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    // g2 的四个子任务（跨两个阶段）都进了左栏
+    for (const title of [
+      '同步子任务甲',
+      '同步子任务乙',
+      '第二批子任务',
+      '第二批阻塞任务',
+    ]) {
+      expect(
+        (
+          await paneRoleEls(screen, MASTER_SLOT, 'button', {
+            name: new RegExp(title),
+          })
+        ).length
+      ).toBeGreaterThan(0)
+    }
+
+    // 文档流顺序：父行 → 首个子行 → 末个子行（阶段分组留给右栏承载）
+    const parent = await masterRow(screen, /同步父任务/)
+    const first = await masterRow(screen, /同步子任务甲/)
+    const last = await masterRow(screen, /第二批阻塞任务/)
+    expect(
+      parent.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(
+      first.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('AC1-b: 子任务行整体缩进于父行之下（子行左缘明显右于父行左缘）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const parent = await masterRow(screen, /同步父任务/)
+    const child = await masterRow(screen, /同步子任务甲/)
+    const dx =
+      child.getBoundingClientRect().x - parent.getBoundingClientRect().x
+    expect(dx).toBeGreaterThan(8)
+  })
+
+  it('AC1-c: 子任务组带竖向连线（组容器实线左边框）——缩进 + 连线组合表达层级', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const group = document.querySelector(
+      "[data-slot='task-master-list'] [data-slot='task-child-group']"
+    )
+    expect(group).not.toBeNull()
+    const cs = getComputedStyle(group!)
+    expect(cs.borderLeftStyle).toBe('solid')
+    expect(parseFloat(cs.borderLeftWidth)).toBeGreaterThan(0)
+  })
+
+  it('AC1-d: 主/子图标不同——父行状态图标嵌于带边框的方形标识位，子行为裸图标', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const parent = await masterRow(screen, /同步父任务/)
+    const child = await masterRow(screen, /同步子任务甲/)
+    const parentIcon = parent.querySelector("[role='img']")!
+    const childIcon = child.querySelector("[role='img']")!
+    expect(parentIcon).not.toBeNull()
+    expect(childIcon).not.toBeNull()
+
+    // 父行图标外层是带实线边框的方形 tile（主任务标识位）；子行图标外层无边框
+    const tile = parentIcon.parentElement!
+    expect(getComputedStyle(tile).borderStyle).toBe('solid')
+    expect(parseFloat(getComputedStyle(tile).borderWidth)).toBeGreaterThan(0)
+    expect(getComputedStyle(childIcon.parentElement!).borderWidth).toBe('0px')
+  })
+
+  it('AC2-a: 左栏父行与子行均带状态图标（四态各一）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    // fixture：g1 父=进行中；g2 父=未启动；子=已完成/未启动/进行中/已阻塞
+    for (const label of ['已完成', '未启动', '进行中', '已阻塞']) {
+      expect(
+        (
+          await paneRoleEls(screen, MASTER_SLOT, 'img', {
+            name: label,
+            exact: true,
+          })
+        ).length
+      ).toBeGreaterThan(0)
+    }
+  })
+
+  it('AC2-b: 选中态明确——选中父任务的子行组文字深于未选中组（aria-current 由既有用例覆盖）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    // 默认选中 g1：g2 未选中，其子行标题为次级灰
+    const before = getComputedStyle(
+      rowTitle(await masterRow(screen, /同步子任务甲/))
+    ).color
+
+    await selectParent(screen, '同步父任务')
+    await waitForTasks(screen, '同步子任务甲')
+
+    // 选中 g2 后：其子行标题转为墨色（同组激活）
+    const after = getComputedStyle(
+      rowTitle(await masterRow(screen, /同步子任务甲/))
+    ).color
+    expect(after).not.toBe(before)
+  })
+
+  it('AC2-c: 悬停态——hover 子任务行后背景变化', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const row = screen.getByRole('button', { name: /同步子任务甲/ })
+    const before = getComputedStyle((await row.element())!).backgroundColor
+    await row.hover()
+    await expect
+      .poll(
+        async () => getComputedStyle((await row.element())!).backgroundColor,
+        { timeout: 4000 }
+      )
+      .not.toBe(before)
+  })
+
+  it('AC2-d: 点击左栏子任务行选中其父任务（右栏切到该父任务的父子树）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    // 初始右栏是 g1
+    expect(
+      (await paneRoleEls(screen, DETAIL_SLOT, 'link', { name: /本地任务/ }))
+        .length
+    ).toBeGreaterThan(0)
+
+    await (await masterRow(screen, /第二批阻塞任务/)).click()
+    await waitForTasks(screen, '同步子任务甲')
+
+    // 右栏换成 g2 子树，左栏父行高亮跟随
+    expect(
+      (await paneRoleEls(screen, DETAIL_SLOT, 'link', { name: /本地任务/ }))
+        .length
+    ).toBe(0)
+    const parent = await masterRow(screen, /同步父任务/)
+    expect(parent.getAttribute('aria-current')).toBe('true')
   })
 })
 

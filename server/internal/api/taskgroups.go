@@ -13,6 +13,10 @@ import (
 // 本文件冻结「项目任务分组列表」契约（L202608221704-1-T01）：按项目 → 父任务
 // → 子任务按阶段分组。前端项目任务页（L202608221704-2-T02）以本响应为唯一
 // 数据源，不得静默变更形状。
+// INFERA-228 / L202608241931-1-T01 复核冻结左侧列表口径：父子层级（顶层行即
+// 父任务，子任务嵌于 stages）、stage（子行 stage=wave + current_stage，父行
+// current_stage）、status（父子行均带）三类信息本响应已齐备，零接口改动；
+// 见 TestProjectTaskGroupsLeftListContract 回归钉。
 
 // taskChild 子任务行：阶段组内的展示字段（stage=所属阶段：拆分子任务=批次
 // wave 1..N，任务同步镜像子任务=其 stage；status/current_stage/pending_gate

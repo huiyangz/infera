@@ -29,11 +29,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { CreateRequirementDialog } from './requirement-create-dialog'
 
 /**
- * 项目任务列表页（INFERA-173 左右分栏 master-detail）：左栏为父级任务列表
- * （每个父任务一条，含无子任务的独立任务；点击选中，aria-current 高亮），
- * 右栏仅渲染选中父任务的父子任务树——父卡片 + 子任务按阶段分组的纵向列表
- * （「子任务 n/n」进度头、「阶段 N」分组标题（stage 0 =「无阶段」）、
- * 缩进的单行子任务行：状态图标 + 粗体 issue key）。默认选中第一个父任务。
+ * 项目任务列表页（INFERA-173 左右分栏 master-detail）：左栏为主/子任务树
+ * （INFERA-229）——每个父任务一条（含无子任务的独立任务），其子任务以
+ * 缩进 + 竖向连线的紧凑行组挂在父行之下；主/子以图标区分（父行状态图标
+ * 嵌于 hairline 方形标识位，子行为裸图标），父子行均带状态图标。点击任一
+ * 行选中其父任务（aria-current 高亮），右栏渲染选中父任务的父子任务树——
+ * 父卡片 + 子任务按阶段分组的纵向列表（「子任务 n/n」进度头、「阶段 N」
+ * 分组标题（stage 0 =「无阶段」）、缩进的单行子任务行：状态图标 + 粗体
+ * issue key）。默认选中第一个父任务。
  * 唯一数据源 GET /api/projects/{id}/task-groups（契约冻结于
  * server/internal/api/taskgroups.go）；只读，每条可点击进入任务详情。
  * 口径统一为「任务/父任务/子任务」。
@@ -96,22 +99,36 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
           </div>
         ) : (
           <div className='flex flex-col gap-6 lg:flex-row'>
-            {/* 左栏：父任务列表（master）。窄屏堆叠为上列表下详情 */}
-            <aside className='w-full shrink-0 lg:w-72 lg:border-e lg:pe-6'>
+            {/* 左栏：主/子任务树（master）。窄屏堆叠为上列表下详情 */}
+            <aside
+              data-slot='task-master-list'
+              className='w-full shrink-0 lg:w-72 lg:border-e lg:pe-6'
+            >
               <ul className='space-y-1'>
-                {rows.map((g) => (
-                  <li key={g.id}>
-                    <ParentListItem
-                      g={g}
-                      selected={selected?.id === g.id}
-                      onSelect={() => setSelectedId(g.id)}
-                    />
-                  </li>
-                ))}
+                {rows.map((g) => {
+                  // 阶段分组语义由右栏承载；左栏按 stages 顺序展平成紧凑树
+                  const children = g.stages.flatMap((s) => s.tasks)
+                  return (
+                    <li key={g.id}>
+                      <ParentListItem
+                        g={g}
+                        selected={selected?.id === g.id}
+                        onSelect={() => setSelectedId(g.id)}
+                      />
+                      {children.length > 0 && (
+                        <ChildTaskList
+                          tasks={children}
+                          active={selected?.id === g.id}
+                          onSelect={() => setSelectedId(g.id)}
+                        />
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             </aside>
             {/* 右栏：选中父任务的父子任务树（detail），只含该父任务及其子任务 */}
-            <div className='min-w-0 flex-1'>
+            <div data-slot='task-detail-pane' className='min-w-0 flex-1'>
               {selected && (
                 <ParentTaskCard
                   g={selected}
@@ -138,8 +155,10 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
 }
 
 /**
- * 左栏父任务列表项：标题 + 子任务进度计数（无子任务的独立任务不显示计数）。
- * 选中态以 aria-current + 背景高亮标识；状态/阶段/来源等信息由右栏选中
+ * 左栏父任务（主任务）行：方形标识位内的状态图标 + 标题 + 子任务进度计数
+ * （无子任务的独立任务不显示计数）。标识位（hairline 方框 + 内嵌状态图标）
+ * 是主任务与子任务裸图标区分层级的关键，也让父行自身状态一眼可辨。
+ * 选中态以 aria-current + 背景 infill 标识；阶段/来源等详情由右栏选中
  * 卡片承载，列表保持最简墨水（DESIGN.md 单色语言）。
  */
 function ParentListItem({
@@ -157,17 +176,69 @@ function ParentListItem({
       aria-current={selected ? 'true' : undefined}
       onClick={onSelect}
       className={cn(
-        'flex w-full flex-col gap-1 rounded-md px-3 py-2 text-start transition-colors hover:bg-accent/50',
+        'flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-start transition-colors hover:bg-accent/50',
         selected ? 'bg-accent' : undefined
       )}
     >
-      <span className='truncate text-sm'>{g.title}</span>
-      {g.child_total > 0 && (
-        <span className='text-xs tabular-nums text-muted-foreground'>
-          子任务 {g.child_completed}/{g.child_total}
-        </span>
-      )}
+      {/* 主任务标识位：状态图标嵌于 hairline 方框（DESIGN.md rounded.xs） */}
+      <span className='flex size-6 shrink-0 items-center justify-center rounded-sm border'>
+        <TaskStatusIcon status={g.status} />
+      </span>
+      <span className='min-w-0 flex-1'>
+        <span className='block truncate text-sm font-medium'>{g.title}</span>
+        {g.child_total > 0 && (
+          <span className='block truncate text-xs tabular-nums text-muted-foreground'>
+            子任务 {g.child_completed}/{g.child_total}
+          </span>
+        )}
+      </span>
     </button>
+  )
+}
+
+/**
+ * 左栏子任务组：挂在父行之下的缩进行列表。竖向 hairline 连线（border-s，
+ * 起点对齐父行标识位中心）与缩进共同表达父子层级；行 = 裸状态图标 + 标题
+ * （比父行小一档、灰一档）。选中父任务的组整体激活——标题转墨色、连线加深。
+ * 点击任一子行选中其父任务（右栏切到该父任务的父子树）。
+ */
+function ChildTaskList({
+  tasks,
+  active,
+  onSelect,
+}: {
+  tasks: TaskChild[]
+  active: boolean
+  onSelect: () => void
+}) {
+  return (
+    <ul
+      data-slot='task-child-group'
+      className={cn(
+        'ms-6 mt-0.5 space-y-px border-s ps-2',
+        active ? 'border-foreground/25' : 'border-border'
+      )}
+    >
+      {tasks.map((c) => (
+        <li key={c.id}>
+          <button
+            type='button'
+            onClick={onSelect}
+            className='flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-start transition-colors hover:bg-accent/50'
+          >
+            <TaskStatusIcon status={c.status} />
+            <span
+              className={cn(
+                'min-w-0 flex-1 truncate text-xs',
+                active ? 'text-foreground' : 'text-muted-foreground'
+              )}
+            >
+              {c.title}
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
