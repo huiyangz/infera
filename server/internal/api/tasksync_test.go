@@ -146,6 +146,7 @@ type errFetch struct{ err error }
 
 func (f errFetch) ListProjects(context.Context) ([]tasksource.Project, error) { return nil, f.err }
 func (f errFetch) ListIssues(context.Context) ([]tasksource.Issue, error)     { return nil, f.err }
+func (f errFetch) ListLabels(context.Context) ([]tasksource.Label, error)     { return nil, f.err }
 func (f errFetch) ListProjectResources(_ context.Context, _ string) ([]tasksource.ProjectResource, error) {
 	return nil, f.err
 }
@@ -236,6 +237,7 @@ func (f *e2eSyncFetch) ListProjects(context.Context) ([]tasksource.Project, erro
 	return f.projects, nil
 }
 func (f *e2eSyncFetch) ListIssues(context.Context) ([]tasksource.Issue, error) { return f.issues, nil }
+func (f *e2eSyncFetch) ListLabels(context.Context) ([]tasksource.Label, error) { return nil, nil } // 标签面默认无标签
 func (f *e2eSyncFetch) ListProjectResources(_ context.Context, _ string) ([]tasksource.ProjectResource, error) {
 	return nil, nil // 资源面默认无绑定（repo_url 保留现值）
 }

@@ -24,6 +24,7 @@ type Issue struct {
 	ParentIssueID *string   `json:"parent_issue_id"` // 父子关系：父 issue id，可空（顶层）
 	ProjectID     *string   `json:"project_id"`      // 归属项目，可空
 	Stage         int       `json:"stage"`           // 子任务所属阶段（1..N；顶层/未带 = 0）
+	Labels        []Label   `json:"labels"`          // 逐 issue 标签（完整对象 id/name/color；未带 = nil）
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
