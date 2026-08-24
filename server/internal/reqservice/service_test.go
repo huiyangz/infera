@@ -42,7 +42,7 @@ func newEnv(t *testing.T) *testEnv {
 	}
 	t.Cleanup(pool.Close)
 	_, _ = pool.Exec(context.Background(),
-		`TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+		`TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 
 	mc := &fakeTaskSource{issue: tasksource.Issue{ID: "m-issue-1", Identifier: "INFERA-31", Status: "backlog"}}
 	gh := &fakeGithub{}

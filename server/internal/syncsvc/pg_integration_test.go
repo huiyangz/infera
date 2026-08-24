@@ -29,7 +29,7 @@ func pgStore(t *testing.T) store.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	_, _ = pool.Exec(context.Background(), `TRUNCATE events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
+	_, _ = pool.Exec(context.Background(), `TRUNCATE delivery_labels, labels, events, artifacts, stage_runs, deliveries, projects, pipeline_bindings, agents, requirements, gate_cards, audit_log, project_settings`)
 	return store.NewPg(pool)
 }
 

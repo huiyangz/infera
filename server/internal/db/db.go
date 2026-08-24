@@ -31,11 +31,7 @@ func Connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 
 // Migrate 把 schema 迁到最新（iofs 内嵌）。幂等。
 func Migrate(url string) error {
-	src, err := iofs.New(migrationsFS, "migrations")
-	if err != nil {
-		return err
-	}
-	d, err := migrate.NewWithSourceInstance("iofs", src, toPgxURL(url))
+	d, err := migrator(url)
 	if err != nil {
 		return err
 	}
@@ -44,6 +40,15 @@ func Migrate(url string) error {
 		return err
 	}
 	return nil
+}
+
+// migrator 构造内嵌迁移源的 migrate 实例（Migrate 与测试的 down/往返共用）。
+func migrator(url string) (*migrate.Migrate, error) {
+	src, err := iofs.New(migrationsFS, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	return migrate.NewWithSourceInstance("iofs", src, toPgxURL(url))
 }
 
 // golang-migrate 的 pgx v5 driver 用 "pgx5://" scheme。

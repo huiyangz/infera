@@ -383,6 +383,157 @@ func (pg *Pg) UpsertDeliveryByExternalID(ctx context.Context, d *Delivery) error
 	return nil
 }
 
+// labels（标签库，语义与 Memory 一致）
+
+const labelCols = "id,name,color,external_label_id,created_at,updated_at"
+
+func scanLabel(row pgx.Row) (*Label, error) {
+	l := &Label{}
+	if err := row.Scan(&l.ID, &l.Name, &l.Color, &l.ExternalLabelID, &l.CreatedAt, &l.UpdatedAt); err != nil {
+		return nil, mapErr(err)
+	}
+	return l, nil
+}
+
+// labelByID 回读整行（Create/Upsert 插入后填充时间戳）。
+func (pg *Pg) labelByID(ctx context.Context, id string) (*Label, error) {
+	return scanLabel(pg.pool.QueryRow(ctx, `SELECT `+labelCols+` FROM labels WHERE id=$1`, id))
+}
+
+// CreateLabel 插入标签（本地标签：ExternalLabelID 空 = 不参与唯一性）；
+// 外部 ID 已被占用（23505）→ ErrConflict。
+func (pg *Pg) CreateLabel(ctx context.Context, l *Label) error {
+	if l.ID == "" {
+		l.ID = uuid.NewString()
+	}
+	err := pg.pool.QueryRow(ctx,
+		`INSERT INTO labels (id,name,color,external_label_id) VALUES ($1,$2,$3,$4) RETURNING created_at, updated_at`,
+		l.ID, l.Name, l.Color, l.ExternalLabelID).
+		Scan(&l.CreatedAt, &l.UpdatedAt)
+	if isUnique(err) {
+		return ErrConflict
+	}
+	return mapErr(err)
+}
+
+// UpsertLabelByExternalID 按 上游标签 ID 幂等导入（同步链路唯一入口，语义与
+// Memory 一致）：ON CONFLICT 命中部分唯一索引（空串不参与唯一性）→ 只更新
+// name/color，重复执行不产生重复行。RETURNING id 两个分支都回行 ID，回读
+// 整行填充结构体。ExternalLabelID 为空 → ErrInvalid。
+func (pg *Pg) UpsertLabelByExternalID(ctx context.Context, l *Label) error {
+	if l.ExternalLabelID == "" {
+		return ErrInvalid
+	}
+	if l.ID == "" {
+		l.ID = uuid.NewString()
+	}
+	var id string
+	err := pg.pool.QueryRow(ctx,
+		`INSERT INTO labels (id,name,color,external_label_id)
+		 VALUES ($1,$2,$3,$4)
+		 ON CONFLICT (external_label_id) WHERE external_label_id <> ''
+		 DO UPDATE SET name=EXCLUDED.name, color=EXCLUDED.color, updated_at=now()
+		 RETURNING id`,
+		l.ID, l.Name, l.Color, l.ExternalLabelID).Scan(&id)
+	if err != nil {
+		return mapErr(err)
+	}
+	got, err := pg.labelByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	*l = *got
+	return nil
+}
+
+func (pg *Pg) ListLabels(ctx context.Context) ([]Label, error) {
+	rows, err := pg.pool.Query(ctx, `SELECT `+labelCols+` FROM labels ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Label, 0)
+	for rows.Next() {
+		l, err := scanLabel(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *l)
+	}
+	return out, rows.Err()
+}
+
+// AttachLabel 挂标幂等：ON CONFLICT DO NOTHING，重复挂同一标签不产生重复
+// 关联行。交付或标签不存在（FK 23503）→ ErrNotFound。
+func (pg *Pg) AttachLabel(ctx context.Context, deliveryID, labelID string) error {
+	_, err := pg.pool.Exec(ctx,
+		`INSERT INTO delivery_labels (delivery_id,label_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+		deliveryID, labelID)
+	if isFKViolation(err) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// DetachLabel 摘除交付的标签关联；关联本就不存在 → ErrNotFound。
+func (pg *Pg) DetachLabel(ctx context.Context, deliveryID, labelID string) error {
+	tag, err := pg.pool.Exec(ctx,
+		`DELETE FROM delivery_labels WHERE delivery_id=$1 AND label_id=$2`, deliveryID, labelID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (pg *Pg) ListDeliveryLabels(ctx context.Context, deliveryID string) ([]Label, error) {
+	rows, err := pg.pool.Query(ctx,
+		`SELECT l.id,l.name,l.color,l.external_label_id,l.created_at,l.updated_at
+		 FROM labels l JOIN delivery_labels dl ON dl.label_id = l.id
+		 WHERE dl.delivery_id=$1 ORDER BY l.name`, deliveryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Label, 0)
+	for rows.Next() {
+		l, err := scanLabel(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *l)
+	}
+	return out, rows.Err()
+}
+
+// LabelsByDeliveryID 批量取多个交付挂的标签（任务列表一次装配，免 N+1），
+// 键 = deliveryID；无标签的交付不出现在结果里。
+func (pg *Pg) LabelsByDeliveryID(ctx context.Context, deliveryIDs []string) (map[string][]Label, error) {
+	out := make(map[string][]Label, len(deliveryIDs))
+	if len(deliveryIDs) == 0 {
+		return out, nil
+	}
+	rows, err := pg.pool.Query(ctx,
+		`SELECT dl.delivery_id, l.id,l.name,l.color,l.external_label_id,l.created_at,l.updated_at
+		 FROM labels l JOIN delivery_labels dl ON dl.label_id = l.id
+		 WHERE dl.delivery_id = ANY($1) ORDER BY l.name`, deliveryIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var deliveryID string
+		var l Label
+		if err := rows.Scan(&deliveryID, &l.ID, &l.Name, &l.Color, &l.ExternalLabelID, &l.CreatedAt, &l.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out[deliveryID] = append(out[deliveryID], l)
+	}
+	return out, rows.Err()
+}
+
 // ListChildDeliveries 取某父 delivery 的全部子需求，按批次号、创建时间升序。
 func (pg *Pg) ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error) {
 	rows, err := pg.pool.Query(ctx, `SELECT `+deliveryCols+` FROM deliveries WHERE parent_id=$1 ORDER BY wave, created_at`, parentID)

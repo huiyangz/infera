@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,25 +12,29 @@ import (
 
 // Memory is an in-memory Store implementation for tests.
 type Memory struct {
-	mu         sync.Mutex
-	projects   map[string]*Project
-	deliveries map[string]*Delivery
-	events     map[string][]*Event
-	artifacts  map[string][]*Artifact
-	stageRuns  map[string][]*StageRun
-	agents     map[string]*Agent
-	bindings   map[string]*PipelineBinding // key: projectID + "\x00" + node
+	mu             sync.Mutex
+	projects       map[string]*Project
+	deliveries     map[string]*Delivery
+	events         map[string][]*Event
+	artifacts      map[string][]*Artifact
+	stageRuns      map[string][]*StageRun
+	agents         map[string]*Agent
+	bindings       map[string]*PipelineBinding // key: projectID + "\x00" + node
+	labels         map[string]*Label
+	deliveryLabels map[string]map[string]time.Time // deliveryID → labelID → 挂标时间
 }
 
 func NewMemory() *Memory {
 	return &Memory{
-		projects:   map[string]*Project{},
-		deliveries: map[string]*Delivery{},
-		events:     map[string][]*Event{},
-		artifacts:  map[string][]*Artifact{},
-		stageRuns:  map[string][]*StageRun{},
-		agents:     map[string]*Agent{},
-		bindings:   map[string]*PipelineBinding{},
+		projects:       map[string]*Project{},
+		deliveries:     map[string]*Delivery{},
+		events:         map[string][]*Event{},
+		artifacts:      map[string][]*Artifact{},
+		stageRuns:      map[string][]*StageRun{},
+		agents:         map[string]*Agent{},
+		bindings:       map[string]*PipelineBinding{},
+		labels:         map[string]*Label{},
+		deliveryLabels: map[string]map[string]time.Time{},
 	}
 }
 
@@ -341,6 +346,136 @@ func (m *Memory) UpsertDeliveryByExternalID(_ context.Context, d *Delivery) erro
 	cp := *d
 	m.deliveries[cp.ID] = &cp
 	return nil
+}
+
+// labels（标签库，语义与 Pg 一致）
+
+// CreateLabel 插入标签；外部 ID 已被占用 → ErrConflict（不静默产生第二行）。
+func (m *Memory) CreateLabel(_ context.Context, l *Label) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if l.ExternalLabelID != "" {
+		for _, ex := range m.labels {
+			if ex.ExternalLabelID == l.ExternalLabelID {
+				return ErrConflict
+			}
+		}
+	}
+	if l.ID == "" {
+		l.ID = uuid.NewString()
+	}
+	now := time.Now().UTC()
+	l.CreatedAt = now
+	l.UpdatedAt = now
+	cp := *l
+	m.labels[cp.ID] = &cp
+	return nil
+}
+
+// UpsertLabelByExternalID 按 上游标签 ID 幂等导入（同步链路唯一入口，语义与
+// Pg 一致）：不存在插入、存在只更新 name/color，重复执行不产生重复行。
+// ExternalLabelID 为空 → ErrInvalid。
+func (m *Memory) UpsertLabelByExternalID(_ context.Context, l *Label) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if l.ExternalLabelID == "" {
+		return ErrInvalid
+	}
+	now := time.Now().UTC()
+	for _, ex := range m.labels {
+		if ex.ExternalLabelID != l.ExternalLabelID {
+			continue
+		}
+		ex.Name = l.Name
+		ex.Color = l.Color
+		ex.UpdatedAt = now
+		*l = *ex
+		return nil
+	}
+	if l.ID == "" {
+		l.ID = uuid.NewString()
+	}
+	l.CreatedAt = now
+	l.UpdatedAt = now
+	cp := *l
+	m.labels[cp.ID] = &cp
+	return nil
+}
+
+func (m *Memory) ListLabels(_ context.Context) ([]Label, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Label, 0, len(m.labels))
+	for _, l := range m.labels {
+		out = append(out, *l)
+	}
+	slices.SortFunc(out, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
+}
+
+// AttachLabel 挂标幂等：重复挂同一标签不产生重复关联。交付或标签不存在 →
+// ErrNotFound。
+func (m *Memory) AttachLabel(_ context.Context, deliveryID, labelID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.deliveries[deliveryID]; !ok {
+		return ErrNotFound
+	}
+	if _, ok := m.labels[labelID]; !ok {
+		return ErrNotFound
+	}
+	if m.deliveryLabels[deliveryID] == nil {
+		m.deliveryLabels[deliveryID] = map[string]time.Time{}
+	}
+	if _, ok := m.deliveryLabels[deliveryID][labelID]; ok {
+		return nil // 已挂：幂等
+	}
+	m.deliveryLabels[deliveryID][labelID] = time.Now().UTC()
+	return nil
+}
+
+// DetachLabel 摘除交付的标签关联；关联本就不存在 → ErrNotFound。
+func (m *Memory) DetachLabel(_ context.Context, deliveryID, labelID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.deliveryLabels[deliveryID][labelID]; !ok {
+		return ErrNotFound
+	}
+	delete(m.deliveryLabels[deliveryID], labelID)
+	return nil
+}
+
+func (m *Memory) ListDeliveryLabels(_ context.Context, deliveryID string) ([]Label, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deliveryLabelsLocked(deliveryID), nil
+}
+
+// LabelsByDeliveryID 批量取多个交付挂的标签（任务列表一次装配，免 N+1）。
+func (m *Memory) LabelsByDeliveryID(_ context.Context, deliveryIDs []string) (map[string][]Label, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string][]Label, len(deliveryIDs))
+	for _, id := range deliveryIDs {
+		if ls := m.deliveryLabelsLocked(id); len(ls) > 0 {
+			out[id] = ls
+		}
+	}
+	return out, nil
+}
+
+// deliveryLabelsLocked 取单个交付挂的标签（完整 Label 行，按 name 升序）；
+// 调用方必须已持锁。
+func (m *Memory) deliveryLabelsLocked(deliveryID string) []Label {
+	ids := m.deliveryLabels[deliveryID]
+	out := make([]Label, 0, len(ids))
+	for id := range ids {
+		if l, ok := m.labels[id]; ok {
+			out = append(out, *l)
+		}
+	}
+	slices.SortFunc(out, func(a, b Label) int { return strings.Compare(a.Name, b.Name) })
+	return out
 }
 
 // events / artifacts / stage_runs

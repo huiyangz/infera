@@ -106,6 +106,10 @@ func (s *Server) Mux() http.Handler {
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)
 		r.Post("/api/deliveries/{id}/reject", s.handleReject)
 		r.Post("/api/deliveries/{id}/merge/resume", s.handleMergeResume)
+		// 标签面（INFERA-218 T01 冻结契约）：标签库列表 + 交付挂/摘标签
+		r.Get("/api/labels", s.handleListLabels)
+		r.Post("/api/deliveries/{id}/labels", s.handleAttachDeliveryLabel)
+		r.Delete("/api/deliveries/{id}/labels/{labelID}", s.handleDetachDeliveryLabel)
 		r.Get("/api/agents", s.listAgents)
 		r.Post("/api/agents", s.createAgent)
 		r.Patch("/api/agents/{id}", s.patchAgent)

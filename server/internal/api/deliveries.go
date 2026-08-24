@@ -49,8 +49,13 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 	if artifacts == nil {
 		artifacts = []store.Artifact{}
 	}
+	dj, err := s.deliveryWithLabels(r, d)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取标签失败")
+		return
+	}
 	resp := map[string]any{
-		"delivery":  d,
+		"delivery":  dj,
 		"timeline":  timeline,
 		"artifacts": artifacts,
 	}
@@ -64,9 +69,28 @@ func (s *Server) handleGetDelivery(w http.ResponseWriter, r *http.Request) {
 		if children == nil {
 			children = []store.Delivery{}
 		}
-		resp["children"] = children
+		// 批量取子需求标签（一次查询装配，免 N+1），逐行投影为冻结契约形态。
+		byID, err := s.st.LabelsByDeliveryID(r.Context(), deliveryIDs(children))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取子需求标签失败")
+			return
+		}
+		rows := make([]deliveryJSON, 0, len(children))
+		for i := range children {
+			rows = append(rows, deliveryJSON{Delivery: children[i], Labels: labelsJSON(byID[children[i].ID])})
+		}
+		resp["children"] = rows
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// deliveryIDs 取交付平表的 ID 列表（批量标签装配用）。
+func deliveryIDs(ds []store.Delivery) []string {
+	ids := make([]string, 0, len(ds))
+	for _, d := range ds {
+		ids = append(ids, d.ID)
+	}
+	return ids
 }
 
 // gateArtifactKind 门禁 → 待展示产物 kind：spec/design/tasks 门禁看各自文档全文，
@@ -439,14 +463,19 @@ func (s *Server) driveLocked(deliveryID string) {
 	}
 }
 
-// writeDeliveryNow 返回引擎推进后的最新 delivery 状态。
+// writeDeliveryNow 返回引擎推进后的最新 delivery 状态（带挂的标签）。
 func (s *Server) writeDeliveryNow(w http.ResponseWriter, r *http.Request, id string) {
 	d, err := s.st.GetDelivery(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "读取交付失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	dj, err := s.deliveryWithLabels(r, d)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取标签失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, dj)
 }
 
 // writeStoreErr 把 store 错误映射为 404/500 并写出。

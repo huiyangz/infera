@@ -95,6 +95,18 @@ type Event struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// Label workspace 级标签库行（INFERA-218 T01 冻结契约）：color 存上游 hex
+// 原值（如 #22c55e），不做色彩换算。ExternalLabelID 是同步 upsert 的幂等键
+// （上游标签 id；空 = 非同步来源/本地标签，不参与唯一性）。
+type Label struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Color           string    `json:"color"`
+	ExternalLabelID string    `json:"external_label_id"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
 type Artifact struct {
 	ID         string    `json:"id"`
 	DeliveryID string    `json:"delivery_id"`
@@ -209,6 +221,20 @@ type Store interface {
 	ListChildDeliveries(ctx context.Context, parentID string) ([]Delivery, error)
 	UpdateDelivery(ctx context.Context, d *Delivery) error
 	UpsertDeliveryByExternalID(ctx context.Context, d *Delivery) error
+	// labels（标签库，INFERA-218 T01 冻结）：CreateLabel 外部 ID 已被占用 →
+	// ErrConflict；UpsertLabelByExternalID 按 上游标签 ID 幂等 upsert——不存在
+	// 插入、存在只更新 name/color，重复执行不产生重复行；空外部 ID → ErrInvalid。
+	CreateLabel(ctx context.Context, l *Label) error
+	UpsertLabelByExternalID(ctx context.Context, l *Label) error
+	ListLabels(ctx context.Context) ([]Label, error)
+	// AttachLabel 给交付挂标签（幂等：重复挂同一标签不产生重复关联行）；
+	// 交付或标签不存在 → ErrNotFound。DetachLabel 摘除关联，关联不存在 → ErrNotFound。
+	AttachLabel(ctx context.Context, deliveryID, labelID string) error
+	DetachLabel(ctx context.Context, deliveryID, labelID string) error
+	// ListDeliveryLabels 单个交付挂的标签（完整 Label 行，按 name 升序，API 层
+	// 投影为 name+color）；LabelsByDeliveryID 批量版（任务列表一次装配，免 N+1）。
+	ListDeliveryLabels(ctx context.Context, deliveryID string) ([]Label, error)
+	LabelsByDeliveryID(ctx context.Context, deliveryIDs []string) (map[string][]Label, error)
 	// events / artifacts / stage_runs
 	AppendEvent(ctx context.Context, e *Event) error
 	ListEvents(ctx context.Context, deliveryID string) ([]Event, error)
