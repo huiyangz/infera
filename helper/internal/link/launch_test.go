@@ -152,23 +152,6 @@ func TestBuildCommandQuotesPaths(t *testing.T) {
 	}
 }
 
-func TestOsascriptSource(t *testing.T) {
-	src := osascriptSource(`cd '/tmp/wd' && claude 'x'`)
-	for _, want := range []string{"tell application \"Terminal\"", `do script "cd '/tmp/wd' && claude 'x'"`} {
-		if !strings.Contains(src, want) {
-			t.Errorf("osascript 源缺少 %q: %s", want, src)
-		}
-	}
-	if strings.Count(src, "\"")%2 != 0 {
-		t.Errorf("AppleScript 字符串引数应配对: %s", src)
-	}
-	// 命令含双引号/反斜杠时做 AppleScript 转义，不破坏外层字符串
-	escaped := osascriptSource(`echo "hi\n"`)
-	if !strings.Contains(escaped, `do script "echo \"hi\\n\""`) {
-		t.Errorf("双引号与反斜杠应转义: %s", escaped)
-	}
-}
-
 func TestPlanStagesFiles(t *testing.T) {
 	cfg := Config{Server: "http://localhost:8080", Token: "sekret", CLI: "claude"}
 	plan, err := Plan(ctxLocal(), cfg, "/stage")

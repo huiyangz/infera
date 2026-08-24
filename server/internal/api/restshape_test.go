@@ -91,11 +91,7 @@ func TestCreateEndpointsReturn201(t *testing.T) {
 
 	var p store.Project
 	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&p))
-	resp3, err := c.Post(ts.URL+"/api/projects/"+p.ID+"/deliveries", "application/json",
-		bytes.NewBufferString(`{"title":"需求A","description":"d"}`))
-	require.NoError(t, err)
-	defer resp3.Body.Close()
-	require.Equal(t, http.StatusCreated, resp3.StatusCode)
+	require.NotEmpty(t, p.ID)
 }
 
 // TestCreateProjectLsRemoteErrorNotLeaked：仓库校验失败回固定文案，

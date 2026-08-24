@@ -83,20 +83,6 @@ func Resolve(ctx context.Context, st store.Store, projectID string) (map[string]
 	return agents, eff, nil
 }
 
-// ValidateComplete 校验有效绑定覆盖全部基准节点（缺 → *ErrIncompleteBindings）。
-func ValidateComplete(effective map[string]Effective) error {
-	var missing []string
-	for _, node := range RequiredNodes {
-		if _, ok := effective[node]; !ok {
-			missing = append(missing, node)
-		}
-	}
-	if len(missing) > 0 {
-		return &ErrIncompleteBindings{Missing: missing}
-	}
-	return nil
-}
-
 // RunnerFor 按 agent.runner 构造执行器：
 // cli → LocalRunner（config.command 为 argv；prompt 经 env/stdin 传入）；
 // docker → DockerRunner（config.image + config.command）；
