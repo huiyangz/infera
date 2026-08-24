@@ -23,4 +23,10 @@ describe('全局导航（AC：Agent 入口完全移除 + 需要决策入口可�
     const entry = top.find((i) => i.url === '/decisions')
     expect(entry?.title).toBe('需要决策')
   })
+
+  it('含「需求发现」顶层入口，指向 /discovery（INFERA-226）', () => {
+    const top = sidebarData.navGroups.flatMap((g) => g.items)
+    const entry = top.find((i) => i.url === '/discovery')
+    expect(entry?.title).toBe('需求发现')
+  })
 })
