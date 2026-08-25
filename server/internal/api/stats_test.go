@@ -25,6 +25,9 @@ func seedStatsAPI(t *testing.T, st *store.Memory) (synced, empty store.Project) 
 	require.NoError(t, st.CreateDelivery(ctx, &store.Delivery{
 		ProjectID: synced.ID, Title: "已交付", Status: "completed",
 	}))
+	require.NoError(t, st.CreateDelivery(ctx, &store.Delivery{
+		ProjectID: synced.ID, Title: "已放弃", Status: "cancelled",
+	}))
 	return synced, empty
 }
 
@@ -43,11 +46,11 @@ func TestProjectRequirementStatsEndpoint(t *testing.T) {
 		[]string{"project_id", "requirement_total", "by_status", "pending_decisions", "delivered", "last_synced_at"},
 		keys(body))
 	require.Equal(t, synced.ID, body["project_id"])
-	require.Equal(t, float64(2), body["requirement_total"])
-	require.Equal(t, map[string]any{"active": float64(1), "queued": float64(0), "completed": float64(1), "blocked": float64(0)},
+	require.Equal(t, float64(3), body["requirement_total"])
+	require.Equal(t, map[string]any{"active": float64(1), "queued": float64(0), "completed": float64(1), "blocked": float64(0), "cancelled": float64(1)},
 		body["by_status"])
 	require.Equal(t, float64(1), body["pending_decisions"])
-	require.Equal(t, float64(1), body["delivered"])
+	require.Equal(t, float64(1), body["delivered"], "cancelled 不计入 delivered——放弃 ≠ 交付")
 	require.NotNil(t, body["last_synced_at"], "同步来源项目最近同步时间非 null")
 
 	// 从未同步的空项目：last_synced_at 为 JSON null（解码后 nil）。

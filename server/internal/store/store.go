@@ -26,9 +26,10 @@ type ProjectStats struct {
 }
 
 // RequirementStats 项目维度需求统计（INFERA-108 T01 冻结契约：
-// GET /api/projects/{id}/stats 的响应载荷形态）。ByStatus 恒含四个固定键
-// active/queued/completed/blocked（无行时为 0）；Delivered 与
-// ByStatus["completed"] 同源（交付数单列是冻结口径）。LastSyncedAt
+// GET /api/projects/{id}/stats 的响应载荷形态）。ByStatus 恒含五个固定键
+// active/queued/completed/blocked/cancelled（无行时为 0，cancelled 为
+// INFERA-232 新增的放弃终态）；Delivered 与 ByStatus["completed"] 同源
+// （交付数单列是冻结口径，cancelled 不计入——放弃 ≠ 交付）。LastSyncedAt
 // nil = 项目从未被 任务同步。
 type RequirementStats struct {
 	ProjectID        string         `json:"project_id"`

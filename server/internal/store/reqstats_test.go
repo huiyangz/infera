@@ -8,8 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// seedStatsStore 铺一个项目：任务同步来源（last_synced_at 非 nil）+ 五条需求
-// （active+门、active、queued、completed、blocked），一个从未同步的空项目。
+// seedStatsStore 铺一个项目：任务同步来源（last_synced_at 非 nil）+ 六条需求
+// （active+门、active、queued、completed、blocked、cancelled），一个从未同步
+// 的空项目。
 func seedStatsStore(t *testing.T, st Store) (synced, empty *Project) {
 	t.Helper()
 	ctx := context.Background()
@@ -24,6 +25,7 @@ func seedStatsStore(t *testing.T, st Store) (synced, empty *Project) {
 		{ProjectID: synced.ID, Title: "排队镜像", Status: "queued"},
 		{ProjectID: synced.ID, Title: "已交付", Status: "completed"},
 		{ProjectID: synced.ID, Title: "被阻塞", Status: "blocked"},
+		{ProjectID: synced.ID, Title: "已放弃", Status: "cancelled"},
 	} {
 		require.NoError(t, st.CreateDelivery(ctx, d))
 	}
@@ -38,17 +40,17 @@ func checkRequirementStats(t *testing.T, st Store) {
 	got, err := st.RequirementStats(ctx, synced.ID)
 	require.NoError(t, err)
 	require.Equal(t, synced.ID, got.ProjectID)
-	require.Equal(t, 5, got.RequirementTotal)
-	require.Equal(t, map[string]int{"active": 2, "queued": 1, "completed": 1, "blocked": 1}, got.ByStatus)
+	require.Equal(t, 6, got.RequirementTotal)
+	require.Equal(t, map[string]int{"active": 2, "queued": 1, "completed": 1, "blocked": 1, "cancelled": 1}, got.ByStatus)
 	require.Equal(t, 1, got.PendingDecisions)
-	require.Equal(t, 1, got.Delivered)
+	require.Equal(t, 1, got.Delivered, "cancelled 不计入 Delivered——放弃 ≠ 交付")
 	require.NotNil(t, got.LastSyncedAt, "同步来源项目 last_synced_at 非 nil")
 
-	// 从未同步的空项目：零计数 + last_synced_at nil（四个状态键仍在）。
+	// 从未同步的空项目：零计数 + last_synced_at nil（五个状态键仍在，无行时为 0）。
 	gotEmpty, err := st.RequirementStats(ctx, empty.ID)
 	require.NoError(t, err)
 	require.Equal(t, 0, gotEmpty.RequirementTotal)
-	require.Equal(t, map[string]int{"active": 0, "queued": 0, "completed": 0, "blocked": 0}, gotEmpty.ByStatus)
+	require.Equal(t, map[string]int{"active": 0, "queued": 0, "completed": 0, "blocked": 0, "cancelled": 0}, gotEmpty.ByStatus)
 	require.Equal(t, 0, gotEmpty.PendingDecisions)
 	require.Equal(t, 0, gotEmpty.Delivered)
 	require.Nil(t, gotEmpty.LastSyncedAt, "从未同步 → nil 而非零值时间")

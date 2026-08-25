@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tokfinity/infera/internal/engine"
 	"github.com/tokfinity/infera/internal/store"
 	"github.com/tokfinity/infera/internal/tasksource"
 )
@@ -448,7 +449,7 @@ func TestTranslateStatus(t *testing.T) {
 		"in_progress": "queued",
 		"in_review":   "queued",
 		"done":        "completed",
-		"cancelled":   "completed",
+		"cancelled":   "cancelled",
 		"blocked":     "blocked",
 		"":            "queued",
 		"future-word": "queued",
@@ -460,6 +461,43 @@ func TestTranslateStatus(t *testing.T) {
 	for _, in := range []string{"todo", "backlog", "in_progress", "in_review", "done", "blocked", "cancelled", "", "active", "xxx"} {
 		require.NotEqual(t, "active", translateStatus(in), "上游状态 %q 不得映射为 active", in)
 	}
+}
+
+// --- AC: cancelled 终态——上游「放弃」不再折叠为 completed（INFERA-232） ---
+
+// TestTranslateStatusCancelledTerminal：cancelled 是 infera 词表第五值，原样
+// 落库为 engine.StatusCancelled；与 completed 同为终态但互不折叠，也不翻出
+// active（镜像不得被引擎点火）。上游放弃的任务在界面上应显示为已取消，
+// 而非已完成。
+func TestTranslateStatusCancelledTerminal(t *testing.T) {
+	require.Equal(t, engine.StatusCancelled, translateStatus("cancelled"))
+	require.Equal(t, "cancelled", translateStatus("cancelled"))
+	require.NotEqual(t, engine.StatusCompleted, translateStatus("cancelled"))
+	require.NotEqual(t, engine.StatusActive, translateStatus("cancelled"))
+	require.NotEqual(t, engine.StatusQueued, translateStatus("cancelled"))
+}
+
+// TestSyncCancelledIssueKeepsCancelledStatus：上游判定无价值而被放弃（cancelled）
+// 的任务，同步落库后状态仍是 cancelled——不再折叠为 completed。这是需求发现
+// 流程「候选 / 已放弃」分栏的数据前提：放弃行必须可被 status='cancelled'
+// 识别出来。
+func TestSyncCancelledIssueKeepsCancelledStatus(t *testing.T) {
+	st := store.NewMemory()
+	given := iss("m-giveup", "INFERA-9", "无价值放弃的任务", "m-prj-1")
+	given.Status = "cancelled"
+	f := &fakeFetch{
+		projects: []tasksource.Project{proj("m-prj-1", "自动闭环")},
+		issues:   []tasksource.Issue{given},
+	}
+	svc := New(f, st)
+	res, err := svc.SyncNow(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, res.Error)
+	require.Equal(t, 1, res.IssuesImported)
+
+	got := findByExternalIssueID(t, st, "m-giveup")
+	require.NotNil(t, got)
+	require.Equal(t, "cancelled", got.Status, "放弃的任务不得折叠为 completed")
 }
 
 // --- AC: 同步保留子任务的真实阶段（上游 stage → wave，不再全部落阶段 1） ---
