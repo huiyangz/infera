@@ -138,6 +138,23 @@ func (s *Server) handleProjectStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// handleProjectStageRuns 项目 agent 执行时序（INFERA-234 T01）：各 delivery 的
+// stage_run 时序明细（started_at 倒序、最近 stageRunsDetailLimit 条）+ 分 stage
+// 聚合。响应形状冻结于 store.ProjectStageRuns（Layer 2 前端唯一契约，不得
+// 静默变更，不得另开并行入口）。
+func (s *Server) handleProjectStageRuns(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !validID(w, id) {
+		return
+	}
+	rep, err := s.st.ProjectStageRuns(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err, "项目不存在", "读取执行时序失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
 func (s *Server) patchProject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !validID(w, id) {

@@ -1,30 +1,19 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import {
-  ChevronRight,
-  GitBranch,
-  ListTree,
-  SlidersHorizontal,
-} from 'lucide-react'
+import { GitBranch, SlidersHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   getProject,
   getProjectPipeline,
+  getProjectStageRuns,
   getProjectStats,
   listAgents,
   putProjectPipeline,
 } from '@/lib/infera-api'
-import { type BindingMap, type RequirementStats } from '@/lib/infera-types'
-import { dateTime } from '@/lib/time'
+import { type BindingMap } from '@/lib/infera-types'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -34,35 +23,37 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
 import { BindingEditor } from '@/features/pipeline/binding-editor'
+import { KpiHeader } from './dashboard/kpi-header'
+import { ProjectTabs } from './dashboard/project-tabs'
+import { StageStatsTable } from './dashboard/stage-stats'
+import {
+  AgentStageTimeline,
+  TimelineSkeleton,
+} from './dashboard/stage-timeline'
 import { CreateRequirementDialog } from './requirement-create-dialog'
 
-/** 状态桶展示口径（与 StatusBadge 一致的中文名；cancelled 殿后） */
-const STATUS_BUCKETS: Array<{
-  key: keyof RequirementStats['by_status']
-  label: string
-}> = [
-  { key: 'active', label: '进行中' },
-  { key: 'queued', label: '未启动' },
-  { key: 'completed', label: '已完成' },
-  { key: 'blocked', label: '已阻塞' },
-  { key: 'cancelled', label: '已取消' },
-]
-
 /**
- * 项目详情 = 项目域总览（L202608221241-2-T04）：必需配置 + 项目统计
- * （T01 冻结契约）+ 任务列表入口。需求/任务浏览移至项目任务列表页。
+ * 项目详情 = dashboard 总览（INFERA-243）：页内一级导航（总览/项目任务）
+ * + KPI 统计区（T01 冻结契约，状态构成走占比条，不再与任何列表重复计数）
+ * + Agent 执行时序区（T02 冻结契约 stage-runs）+ 必需配置。
+ * 纯展示组件在 ./dashboard/（props 驱动、可单测），本文件只做取数与状态编排。
  */
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const { data: proj } = useQuery({
     queryKey: ['project', projectId],
     queryFn: () => getProject(projectId),
   })
-  const { data: stats } = useQuery({
+  const statsQuery = useQuery({
     queryKey: ['project-stats', projectId],
     queryFn: () => getProjectStats(projectId),
+  })
+  const runsQuery = useQuery({
+    queryKey: ['project-stage-runs', projectId],
+    queryFn: () => getProjectStageRuns(projectId),
   })
 
   // Git 仓库行归类（INFERA-191 / INFERA-209）：repo_url 为 / 开头的本地
@@ -70,6 +61,9 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   // 与后端 validRepoURL 白名单对齐）入行，空值给「未绑定」占位。
   const gitURL =
     proj?.repo_url && !proj.repo_url.startsWith('/') ? proj.repo_url : ''
+
+  const runs = runsQuery.data?.runs ?? []
+  const byStage = runsQuery.data?.by_stage ?? []
 
   return (
     <>
@@ -110,7 +104,65 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
         </div>
       </Header>
 
-      <div className='mx-auto w-full max-w-4xl space-y-6 p-6'>
+      {/* 项目域页内一级导航：任务列表入口从卡片角落小链接升级到这里 */}
+      <ProjectTabs projectId={projectId} active='overview' />
+
+      <div className='mx-auto w-full max-w-6xl space-y-6 p-6'>
+        {/* 项目统计：dashboard 头部——KPI 讲总量与可行动量，状态构成走占比条 */}
+        <section>
+          <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
+            项目统计
+          </h2>
+          {statsQuery.isError ? (
+            <Card className='flex items-center justify-between gap-3 px-4 py-3'>
+              <p className='text-sm text-muted-foreground'>统计数据加载失败</p>
+              <Button
+                size='sm'
+                variant='ghost'
+                onClick={() => statsQuery.refetch()}
+              >
+                重试
+              </Button>
+            </Card>
+          ) : (
+            <KpiHeader stats={statsQuery.data} />
+          )}
+        </section>
+
+        {/* Agent 执行时序：甘特泳道 + 分 stage 聚合（契约冻结于 T02） */}
+        <section>
+          <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
+            Agent 执行时序
+          </h2>
+          <Card className='gap-4 px-5 py-5'>
+            {runsQuery.isPending ? (
+              <TimelineSkeleton />
+            ) : runsQuery.isError ? (
+              <div className='flex items-center justify-between gap-3 py-6'>
+                <p className='text-sm text-muted-foreground'>时序数据加载失败</p>
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  onClick={() => runsQuery.refetch()}
+                >
+                  重试
+                </Button>
+              </div>
+            ) : (
+              <>
+                <AgentStageTimeline runs={runs} />
+                {byStage.length > 0 && (
+                  <div className='space-y-2.5'>
+                    <Separator />
+                    <p className='text-xs text-muted-foreground'>阶段耗时</p>
+                    <StageStatsTable byStage={byStage} />
+                  </div>
+                )}
+              </>
+            )}
+          </Card>
+        </section>
+
         {/* 必需配置：只读呈现项目已有配置字段（INFERA-209 移除本地路径行） */}
         <section>
           <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
@@ -139,130 +191,6 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </dd>
               </div>
             </dl>
-          </Card>
-        </section>
-
-        {/* 项目统计：T01 冻结契约（store.RequirementStats） */}
-        <section>
-          <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
-            项目统计
-          </h2>
-          <div className='grid gap-4 sm:grid-cols-3'>
-            <Card className='gap-1 py-5'>
-              <CardHeader className='px-5'>
-                <CardTitle className='text-sm font-normal text-muted-foreground'>
-                  任务总数
-                </CardTitle>
-              </CardHeader>
-              <CardContent className='px-5'>
-                <p className='text-2xl font-semibold tabular-nums'>
-                  {stats ? (
-                    stats.requirement_total
-                  ) : (
-                    <Skeleton className='h-8 w-10' />
-                  )}
-                </p>
-              </CardContent>
-            </Card>
-            <Card className='gap-1 py-5'>
-              <CardHeader className='px-5'>
-                <CardTitle className='text-sm font-normal text-muted-foreground'>
-                  待决策
-                </CardTitle>
-              </CardHeader>
-              <CardContent className='px-5'>
-                <p className='text-2xl font-semibold tabular-nums'>
-                  {stats ? (
-                    stats.pending_decisions
-                  ) : (
-                    <Skeleton className='h-8 w-10' />
-                  )}
-                </p>
-              </CardContent>
-            </Card>
-            <Card className='gap-1 py-5'>
-              <CardHeader className='px-5'>
-                <CardTitle className='text-sm font-normal text-muted-foreground'>
-                  已交付
-                </CardTitle>
-              </CardHeader>
-              <CardContent className='px-5'>
-                <p className='text-2xl font-semibold tabular-nums'>
-                  {stats ? stats.delivered : <Skeleton className='h-8 w-10' />}
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-          <Card className='mt-4 gap-0 py-2'>
-            <dl className='divide-y'>
-              {STATUS_BUCKETS.map(({ key, label }) => (
-                <div
-                  key={key}
-                  className='flex items-center justify-between gap-4 px-5 py-2.5'
-                >
-                  <dt className='text-sm text-muted-foreground'>{label}</dt>
-                  <dd className='text-sm font-medium tabular-nums'>
-                    {stats ? (
-                      stats.by_status[key]
-                    ) : (
-                      <Skeleton className='h-4 w-8' />
-                    )}
-                  </dd>
-                </div>
-              ))}
-              <div className='flex items-center justify-between gap-4 px-5 py-2.5'>
-                <dt className='text-sm text-muted-foreground'>最近活动</dt>
-                <dd className='text-sm text-muted-foreground tabular-nums'>
-                  {stats ? (
-                    stats.last_synced_at ? (
-                      dateTime(stats.last_synced_at)
-                    ) : (
-                      '暂无活动'
-                    )
-                  ) : (
-                    <Skeleton className='h-4 w-20' />
-                  )}
-                </dd>
-              </div>
-            </dl>
-          </Card>
-        </section>
-
-        {/* 任务列表入口 */}
-        <section>
-          <h2 className='mb-3 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
-            任务列表
-          </h2>
-          <Card className='group py-5 transition-colors hover:bg-accent/50'>
-            <CardHeader className='px-5'>
-              <CardTitle className='text-base font-semibold tracking-[-0.2px]'>
-                <Link
-                  to='/projects/$id/tasks'
-                  params={{ id: projectId }}
-                  className='after:absolute after:inset-0'
-                >
-                  项目任务
-                </Link>
-              </CardTitle>
-              <CardAction className='relative z-10'>
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  aria-label='项目任务'
-                  asChild
-                >
-                  <Link to='/projects/$id/tasks' params={{ id: projectId }}>
-                    <ListTree />
-                  </Link>
-                </Button>
-              </CardAction>
-            </CardHeader>
-            <CardContent className='px-5'>
-              <p className='flex items-center gap-1 text-sm text-muted-foreground'>
-                以父子结构查看本项目的父任务与子任务
-                <ChevronRight className='size-4' />
-              </p>
-            </CardContent>
           </Card>
         </section>
       </div>

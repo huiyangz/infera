@@ -692,6 +692,51 @@ func (pg *Pg) LatestStageRun(ctx context.Context, deliveryID, stage string) (*St
 		deliveryID, stage))
 }
 
+// ProjectStageRuns 项目维度 agent 执行时序（语义与 Memory 一致）：一条 JOIN
+// 查询（deliveries → stage_runs → pipeline_bindings → agents）取明细，
+// started_at 倒序（并列按 attempt、id 倒序）LIMIT 截窗，agent 名经
+// LEFT JOIN 带回（node=stage，未绑定 → NULL）；聚合在 Go 侧走共用
+// aggregateByStage。EXISTS 先行兜底项目存在性（空项目与 404 区分）。
+func (pg *Pg) ProjectStageRuns(ctx context.Context, projectID string) (ProjectStageRuns, error) {
+	var exists bool
+	if err := pg.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)`, projectID).Scan(&exists); err != nil {
+		return ProjectStageRuns{}, err
+	}
+	if !exists {
+		return ProjectStageRuns{}, ErrNotFound
+	}
+	rows, err := pg.pool.Query(ctx,
+		`SELECT sr.id, sr.delivery_id, d.title, d.external_issue_key, sr.stage, sr.attempt, sr.status,
+		        a.name, sr.started_at, sr.finished_at
+		 FROM stage_runs sr
+		 JOIN deliveries d ON d.id = sr.delivery_id
+		 LEFT JOIN pipeline_bindings pb ON pb.project_id = d.project_id AND pb.node = sr.stage
+		 LEFT JOIN agents a ON a.id = pb.agent_id
+		 WHERE d.project_id = $1
+		 ORDER BY sr.started_at DESC, sr.attempt DESC, sr.id DESC
+		 LIMIT $2`, projectID, stageRunsDetailLimit)
+	if err != nil {
+		return ProjectStageRuns{}, err
+	}
+	defer rows.Close()
+	details := make([]StageRunDetail, 0)
+	for rows.Next() {
+		var r StageRunDetail
+		var agent sql.NullString
+		if err := rows.Scan(&r.ID, &r.DeliveryID, &r.Title, &r.ExternalIssueKey, &r.Stage, &r.Attempt, &r.Status,
+			&agent, &r.StartedAt, &r.FinishedAt); err != nil {
+			return ProjectStageRuns{}, err
+		}
+		if agent.Valid {
+			name := agent.String
+			r.AgentName = &name
+		}
+		r.DurationMS = stageRunDurationMS(r.StartedAt, r.FinishedAt)
+		details = append(details, r)
+	}
+	return ProjectStageRuns{ProjectID: projectID, Runs: details, ByStage: aggregateByStage(details)}, rows.Err()
+}
+
 // agents / pipeline bindings
 
 const agentCols = "id,name,runner,config,created_at,updated_at"
