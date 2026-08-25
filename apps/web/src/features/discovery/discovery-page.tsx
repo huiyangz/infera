@@ -25,9 +25,11 @@ import {
   STATUS_ORDER,
   filterDiscoveryTasks,
   groupDiscoveryTasks,
+  splitColumnsByCancelled,
   type AgentFilter,
   type GroupMode,
   type StatusFilter,
+  type TaskGroup,
 } from './filters'
 import type { DiscoveryTaskRow } from './types'
 
@@ -36,6 +38,9 @@ import type { DiscoveryTaskRow } from './types'
  * 独立路由视图。一次并集拉取（GET /api/discovery-tasks，省略 agent），
  * 按 agent / 状态的筛选与分组在客户端完成（行内已带 status 与
  * agent_types 全集）；卡片风格对齐主看板任务卡（单色、hairline、无阴影）。
+ * INFERA-233：左右双栏——左「候选」承载全部非 cancelled 行，右「已放弃」
+ * 承载 cancelled 行；筛选与分组先作用于全量再按 cancelled 拆栏（md 以下
+ * 退化为上下堆叠）。
  */
 export function DiscoveryPage() {
   const { data, isLoading } = useQuery({
@@ -48,7 +53,9 @@ export function DiscoveryPage() {
 
   const all = data ?? []
   const rows = filterDiscoveryTasks(all, agent, status)
-  const groups = groupDiscoveryTasks(rows, groupBy)
+  const { candidates, cancelled } = splitColumnsByCancelled(
+    groupDiscoveryTasks(rows, groupBy)
+  )
 
   return (
     <>
@@ -132,26 +139,70 @@ export function DiscoveryPage() {
             </p>
           </div>
         ) : (
-          groups.map((g) => (
-            <section key={g.key} className={cn(g.label && 'mb-6 last:mb-0')}>
-              {g.label && (
-                <div className='mb-2 flex items-baseline gap-2'>
-                  <h3 className='text-xs font-medium'>{g.label}</h3>
-                  <span className='text-xs tabular-nums text-muted-foreground'>
-                    {g.rows.length}
-                  </span>
-                </div>
-              )}
-              <div className='grid gap-3 md:grid-cols-2'>
-                {g.rows.map((r) => (
-                  <DiscoveryTaskCard key={r.id} row={r} />
-                ))}
-              </div>
-            </section>
-          ))
+          <div className='grid items-start gap-8 md:grid-cols-2'>
+            <DiscoveryColumn
+              label='候选'
+              groups={candidates}
+              emptyHint='当前筛选下没有候选任务'
+            />
+            <DiscoveryColumn
+              label='已放弃'
+              groups={cancelled}
+              emptyHint='还没有放弃的任务'
+            />
+          </div>
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * 双栏中的单栏（INFERA-233）：栏头带总数，栏内沿用分组结构（组头 h3，
+ * 空组已由拆栏函数剔除）；整栏无行时给空态提示而非留白。
+ */
+function DiscoveryColumn({
+  label,
+  groups,
+  emptyHint,
+}: {
+  label: string
+  groups: TaskGroup[]
+  emptyHint: string
+}) {
+  const total = groups.reduce((n, g) => n + g.rows.length, 0)
+  return (
+    <section aria-label={label} className='min-w-0'>
+      <div className='mb-3 flex items-baseline gap-2'>
+        <h2 className='text-xs font-medium'>{label}</h2>
+        <span className='text-xs tabular-nums text-muted-foreground'>
+          {total}
+        </span>
+      </div>
+      {groups.length ? (
+        groups.map((g) => (
+          <section key={g.key} className={cn(g.label && 'mb-6 last:mb-0')}>
+            {g.label && (
+              <div className='mb-2 flex items-baseline gap-2'>
+                <h3 className='text-xs font-medium'>{g.label}</h3>
+                <span className='text-xs tabular-nums text-muted-foreground'>
+                  {g.rows.length}
+                </span>
+              </div>
+            )}
+            <div className='grid gap-3'>
+              {g.rows.map((r) => (
+                <DiscoveryTaskCard key={r.id} row={r} />
+              ))}
+            </div>
+          </section>
+        ))
+      ) : (
+        <p className='rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground'>
+          {emptyHint}
+        </p>
+      )}
+    </section>
   )
 }
 

@@ -63,7 +63,7 @@ function row(over: Partial<DiscoveryTaskRow>): DiscoveryTaskRow {
   }
 }
 
-/** 三行典型数据：纯挖掘 / 纯分析（已完成）/ 双标签（阻塞） */
+/** 四行典型数据：纯挖掘 / 纯分析（已完成）/ 双标签（阻塞）/ 已放弃 */
 function mixedRows(): DiscoveryTaskRow[] {
   return [
     row({}),
@@ -84,6 +84,13 @@ function mixedRows(): DiscoveryTaskRow[] {
         { name: '情报', color: '#22c55e' },
         { name: '候选', color: '#3b82f6' },
       ],
+    }),
+    row({
+      id: 'd-000000000004',
+      title: '情报：多语言站点评测',
+      status: 'cancelled',
+      agent_types: ['mining'],
+      labels: [],
     }),
   ]
 }
@@ -204,11 +211,14 @@ describe('DiscoveryPage 需求发现页', () => {
     await screen.getByRole('combobox', { name: '分组', exact: true }).click()
     await screen.getByRole('option', { name: '按类型', exact: true }).click()
 
+    // INFERA-233 后组头分栏渲染：候选栏出现需求挖掘/需求分析两组头，
+    // 已放弃栏的 cancelled 行也是挖掘类 → 需求挖掘组头两栏各一
+    const miningHeaders = await screen
+      .getByRole('heading', { name: '需求挖掘' })
+      .elements()
+    expect(miningHeaders).toHaveLength(2)
     await expect
-      .element(screen.getByText('需求挖掘', { exact: true }))
-      .toBeInTheDocument()
-    await expect
-      .element(screen.getByText('需求分析', { exact: true }))
+      .element(screen.getByRole('heading', { name: '需求分析' }))
       .toBeInTheDocument()
     // 双标签卡在两组都渲染（标题文本出现两次）
     expect(
@@ -238,6 +248,106 @@ describe('DiscoveryPage 需求发现页', () => {
     await expect
       .element(screen.getByRole('heading', { name: '已阻塞' }))
       .toBeInTheDocument()
+  })
+
+  it('INFERA-233 左右双栏：cancelled 行只出现在右栏「已放弃」，候选行留在左栏', async () => {
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(mixedRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('情报：支付渠道调研'))
+      .toBeInTheDocument()
+
+    // 两栏各有栏头（heading）：候选 / 已放弃
+    await expect
+      .element(screen.getByRole('heading', { name: '候选', exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByRole('heading', { name: '已放弃', exact: true }))
+      .toBeInTheDocument()
+
+    // cancelled 卡落在「已放弃」栏内（沿 DOM 向上找到所属 section）
+    const cancelledCard = await screen
+      .getByText('情报：多语言站点评测')
+      .element()
+    expect(
+      cancelledCard?.closest("section[aria-label='已放弃']")
+    ).not.toBeNull()
+    expect(cancelledCard?.closest("section[aria-label='候选']")).toBeNull()
+
+    // 候选卡落在「候选」栏内，且不串栏
+    const candidateCard = await screen
+      .getByText('情报：支付渠道调研')
+      .element()
+    expect(candidateCard?.closest("section[aria-label='候选']")).not.toBeNull()
+    expect(
+      candidateCard?.closest("section[aria-label='已放弃']")
+    ).toBeNull()
+
+    // cancelled 卡全页只渲染一次（不因双栏重复出现）
+    expect(
+      (screen.container.textContent?.match(/情报：多语言站点评测/g) ?? [])
+        .length
+    ).toBe(1)
+  })
+
+  it('INFERA-233 右栏空态：无 cancelled 行时右栏给出提示，不渲染放弃卡', async () => {
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(mixedRows().slice(0, 3))
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('情报：支付渠道调研'))
+      .toBeInTheDocument()
+
+    await expect
+      .element(screen.getByText('还没有放弃的任务'))
+      .toBeInTheDocument()
+    expect(await screen.getByText('已取消', { exact: true }).query()).toBeNull()
+  })
+
+  it('INFERA-233 筛选语义不变：状态筛选先作用于全量再拆栏（选「已取消」全落右栏）', async () => {
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(mixedRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('情报：支付渠道调研'))
+      .toBeInTheDocument()
+
+    await screen.getByRole('combobox', { name: '状态', exact: true }).click()
+    await screen.getByRole('option', { name: '已取消', exact: true }).click()
+
+    // 候选行被滤掉，cancelled 行保留在右栏
+    expect(await screen.getByText('情报：支付渠道调研').query()).toBeNull()
+    const cancelledCard = await screen
+      .getByText('情报：多语言站点评测')
+      .element()
+    expect(
+      cancelledCard?.closest("section[aria-label='已放弃']")
+    ).not.toBeNull()
+  })
+
+  it('INFERA-233 分组先作用全量再拆栏：按状态分组时右栏沿用状态组头', async () => {
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(mixedRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('情报：支付渠道调研'))
+      .toBeInTheDocument()
+
+    await screen.getByRole('combobox', { name: '分组', exact: true }).click()
+    await screen.getByRole('option', { name: '按状态', exact: true }).click()
+
+    // 左栏出现候选侧组头；右栏内 cancelled 卡带自己的状态组头「已取消」
+    await expect
+      .element(screen.getByRole('heading', { name: '进行中' }))
+      .toBeInTheDocument()
+    const cancelledCard = await screen
+      .getByText('情报：多语言站点评测')
+      .element()
+    const rightCol = cancelledCard?.closest("section[aria-label='已放弃']")
+    expect(rightCol?.textContent).toContain('已取消')
+    // 左栏不含 cancelled 卡（候选栏文本里没有该标题）
+    const candidateCard = await screen
+      .getByText('情报：支付渠道调研')
+      .element()
+    const leftCol = candidateCard?.closest("section[aria-label='候选']")
+    expect(leftCol?.textContent).not.toContain('情报：多语言站点评测')
   })
 
   it('空列表呈现空态', async () => {

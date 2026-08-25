@@ -3,9 +3,11 @@ import type { DeliveryStatus } from '@/lib/infera-types'
 import type { DiscoveryTaskRow } from './types'
 import {
   AGENT_ORDER,
+  STATUS_LABEL,
   STATUS_ORDER,
   filterDiscoveryTasks,
   groupDiscoveryTasks,
+  splitColumnsByCancelled,
 } from './filters'
 
 /** 最小可用行：仅筛选/分组用到的字段（其余字段不影响纯逻辑） */
@@ -69,6 +71,16 @@ describe('filterDiscoveryTasks 页内筛选', () => {
     ).toEqual(['b'])
   })
 
+  it('cancelled 是合法筛选值：精确匹配放弃行（INFERA-233）', () => {
+    const withCancelled = [
+      ...rows,
+      row({ id: 'x', status: 'cancelled' }),
+    ]
+    expect(
+      filterDiscoveryTasks(withCancelled, 'all', 'cancelled').map((r) => r.id)
+    ).toEqual(['x'])
+  })
+
   it('agent 与 status 叠加取交集', () => {
     expect(filterDiscoveryTasks(rows, 'mining', 'blocked').map((r) => r.id)).toEqual(
       ['c']
@@ -120,6 +132,24 @@ describe('groupDiscoveryTasks 页内分组', () => {
     expect(groups[0].rows.map((r) => r.id)).toEqual(['b', 'c'])
   })
 
+  it("mode='status'：cancelled 独立成组，排在 completed 之后殿后（INFERA-233）", () => {
+    const groups = groupDiscoveryTasks(
+      [
+        row({ id: 'a', status: 'cancelled' }),
+        row({ id: 'b', status: 'completed' }),
+        row({ id: 'c', status: 'active' }),
+      ],
+      'status'
+    )
+    expect(groups.map((g) => g.key)).toEqual([
+      'active',
+      'completed',
+      'cancelled',
+    ])
+    expect(groups.map((g) => g.label)).toEqual(['进行中', '已完成', '已取消'])
+    expect(groups[2].rows.map((r) => r.id)).toEqual(['a'])
+  })
+
   it('空输入：任何模式都产出零个有行分组（none 出一个空组）', () => {
     expect(groupDiscoveryTasks([], 'agent')).toEqual([])
     expect(groupDiscoveryTasks([], 'status')).toEqual([])
@@ -134,9 +164,92 @@ describe('固定序常量', () => {
     expect(AGENT_ORDER).toEqual(['mining', 'analysis'])
   })
 
-  it('STATUS_ORDER 穷尽 DeliveryStatus 四态', () => {
-    const all: DeliveryStatus[] = ['active', 'completed', 'blocked', 'queued']
+  it('STATUS_ORDER 穷尽 DeliveryStatus 五态（T01 冻结词表）', () => {
+    const all: DeliveryStatus[] = [
+      'active',
+      'completed',
+      'blocked',
+      'queued',
+      'cancelled',
+    ]
     expect([...STATUS_ORDER].sort()).toEqual([...all].sort())
     expect(new Set(STATUS_ORDER).size).toBe(all.length)
+  })
+
+  it('STATUS_ORDER 里 cancelled 排在 completed 之后殿后', () => {
+    expect(STATUS_ORDER[STATUS_ORDER.length - 1]).toBe('cancelled')
+    expect(STATUS_ORDER.indexOf('cancelled')).toBeGreaterThan(
+      STATUS_ORDER.indexOf('completed')
+    )
+  })
+
+  it('STATUS_LABEL 覆盖 cancelled，文案「已取消」', () => {
+    expect(STATUS_LABEL.cancelled).toBe('已取消')
+  })
+})
+
+describe('splitColumnsByCancelled 左右双栏拆分（INFERA-233）', () => {
+  it('逐组拆两栏：候选栏收全部非 cancelled 行，已放弃栏收 cancelled 行，组键/组头沿用', () => {
+    const groups = [
+      { key: 'active', label: '进行中', rows: [row({ id: 'a' })] },
+      {
+        key: 'completed',
+        label: '已完成',
+        rows: [
+          row({ id: 'b', status: 'completed' }),
+          row({ id: 'x', status: 'cancelled' }),
+        ],
+      },
+      { key: 'cancelled', label: '已取消', rows: [row({ id: 'y', status: 'cancelled' })] },
+    ]
+    const cols = splitColumnsByCancelled(groups)
+    expect(cols.candidates.map((g) => g.key)).toEqual(['active', 'completed'])
+    expect(cols.candidates[1].rows.map((r) => r.id)).toEqual(['b'])
+    expect(cols.cancelled.map((g) => g.key)).toEqual(['completed', 'cancelled'])
+    expect(cols.cancelled[0].rows.map((r) => r.id)).toEqual(['x'])
+    expect(cols.cancelled[1].rows.map((r) => r.id)).toEqual(['y'])
+    // 组头沿用原组标签
+    expect(cols.cancelled[0].label).toBe('已完成')
+  })
+
+  it('空侧不产出：全 cancelled 时候选栏为空数组，反之已放弃栏为空数组', () => {
+    const allCancelled = [
+      { key: 'all', label: '', rows: [row({ id: 'x', status: 'cancelled' })] },
+    ]
+    expect(splitColumnsByCancelled(allCancelled)).toEqual({
+      candidates: [],
+      cancelled: allCancelled,
+    })
+    const noneCancelled = [
+      { key: 'all', label: '', rows: [row({ id: 'a' })] },
+    ]
+    expect(splitColumnsByCancelled(noneCancelled)).toEqual({
+      candidates: noneCancelled,
+      cancelled: [],
+    })
+  })
+
+  it('空输入：两栏皆空', () => {
+    expect(splitColumnsByCancelled([])).toEqual({
+      candidates: [],
+      cancelled: [],
+    })
+  })
+
+  it('行序保持不变（不因拆栏重排）', () => {
+    const cols = splitColumnsByCancelled([
+      {
+        key: 'all',
+        label: '',
+        rows: [
+          row({ id: 'c1' }),
+          row({ id: 'x1', status: 'cancelled' }),
+          row({ id: 'c2' }),
+          row({ id: 'x2', status: 'cancelled' }),
+        ],
+      },
+    ])
+    expect(cols.candidates[0].rows.map((r) => r.id)).toEqual(['c1', 'c2'])
+    expect(cols.cancelled[0].rows.map((r) => r.id)).toEqual(['x1', 'x2'])
   })
 })

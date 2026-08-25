@@ -130,7 +130,7 @@ async function renderApp(initialPath: string) {
     requirement_total: 3,
     pending_decisions: 1,
     delivered: 1,
-    by_status: { active: 1, queued: 1, completed: 1, blocked: 0 },
+    by_status: { active: 1, queued: 1, completed: 1, blocked: 0, cancelled: 0 },
     last_synced_at: null,
   })
   vi.mocked(listProjectTaskGroups).mockResolvedValue([makeTaskGroup()])
