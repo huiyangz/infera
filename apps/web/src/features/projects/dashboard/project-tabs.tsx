@@ -40,6 +40,9 @@ export function ProjectTabs({
               key={key}
               to={to}
               params={{ id: projectId }}
+              // exact 匹配：Link 默认前缀匹配会给 /projects/{id}/tasks 页上的
+              // 「总览」链接也注入 aria-current='page'（INFERA-248），必须关掉
+              activeOptions={{ exact: true }}
               aria-current={isCurrent ? 'page' : undefined}
               className={cn(
                 'inline-flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-sm font-medium',

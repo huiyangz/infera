@@ -47,15 +47,18 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  // Link 脱离 Router 上下文无法渲染，用 <a> 替身（带 $id 参数替换）
+  // Link 脱离 Router 上下文无法渲染，用 <a> 替身（带 $id 参数替换）；
+  // to/params/activeOptions 为 Link 自有 props，真实实现不透传 DOM，替身同样剥掉
   const MockLink = ({
     children,
     to,
     params,
+    activeOptions: _activeOptions,
     ...props
   }: React.ComponentProps<'a'> & {
     to?: string
     params?: Record<string, string>
+    activeOptions?: unknown
   }) => (
     <a href={(to ?? '#').replace('$id', params?.id ?? '')} {...props}>
       {children}
