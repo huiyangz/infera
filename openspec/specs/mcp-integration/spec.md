@@ -25,7 +25,7 @@ MCP 服务 SHALL 以专用静态 token（`INFERA_MCP_TOKEN`，`Authorization: Be
 
 ## Requirement: 无状态 MCP 协议面
 
-`/mcp` SHALL 以无状态 Streamable HTTP 形态服务：与 HTTP API 同进程同端口、单 POST 端点、JSON-RPC 2.0、`application/json` 响应，不分配会话（客户端无须回传 `Mcp-Session-Id`）、不提供 GET SSE 流；协议面 SHALL 限定在 initialize / ping / tools 三类 method，不支持批量请求。
+`/mcp` SHALL 以无状态 Streamable HTTP 形态服务：与 HTTP API 同进程同端口、单 POST 端点、JSON-RPC 2.0、`application/json` 响应，不分配会话（客户端无须回传 `Mcp-Session-Id`）、不提供 GET SSE 流；协议面 SHALL 限定在 initialize / ping / tools 三类 method，不支持批量请求；请求体 SHALL 以 8 MiB 为读取上限（超限部分被截断，畸形后按解析错误拒绝）。JSON 合法性只在语法层校验——`jsonrpc` 成员缺失或版本号不符 SHALL NOT 单独被拒，按正常请求分派处理。
 
 #### Scenario: 握手与版本协商
 
@@ -35,8 +35,8 @@ MCP 服务 SHALL 以专用静态 token（`INFERA_MCP_TOKEN`，`Authorization: Be
 
 #### Scenario: 非法请求与未知 method
 
-- **WHEN** 请求体不是合法 JSON-RPC 2.0（含数组形态的批量请求），或 method 不在 initialize / ping / tools/list / tools/call 之内
-- **THEN** 分别返回 JSON-RPC 错误 -32700（解析错误）与 -32601（未知 method）
+- **WHEN** 请求体不是合法 JSON（含数组形态的批量请求），或 method 不在 initialize / ping / tools/list / tools/call 之内
+- **THEN** 分别返回 JSON-RPC 错误 -32700（解析错误）与 -32601（未知 method）；`jsonrpc` 成员缺失 / 版本不符不在此列，按正常请求继续分派
 
 #### Scenario: 通知静默接受，非 POST 方法拒绝
 
@@ -47,7 +47,7 @@ MCP 服务 SHALL 以专用静态 token（`INFERA_MCP_TOKEN`，`Authorization: Be
 
 ## Requirement: MCP 驾驶工具清单与错误语义
 
-MCP 面 SHALL 恰好暴露五个驾驶工具：`get_context`、`get_gate`、`approve_gate`、`reject_gate`、`submit_stage_output`；`tools/list` 返回的名称、描述与输入 schema SHALL 是工具面的单一事实来源。参数层错误（缺必填 / 类型不符 / 未知工具名）SHALL 回 JSON-RPC -32602，工具执行失败 SHALL 以 `isError=true` 的文本结果返回可读原因，两者不得混用。
+MCP 面 SHALL 恰好暴露五个驾驶工具：`get_context`、`get_gate`、`approve_gate`、`reject_gate`、`submit_stage_output`；`tools/list` 返回的名称、描述与输入 schema SHALL 是工具面的单一事实来源。协议结构层错误（参数缺必填 / 类型不符 / 未知工具名）SHALL 回 JSON-RPC -32602；业务层失败（参数合法但执行不成，如交付不存在、`output` 为空文本）SHALL 以 `isError=true` 的文本结果返回可读原因，两者不得混用——`output` 在 schema 中为必填项，其「有值但为空」属业务失败而非结构错误。
 
 #### Scenario: 工具列举
 
@@ -86,7 +86,7 @@ MCP 面 SHALL 恰好暴露五个驾驶工具：`get_context`、`get_gate`、`app
 
 ## Requirement: MCP 写操作走引擎单入口
 
-`approve_gate` / `reject_gate` / `submit_stage_output` SHALL 只经引擎单入口（Approve / Reject / SubmitLocal）修改交付状态，无旁路状态修改；裁定与交回选项 SHALL 按当前门校验。簿记 SHALL 持与 HTTP API 共享的 per-delivery 锁，成功后 SHALL 把推进交给后台驱动而不是阻塞响应（跨驾驶面互斥的完整语义归 gates-approvals）。
+`approve_gate` / `reject_gate` / `submit_stage_output` SHALL 只经引擎单入口（Approve / Reject / SubmitLocal）修改交付状态，无旁路状态修改；裁定与交回选项 SHALL 按当前门校验。簿记 SHALL 持与 HTTP API 共享的 per-delivery 锁，成功后 SHALL 把推进交给后台驱动而不是阻塞响应（跨驾驶面互斥的完整语义归 gates-approvals）。簿记与推进 SHALL 在与请求脱钩的有界上下文（10s）中执行——客户端在写操作中途断连 SHALL NOT 杀死已受理动作的持久化（读路径仍走请求上下文）。
 
 #### Scenario: 批准后自动推进
 
@@ -140,12 +140,17 @@ MCP 面 SHALL 恰好暴露五个驾驶工具：`get_context`、`get_gate`、`app
 
 ## Requirement: 同步触发与状态面
 
-同步 SHALL 有三个等价入口：服务启动即异步执行一轮（不阻塞启动）、按 `TASK_SYNC_INTERVAL` 周期轮询（默认 60s，设 0 关闭周期但启动轮仍执行）、登录后手动 `POST /api/task-sync`。同步失败 SHALL NOT 使进程 fatal：错误记入状态面，下一轮继续。同步结果 SHALL 只存进程内存（不落库），重启即空。
+同步 SHALL 有三个等价入口：服务启动即异步执行一轮（不阻塞启动）、按 `TASK_SYNC_INTERVAL` 周期轮询（默认 60s，设 0 关闭周期但启动轮仍执行）、登录后手动 `POST /api/task-sync`。同步失败 SHALL NOT 使进程 fatal：错误记入状态面，下一轮继续。同步结果 SHALL 只存进程内存（不落库），重启即空。读取面 SHALL 有两个端点：`GET /api/task-sync` 返回 `{running, last}`（last 为最近一轮完整结果——项目/issue 导入与跳过计数、标签镜像数、skips 清单与错误文本，从未同步过为 null）；`GET /api/task-sync/status` 为自动同步状态面（见下）。
 
 #### Scenario: 三入口同一链路
 
 - **WHEN** 服务启动、周期到点、或用户点前端「刷新数据」按钮
 - **THEN** 三者执行同一轮全量同步逻辑，效果等价
+
+#### Scenario: 最近一轮结果读取
+
+- **WHEN** 一轮同步完成后调用 `GET /api/task-sync`
+- **THEN** 返回 running=false 与 last（含 projects_imported / issues_imported / issues_skipped / labels_imported / skips / error）；从未同步过时 last 为 null；同步未装配时返回 503
 
 #### Scenario: 手动触发的错误码
 
@@ -232,6 +237,7 @@ MCP 面 SHALL 恰好暴露五个驾驶工具：`get_context`、`get_gate`、`app
 
 - **WHEN** 轮询方以上轮游标（最后已交付评论 id + 其时间）拉取新评论
 - **THEN** 只返回游标之后的新评论并给出推进后的游标，无新评论时游标原样返回（调用方只需存回；评论消费与去重语义归需求流转域）
+- **AND** 锚点评论已在上游被删除（游标 id 不在本轮结果集）时，返回整个 since 窗口的评论并推进游标——宁可重发不漏发，重发由评论 id 去重兜住
 
 ## Requirement: 仓库检出与交付分支语义
 
@@ -275,12 +281,17 @@ workdir SHALL 是该交付独占的仓库检出：从项目默认分支 clone（
 
 ## Requirement: 本机 helper 拉起通道
 
-常驻用户本机的 helper（`infera-link`）SHALL 把网页上的「在本地处理此阶段」按钮接到本机 CLI：收到 handle 请求后经 MCP `get_context` 取驾驶上下文，生成本次会话的 MCP 客户端配置与初始提示并落盘（`~/.infera/link/<delivery_id>/`，权限 0600，可审计），然后在新的本机终端拉起 CLI 会话定位于交付 workdir；产出由 CLI 经 MCP `submit_stage_output` 交回，流水线自动推进。
+常驻用户本机的 helper（`infera-link`）SHALL 把网页上的「在本地处理此阶段」按钮接到本机 CLI：收到 handle 请求后经 MCP `get_context` 取驾驶上下文，生成本次会话的 MCP 客户端配置与初始提示并落盘（`~/.infera/link/<delivery_id>/`，暂存目录权限 0700、目录内文件权限 0600——配置内含 token，可审计），然后在新的本机终端拉起 CLI 会话定位于交付 workdir；产出由 CLI 经 MCP `submit_stage_output` 交回，流水线自动推进。helper 自身的暴露面 SHALL 收紧：监听地址只允许本机回环（localhost / 127.0.0.1 / ::1，绑 0.0.0.0 / 局域网 / 空 host 在配置加载期即拒绝启动）；`/handle` SHALL 要求携带 Origin 且其主机为本机（无 Origin 的非浏览器客户端拒绝 403——比 CORS 回显更严，回显只挡读响应不挡发请求）；CORS 仅对本机来源回显 Origin，`delivery_id` 入路径前按白名单字符集校验以挡路径穿越。
 
 #### Scenario: 按钮到本机会话
 
 - **WHEN** 交付停在本机绑定节点，用户在网页点「在本地处理此阶段」
 - **THEN** helper 返回该节点与 workdir，落盘 MCP 配置与初始提示，并在本机终端拉起带该配置与提示的 CLI 会话；helper 未运行或端口不符时按钮报可操作错误
+
+#### Scenario: 暴露面收紧
+
+- **WHEN** helper 以非回环 `--listen` 启动，或 `/handle` 请求不带 Origin / Origin 主机非本机，或 `delivery_id` 含路径穿越等非法字符
+- **THEN** 分别在配置加载期拒绝启动 / 返回 403 / 返回 400，不拉起任何本机会话
 
 #### Scenario: 两种拉起形态的初始提示
 

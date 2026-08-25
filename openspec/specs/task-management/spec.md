@@ -2,7 +2,7 @@
 
 ## Purpose
 
-管理外部需求的接入与在 infera 内的呈现：需求大节点状态机（`requirements.node`，单一状态源，由闸门轮询按上游父 issue 状态推进）、需求卡与交付卡（delivery，即项目内任务卡）的生命周期——创建入路、状态集、字段与展示规则、阶段产物与交付详情，以及需求 → 任务的拆分关系（父子、批次分层）在本域的呈现。本域不管：闸门卡的识别协议与门禁审批/终审合并策略细节（gates-approvals）、任务源同步通道与镜像机制（mcp-integration）、阶段图引擎执行与 agent 编排绑定（agent-orchestration）、项目/看板组织与统计聚合（projects-board / statistics）。（server：`reqservice`、`flow` 及 `store` 的 Delivery 形态；web：`features/requirements`、`features/deliveries`；文档：`docs/requirements-flow.md`）
+管理外部需求的接入与在 infera 内的呈现：需求大节点状态机（`requirements.node`，单一状态源，由闸门轮询按上游父 issue 状态推进）、需求卡与交付卡（delivery，即项目内任务卡）的生命周期——创建入路、状态集、字段与展示规则、阶段产物与交付详情，以及需求 → 任务的拆分关系（父子、批次分层）在本域的呈现。本域不管：闸门卡的识别协议与门禁审批/终审合并策略细节（gates-approvals）、任务源同步通道与镜像机制（mcp-integration）、阶段图引擎执行与 agent 编排绑定（agent-orchestration）、项目/看板组织、跨项目发现视图与统计聚合（projects-board / statistics）。（server：`reqservice`、`flow` 及 `store` 的 Delivery 形态；web：`features/requirements`、`features/deliveries`；文档：`docs/requirements-flow.md`）
 
 ## Requirement: 发起需求并派发到任务源
 
@@ -94,6 +94,11 @@
 - **WHEN** 服务以 `TASK_SYNC_*` 全空（未接入）启动并收到需求 API 请求
 - **THEN** 响应 503，不产生半途失败副作用
 
+#### Scenario: 列表与详情周期自动刷新
+
+- **WHEN** 用户停留在需求列表或需求详情页
+- **THEN** 页面按固定周期（10s）自动重新拉取，大节点推进与新到的闸门卡无需手动刷新即可出现（需求视图走轮询刷新，区别于交付详情的事件流订阅刷新）
+
 ## Requirement: 大节点时间线与标签呈现
 
 前端 SHALL 以主线 5 节点线性渲染大节点（受理 → 已派发 → 执行中 → 待验收 → 已交付）：当前节点高亮、已过节点 done、抵达终点即全 done；`needs_decision` 不在主线序列——出现时主线保持中性 upcoming 态并以异常横幅单独呈现；未知节点值 SHALL 回退显示原文，页面不崩。（web `features/requirements/node-timeline.tsx`、`types.ts`）
@@ -131,6 +136,20 @@
 
 - **WHEN** 对已 resolved 的卡再次动作，或对审批卡执行合并类动作
 - **THEN** 请求以冲突（409）拒绝，不产生代发与审计
+
+## Requirement: 审计时间线读取
+
+系统 SHALL 提供需求的审计时间线只读面（`GET /api/requirements/{id}/audit`，需登录）：按发生序（旧 → 新）返回该需求的全部审计行（含 `actor`/`action`/`detail`/时间），作为已处理卡与历史动作的唯一回溯面（详情只返回待处理卡）；无审计行的需求 SHALL 返回空数组而非 null。（`reqservice.AuditTrail`；web `features/requirements/requirement-detail.tsx`「操作记录」）
+
+#### Scenario: 动作后经审计回溯
+
+- **WHEN** 用户批准一张审批卡后读取该需求的审计时间线
+- **THEN** 时间线含一行 `actor=user`、`action=approve` 的记录，按旧 → 新排列，与其它历史动作一并返回
+
+#### Scenario: 无动作需求返回空数组
+
+- **WHEN** 读取一张从未发生过任何代理动作的需求的审计时间线
+- **THEN** 返回空数组 `[]`，不报错、不返回 null
 
 ## Requirement: 任务卡状态集与推进语义
 
@@ -205,12 +224,17 @@
 
 ## Requirement: 任务卡详情与阶段呈现
 
-任务卡详情 SHALL 返回任务行 + 时间线事件 + 阶段产物（拆分父另附子任务清单）。阶段条 SHALL 按复杂度派生展示：`small` 及老数据（complexity 空）走 7 阶段，`large` 走全 11 阶段（拆分父的 tasks/tasks_approval/test_gen 显示跳过态）；终态渲染规则：`completed` 全部 done、`blocked` 当前阶段 failed（之前 done、之后 pending、无进行中指示）、`cancelled` 停在放弃点不再推进。`large` 模式的逐任务实现进度 SHALL 由 tasks/task_done 产物推导（无清单产物时回退 task_done 事件拼装，进度持久不丢）；未知阶段/事件词表外的值 SHALL 回退原文显示不崩；镜像任务卡无 current_stage 时 SHALL 以占位符或 issue key 顶替阶段位，不留悬空「阶段」标签。（`GET /api/deliveries/{id}`；web `features/deliveries/delivery-detail.tsx`、`lib/infera-types.ts`）
+任务卡详情 SHALL 返回任务行 + 时间线事件 + 阶段产物（拆分父另附子任务清单）。阶段条 SHALL 按复杂度派生展示：`small` 及老数据（complexity 空）走 7 阶段，`large` 走全 11 阶段（拆分父的 tasks/tasks_approval/test_gen 显示跳过态并附跳过原因——跳过是虚线勾选形态而非失败）；门禁节点 SHALL 带门禁标识，当前节点 SHALL 区分「进行中」与「等待审批」两种活动态；终态渲染规则：`completed` 全部 done、`blocked` 当前阶段 failed（之前 done、之后 pending、无进行中指示）、`cancelled` 停在放弃点不再推进。`large` 模式的逐任务实现进度 SHALL 由 tasks/task_done 产物推导（无清单产物时回退 task_done 事件拼装，进度持久不丢）；未知阶段/事件词表外的值 SHALL 回退原文显示不崩；镜像任务卡无 current_stage 时 SHALL 以占位符或 issue key 顶替阶段位，不留悬空「阶段」标签。（`GET /api/deliveries/{id}`；web `features/deliveries/delivery-detail.tsx`、`lib/infera-types.ts`）
 
 #### Scenario: large 拆分父的阶段条与子任务清单
 
 - **WHEN** 读取一张 `complexity=large` 的拆分父任务详情
 - **THEN** 阶段条展示全 11 阶段且 tasks/tasks_approval/test_gen 为跳过态，`code_gen` 位显示等待子任务进度（已完成/总数），另附子任务清单（各带批次徽标、阶段、状态、标签）
+
+#### Scenario: 门禁标识与两种活动态
+
+- **WHEN** 一张交付分别停在 agent 执行节点与人工门禁节点
+- **THEN** 阶段条上门禁节点带门禁标识；agent 节点的当前阶段显示「进行中」，停驻门禁的当前阶段显示「等待审批」，两种活动态可辨
 
 #### Scenario: blocked 卡当前阶段显示失败
 
@@ -240,17 +264,3 @@
 
 - **WHEN** 项目含一张从未拆分的顶层任务卡
 - **THEN** 该行 stages 为空数组（非 null），child_total 为 0
-
-## Requirement: 需求发现视图中的任务卡呈现
-
-需求发现视图 SHALL 以标签驱动识别两类 agent 任务（`mining`=「情报」、`analysis`=「候选」；行内带 `agent_types` 全集而非仅命中项），行按 `updated_at` 降序、跨项目以项目名打头；cancelled 行 SHALL 独立归入「已放弃」栏——筛选与分组先作用于全量再按 cancelled 拆成「候选 / 已放弃」双栏；同步镜像无 current_stage 时以 issue key 顶替阶段位。（`GET /api/discovery-tasks`；web `features/discovery`）
-
-#### Scenario: 双标签卡在任一类型筛选下保留
-
-- **WHEN** 一张任务卡同时挂「情报」与「候选」标签，用户按 `mining` 筛选
-- **THEN** 该行保留，且 `agent_types` 为全集 [mining, analysis]（分组/筛选用全集而非仅命中项）
-
-#### Scenario: cancelled 拆入已放弃栏
-
-- **WHEN** 视图内同时存在非 cancelled 与 cancelled 任务卡
-- **THEN** 非 cancelled 行归左栏「候选」、cancelled 行归右栏「已放弃」，行序与分组结构不变
