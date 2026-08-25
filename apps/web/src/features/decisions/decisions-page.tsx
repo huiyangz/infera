@@ -63,6 +63,9 @@ export function DecisionsPage() {
                     项目
                   </th>
                   <th className='px-4 py-2 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
+                    来源
+                  </th>
+                  <th className='px-4 py-2 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
                     待决策门
                   </th>
                   <th className='px-4 py-2 text-xs font-medium tracking-wider text-muted-foreground uppercase'>
@@ -89,6 +92,11 @@ export function DecisionsPage() {
                     </td>
                     <td className='px-4 py-2.5 text-muted-foreground'>
                       {r.project_name}
+                    </td>
+                    {/* 来源（INFERA-267）：源头需求的 source；空值回退 —，与
+                        需求详情页 CardDescription 的 来源 {source || '—'} 同口径 */}
+                    <td className='px-4 py-2.5 text-muted-foreground'>
+                      {r.source || '—'}
                     </td>
                     <td className='px-4 py-2.5'>
                       <Badge variant='outline' className='font-normal'>

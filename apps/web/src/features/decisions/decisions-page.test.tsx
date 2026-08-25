@@ -45,6 +45,7 @@ function row(over: Partial<PendingDecisionRow>): PendingDecisionRow {
     external_issue_key: 'INFERA-108',
     assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
     priority: '',
+    source: '',
     created_at: '2026-08-22T05:00:00Z',
     updated_at: '2026-08-22T05:10:00Z',
     ...over,
@@ -131,6 +132,29 @@ describe('DecisionsPage 需要决策列表', () => {
     const screen = await mount()
     await expect.element(screen.getByText('INFERA-108')).toBeInTheDocument()
     expect(screen.container.textContent?.match(/INFERA-\d+/g)?.length).toBe(1)
+  })
+
+  it('来源列随行展示：有值显值、空值回退 —（与需求详情页口径一致）', async () => {
+    vi.mocked(listPendingDecisions).mockResolvedValue([
+      row({ source: 'web' }),
+      row({
+        id: '9f2f9f34-1a2b-4c3d-8e9f-000000000002',
+        title: '本地需求（无来源）',
+        external_issue_key: '',
+        source: '',
+      }),
+    ])
+    const screen = await mount()
+    // 表头列存在（exact：标题文本里会含「来源」子串）
+    await expect
+      .element(screen.getByText('来源', { exact: true }))
+      .toBeInTheDocument()
+    // 有值显值
+    await expect.element(screen.getByText('web')).toBeInTheDocument()
+    // 空值回退 —（与 requirement-detail 的 来源 {source || '—'} 同口径）
+    await expect
+      .element(screen.getByText('—', { exact: true }))
+      .toBeInTheDocument()
   })
 
   it('空列表呈现空态', async () => {

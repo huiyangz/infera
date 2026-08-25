@@ -20,6 +20,8 @@ export interface PendingDecisionRow {
   /** 同步展示数据；'' = 无 */
   assignee: string
   priority: string
+  /** 来源（INFERA-267 加法扩展）：源头需求的 source；'' = 无来源/不可解析，展示回退 — */
+  source: string
   created_at: string
   updated_at: string
 }

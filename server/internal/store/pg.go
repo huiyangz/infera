@@ -204,12 +204,21 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 }
 
 // ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空且未
-// 完结），JOIN projects 带 ProjectName，按 updated_at 降序。
+// 完结），JOIN projects 带 ProjectName，按 updated_at 降序。RootExternalIssueID
+// 由递归 CTE 沿 parent_id 爬链根（INFERA-267）：普通行根=自身；拆分子行根=
+// 链根。UNION（非 ALL）去重兜底环（环成员永不成根，LEFT JOIN 落空 → ''）。
+// 不 JOIN requirements——该表归 reqservice/flow 消费面，source 由 api 层回填。
 func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, error) {
 	rows, err := pg.pool.Query(ctx,
-		`SELECT d.id, d.project_id, p.name, d.title, d.status, d.pending_gate, d.current_stage,
-		        d.external_issue_key, d.assignee, d.priority, d.created_at, d.updated_at
+		`WITH RECURSIVE chain(id, root_ext) AS (
+		        SELECT id, external_issue_id FROM deliveries WHERE parent_id IS NULL
+		  UNION
+		        SELECT c.id, ch.root_ext FROM deliveries c JOIN chain ch ON c.parent_id = ch.id
+		)
+		SELECT d.id, d.project_id, p.name, d.title, d.status, d.pending_gate, d.current_stage,
+		        d.external_issue_key, d.assignee, d.priority, COALESCE(ch.root_ext, ''), d.created_at, d.updated_at
 		 FROM deliveries d JOIN projects p ON p.id = d.project_id
+		 LEFT JOIN chain ch ON ch.id = d.id
 		 WHERE d.pending_gate <> '' AND d.status <> 'completed'
 		 ORDER BY d.updated_at DESC`)
 	if err != nil {
@@ -220,7 +229,8 @@ func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, erro
 	for rows.Next() {
 		var r PendingDecision
 		if err := rows.Scan(&r.ID, &r.ProjectID, &r.ProjectName, &r.Title, &r.Status, &r.PendingGate,
-			&r.CurrentStage, &r.ExternalIssueKey, &r.Assignee, &r.Priority, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&r.CurrentStage, &r.ExternalIssueKey, &r.Assignee, &r.Priority, &r.RootExternalIssueID,
+			&r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
