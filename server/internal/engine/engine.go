@@ -35,6 +35,7 @@ const (
 	StatusActive    = "active"
 	StatusCompleted = "completed"
 	StatusBlocked   = "blocked"
+	StatusCancelled = "cancelled"
 )
 
 // errStop 是内部信号：本轮推进到此为止（门禁暂停 / 失败回环 / 终态），不是错误。

@@ -133,6 +133,51 @@ func TestDiscoveryTasksInvalidAgent(t *testing.T) {
 	require.Equal(t, "invalid_request", e["code"])
 }
 
+// TestDiscoveryTasksCancelledPassthrough（INFERA-232，回归钉）：上游「放弃」的
+// 挖掘/分析行以 cancelled 原样出现在需求发现列表——这是前端「候选 / 已放弃」
+// 分栏的数据前提：放弃行靠 status==='cancelled' 识别，不得被折叠成 completed。
+func TestDiscoveryTasksCancelledPassthrough(t *testing.T) {
+	ts, st := newServer(t)
+	c := login(t, ts.URL)
+	_, _, _ = seedDiscovery(t, st)
+
+	ctx := context.Background()
+	givenUp := store.Delivery{ProjectID: func() string {
+		ps, err := st.ListProjects(ctx)
+		require.NoError(t, err)
+		return ps[0].ID
+	}(), Title: "判定无价值的情报", Status: "cancelled", ExternalIssueID: "mi-giveup",
+		ExternalIssueKey: "INFERA-99"}
+	require.NoError(t, st.CreateDelivery(ctx, &givenUp))
+
+	// 需求发现列表按【情报/候选】标签取数：放弃卡是被需求分析晋级过【候选】
+	// 再放弃的行，标签仍在（任务同步保留标签），不带标签进不了本列表。
+	for _, l := range func() []store.Label {
+		ls, err := st.ListLabels(ctx)
+		require.NoError(t, err)
+		return ls
+	}() {
+		if l.Name == "候选" {
+			require.NoError(t, st.AttachLabel(ctx, givenUp.ID, l.ID))
+		}
+	}
+
+	r, _ := c.Get(ts.URL + "/api/discovery-tasks")
+	require.Equal(t, 200, r.StatusCode)
+	var rows []map[string]any
+	require.NoError(t, json.NewDecoder(r.Body).Decode(&rows))
+
+	var got map[string]any
+	for _, row := range rows {
+		if row["id"] == givenUp.ID {
+			got = row
+			break
+		}
+	}
+	require.NotNil(t, got, "放弃行须出现在需求发现列表")
+	require.Equal(t, "cancelled", got["status"], "cancelled 原样透传，不折叠为 completed")
+}
+
 // TestDiscoveryTasksEmptyIsArray：无命中结果是 [] 而非 null（前端可直接 .map）。
 func TestDiscoveryTasksEmptyIsArray(t *testing.T) {
 	ts, _ := newServer(t)

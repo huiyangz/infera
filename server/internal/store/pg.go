@@ -166,9 +166,9 @@ func (pg *Pg) ProjectStats(ctx context.Context, id string) (ProjectStats, error)
 // EXISTS 兜底项目存在性（无 delivery 的项目聚合行全零，仍需区分 404）。
 func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats, error) {
 	var (
-		total, active, queued, completed, blocked, pending int
-		synced                                             sql.NullTime
-		exists                                             bool
+		total, active, queued, completed, blocked, cancelled, pending int
+		synced                                                        sql.NullTime
+		exists                                                        bool
 	)
 	err := pg.pool.QueryRow(ctx,
 		`SELECT count(*),
@@ -176,11 +176,12 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 		        count(*) FILTER (WHERE status='queued'),
 		        count(*) FILTER (WHERE status='completed'),
 		        count(*) FILTER (WHERE status='blocked'),
+		        count(*) FILTER (WHERE status='cancelled'),
 		        count(*) FILTER (WHERE pending_gate<>'' AND status<>'completed'),
 		        (SELECT external_synced_at FROM projects WHERE id=$1),
 		        EXISTS(SELECT 1 FROM projects WHERE id=$1)
 		 FROM deliveries WHERE project_id=$1`, id).
-		Scan(&total, &active, &queued, &completed, &blocked, &pending, &synced, &exists)
+		Scan(&total, &active, &queued, &completed, &blocked, &cancelled, &pending, &synced, &exists)
 	if err != nil {
 		return RequirementStats{}, err
 	}
@@ -190,7 +191,7 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 	s := RequirementStats{
 		ProjectID:        id,
 		RequirementTotal: total,
-		ByStatus:         map[string]int{"active": active, "queued": queued, "completed": completed, "blocked": blocked},
+		ByStatus:         map[string]int{"active": active, "queued": queued, "completed": completed, "blocked": blocked, "cancelled": cancelled},
 		PendingDecisions: pending,
 		Delivered:        completed,
 	}

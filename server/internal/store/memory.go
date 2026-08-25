@@ -149,7 +149,7 @@ func (m *Memory) ProjectStats(ctx context.Context, id string) (ProjectStats, err
 	return s, nil
 }
 
-// RequirementStats 项目维度需求统计（语义与 Pg 一致）：ByStatus 恒含四个
+// RequirementStats 项目维度需求统计（语义与 Pg 一致）：ByStatus 恒含五个
 // 固定键；PendingDecisions 只数 pending_gate 非空且未完结的行；项目不存在
 // → ErrNotFound。
 func (m *Memory) RequirementStats(ctx context.Context, id string) (RequirementStats, error) {
@@ -161,7 +161,7 @@ func (m *Memory) RequirementStats(ctx context.Context, id string) (RequirementSt
 	}
 	s := RequirementStats{
 		ProjectID:    id,
-		ByStatus:     map[string]int{"active": 0, "queued": 0, "completed": 0, "blocked": 0},
+		ByStatus:     map[string]int{"active": 0, "queued": 0, "completed": 0, "blocked": 0, "cancelled": 0},
 		LastSyncedAt: p.ExternalSyncedAt,
 	}
 	for _, d := range m.deliveries {

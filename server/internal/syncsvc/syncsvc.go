@@ -313,10 +313,14 @@ func (s *Service) Last() *Result {
 // 本消费方，T01 不发明对照表）。铁律：任何输入都不翻出 active——active 意味
 // "引擎正在驱动"（重启恢复 ResumeActive 会对全部 active 交付点火后台驱动），
 // 同步镜像被点火等于替镜像跑引擎。非终态一律 queued（镜像只排队不驱动）。
+// cancelled（INFERA-232）：上游「放弃」是独立终态，原样落库——折叠成
+// completed 会把放弃的需求混进已交付口径。
 func translateStatus(externalStatus string) string {
 	switch externalStatus {
-	case "done", "cancelled": // cancelled 无 infera 对应词，按终态折叠
+	case "done":
 		return engine.StatusCompleted
+	case "cancelled":
+		return engine.StatusCancelled
 	case "blocked":
 		return engine.StatusBlocked
 	default: // todo/backlog/in_progress/in_review/未知词
