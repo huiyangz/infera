@@ -13,7 +13,6 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedDiscoveryRouteImport } from './routes/_authenticated/discovery'
 import { Route as AuthenticatedDecisionsRouteImport } from './routes/_authenticated/decisions'
-import { Route as AuthenticatedAgentActivityRouteImport } from './routes/_authenticated/agent-activity'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
 import { Route as errors404RouteImport } from './routes/(errors)/404'
@@ -28,6 +27,7 @@ import { Route as AuthenticatedDeliveriesIdRouteImport } from './routes/_authent
 import { Route as AuthenticatedProjectsIdIndexRouteImport } from './routes/_authenticated/projects/$id/index'
 import { Route as AuthenticatedDeliveriesIdIndexRouteImport } from './routes/_authenticated/deliveries/$id/index'
 import { Route as AuthenticatedProjectsIdTasksRouteImport } from './routes/_authenticated/projects/$id/tasks'
+import { Route as AuthenticatedProjectsIdAgentActivityRouteImport } from './routes/_authenticated/projects/$id/agent-activity'
 import { Route as AuthenticatedDeliveriesIdGateRouteImport } from './routes/_authenticated/deliveries/$id/gate'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -49,12 +49,6 @@ const AuthenticatedDecisionsRoute = AuthenticatedDecisionsRouteImport.update({
   path: '/decisions',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedAgentActivityRoute =
-  AuthenticatedAgentActivityRouteImport.update({
-    id: '/agent-activity',
-    path: '/agent-activity',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
 const errors503Route = errors503RouteImport.update({
   id: '/(errors)/503',
   path: '/503',
@@ -132,6 +126,12 @@ const AuthenticatedProjectsIdTasksRoute =
     path: '/tasks',
     getParentRoute: () => AuthenticatedProjectsIdRoute,
   } as any)
+const AuthenticatedProjectsIdAgentActivityRoute =
+  AuthenticatedProjectsIdAgentActivityRouteImport.update({
+    id: '/agent-activity',
+    path: '/agent-activity',
+    getParentRoute: () => AuthenticatedProjectsIdRoute,
+  } as any)
 const AuthenticatedDeliveriesIdGateRoute =
   AuthenticatedDeliveriesIdGateRouteImport.update({
     id: '/gate',
@@ -147,7 +147,6 @@ export interface FileRoutesByFullPath {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
-  '/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
@@ -156,6 +155,7 @@ export interface FileRoutesByFullPath {
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/requirements/': typeof AuthenticatedRequirementsIndexRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/projects/$id/agent-activity': typeof AuthenticatedProjectsIdAgentActivityRoute
   '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
   '/projects/$id/': typeof AuthenticatedProjectsIdIndexRoute
@@ -167,7 +167,6 @@ export interface FileRoutesByTo {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
-  '/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
   '/': typeof AuthenticatedIndexRoute
@@ -175,6 +174,7 @@ export interface FileRoutesByTo {
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/requirements': typeof AuthenticatedRequirementsIndexRoute
   '/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/projects/$id/agent-activity': typeof AuthenticatedProjectsIdAgentActivityRoute
   '/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdIndexRoute
   '/projects/$id': typeof AuthenticatedProjectsIdIndexRoute
@@ -188,7 +188,6 @@ export interface FileRoutesById {
   '/(errors)/404': typeof errors404Route
   '/(errors)/500': typeof errors500Route
   '/(errors)/503': typeof errors503Route
-  '/_authenticated/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/_authenticated/decisions': typeof AuthenticatedDecisionsRoute
   '/_authenticated/discovery': typeof AuthenticatedDiscoveryRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
@@ -198,6 +197,7 @@ export interface FileRoutesById {
   '/_authenticated/requirements/$id': typeof AuthenticatedRequirementsIdRoute
   '/_authenticated/requirements/': typeof AuthenticatedRequirementsIndexRoute
   '/_authenticated/deliveries/$id/gate': typeof AuthenticatedDeliveriesIdGateRoute
+  '/_authenticated/projects/$id/agent-activity': typeof AuthenticatedProjectsIdAgentActivityRoute
   '/_authenticated/projects/$id/tasks': typeof AuthenticatedProjectsIdTasksRoute
   '/_authenticated/deliveries/$id/': typeof AuthenticatedDeliveriesIdIndexRoute
   '/_authenticated/projects/$id/': typeof AuthenticatedProjectsIdIndexRoute
@@ -212,7 +212,6 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
-    | '/agent-activity'
     | '/decisions'
     | '/discovery'
     | '/deliveries/$id'
@@ -221,6 +220,7 @@ export interface FileRouteTypes {
     | '/requirements/$id'
     | '/requirements/'
     | '/deliveries/$id/gate'
+    | '/projects/$id/agent-activity'
     | '/projects/$id/tasks'
     | '/deliveries/$id/'
     | '/projects/$id/'
@@ -232,7 +232,6 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
-    | '/agent-activity'
     | '/decisions'
     | '/discovery'
     | '/'
@@ -240,6 +239,7 @@ export interface FileRouteTypes {
     | '/requirements/$id'
     | '/requirements'
     | '/deliveries/$id/gate'
+    | '/projects/$id/agent-activity'
     | '/projects/$id/tasks'
     | '/deliveries/$id'
     | '/projects/$id'
@@ -252,7 +252,6 @@ export interface FileRouteTypes {
     | '/(errors)/404'
     | '/(errors)/500'
     | '/(errors)/503'
-    | '/_authenticated/agent-activity'
     | '/_authenticated/decisions'
     | '/_authenticated/discovery'
     | '/_authenticated/'
@@ -262,6 +261,7 @@ export interface FileRouteTypes {
     | '/_authenticated/requirements/$id'
     | '/_authenticated/requirements/'
     | '/_authenticated/deliveries/$id/gate'
+    | '/_authenticated/projects/$id/agent-activity'
     | '/_authenticated/projects/$id/tasks'
     | '/_authenticated/deliveries/$id/'
     | '/_authenticated/projects/$id/'
@@ -305,13 +305,6 @@ declare module '@tanstack/react-router' {
       path: '/decisions'
       fullPath: '/decisions'
       preLoaderRoute: typeof AuthenticatedDecisionsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/agent-activity': {
-      id: '/_authenticated/agent-activity'
-      path: '/agent-activity'
-      fullPath: '/agent-activity'
-      preLoaderRoute: typeof AuthenticatedAgentActivityRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/(errors)/503': {
@@ -412,6 +405,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProjectsIdTasksRouteImport
       parentRoute: typeof AuthenticatedProjectsIdRoute
     }
+    '/_authenticated/projects/$id/agent-activity': {
+      id: '/_authenticated/projects/$id/agent-activity'
+      path: '/agent-activity'
+      fullPath: '/projects/$id/agent-activity'
+      preLoaderRoute: typeof AuthenticatedProjectsIdAgentActivityRouteImport
+      parentRoute: typeof AuthenticatedProjectsIdRoute
+    }
     '/_authenticated/deliveries/$id/gate': {
       id: '/_authenticated/deliveries/$id/gate'
       path: '/gate'
@@ -439,12 +439,15 @@ const AuthenticatedDeliveriesIdRouteWithChildren =
   )
 
 interface AuthenticatedProjectsIdRouteChildren {
+  AuthenticatedProjectsIdAgentActivityRoute: typeof AuthenticatedProjectsIdAgentActivityRoute
   AuthenticatedProjectsIdTasksRoute: typeof AuthenticatedProjectsIdTasksRoute
   AuthenticatedProjectsIdIndexRoute: typeof AuthenticatedProjectsIdIndexRoute
 }
 
 const AuthenticatedProjectsIdRouteChildren: AuthenticatedProjectsIdRouteChildren =
   {
+    AuthenticatedProjectsIdAgentActivityRoute:
+      AuthenticatedProjectsIdAgentActivityRoute,
     AuthenticatedProjectsIdTasksRoute: AuthenticatedProjectsIdTasksRoute,
     AuthenticatedProjectsIdIndexRoute: AuthenticatedProjectsIdIndexRoute,
   }
@@ -455,7 +458,6 @@ const AuthenticatedProjectsIdRouteWithChildren =
   )
 
 interface AuthenticatedRouteRouteChildren {
-  AuthenticatedAgentActivityRoute: typeof AuthenticatedAgentActivityRoute
   AuthenticatedDecisionsRoute: typeof AuthenticatedDecisionsRoute
   AuthenticatedDiscoveryRoute: typeof AuthenticatedDiscoveryRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
@@ -467,7 +469,6 @@ interface AuthenticatedRouteRouteChildren {
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
-  AuthenticatedAgentActivityRoute: AuthenticatedAgentActivityRoute,
   AuthenticatedDecisionsRoute: AuthenticatedDecisionsRoute,
   AuthenticatedDiscoveryRoute: AuthenticatedDiscoveryRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,

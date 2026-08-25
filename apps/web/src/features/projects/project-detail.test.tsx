@@ -250,8 +250,9 @@ describe('ProjectDetail dashboard 化（INFERA-243）', () => {
     const screen = await renderProjectDetail(makeProject())
     await waitForProject(screen)
 
+    // INFERA-259 后页签与总览区同名——以 heading 角色定位总览区的区块标题
     await expect
-      .element(screen.getByText('Agent 执行时序', { exact: true }))
+      .element(screen.getByRole('heading', { name: 'Agent 执行时序' }))
       .toBeInTheDocument()
     // 泳道与条：d-1 两条 run，failed / done 语义可见
     expect(document.querySelectorAll('[data-lane]').length).toBe(1)
@@ -319,10 +320,12 @@ describe('ProjectDetail dashboard 化（INFERA-243）', () => {
     const nav = await screen.getByRole('navigation', { name: '项目导航' }).element()
     expect(nav).toBeInTheDocument()
     const links = nav?.querySelectorAll('a') ?? []
-    expect(links.length).toBe(2)
+    // INFERA-259：第三个页签「Agent 执行时序」挂在项目域导航上
+    expect(links.length).toBe(3)
     expect(links[0]?.getAttribute('href')).toBe('/projects/p1')
     expect(links[0]?.getAttribute('aria-current')).toBe('page')
     expect(links[1]?.getAttribute('href')).toBe('/projects/p1/tasks')
+    expect(links[2]?.getAttribute('href')).toBe('/projects/p1/agent-activity')
     // 旧版「任务列表」卡片入口（角落小链接）不复存在
     expect(await screen.getByText('任务列表', { exact: true }).query()).toBeNull()
   })

@@ -4,7 +4,7 @@ import { cleanup, render } from 'vitest-browser-react'
 import '@/styles/index.css'
 import { getAgentActivity } from './api'
 import type { AgentActivityResponse } from './types'
-import { AgentActivityPage } from './agent-activity-page'
+import { AgentActivityPanel } from './agent-activity-panel'
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
@@ -41,21 +41,14 @@ function payload(over: Partial<AgentActivityResponse>): AgentActivityResponse {
   }
 }
 
+/** 纯主体组件：不含页头，无需 Sidebar 布局上下文（INFERA-259 迁入项目详情 tab） */
 async function mount() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  // 真实布局：Header 依赖 SidebarProvider 上下文（与 decisions-page 测试同构）
-  const { SidebarInset, SidebarProvider } = await import(
-    '@/components/ui/sidebar'
-  )
   return await render(
     <QueryClientProvider client={qc}>
-      <SidebarProvider>
-        <SidebarInset>
-          <AgentActivityPage />
-        </SidebarInset>
-      </SidebarProvider>
+      <AgentActivityPanel />
     </QueryClientProvider>
   )
 }
@@ -79,12 +72,12 @@ afterEach(async () => {
   await cleanup()
 })
 
-describe('AgentActivityPage Agent 执行时序页', () => {
-  it('默认加载最近 24h / 30 分钟桶，页头标题「Agent 执行时序」', async () => {
+describe('AgentActivityPanel Agent 执行时序可视化主体', () => {
+  it('默认加载最近 24h / 30 分钟桶，控件行标注当前窗口', async () => {
     const screen = await mount()
 
     await expect
-      .element(screen.getByText('Agent 执行时序', { exact: true }))
+      .element(screen.getByText('最近 24 小时各 agent 执行次数，30 分钟桶'))
       .toBeInTheDocument()
     expect(getAgentActivity).toHaveBeenCalledWith({ hours: 24 })
   })
@@ -141,7 +134,7 @@ describe('AgentActivityPage Agent 执行时序页', () => {
 
     await screen.getByText('unbound', { exact: true }).click()
     // 移出再移回图面，强制 tooltip 按当前显隐重算
-    await screen.getByText('Agent 执行时序', { exact: true }).hover()
+    await screen.getByText('最近 24 小时各 agent 执行次数，30 分钟桶').hover()
     await chart.hover()
 
     await vi.waitFor(async () => {
@@ -175,12 +168,15 @@ describe('AgentActivityPage Agent 执行时序页', () => {
     expect(getAgentActivity).toHaveBeenCalledTimes(2)
   })
 
-  it('窗口切换 24h / 12h / 6h：切换即按新窗口取数', async () => {
+  it('窗口切换 24h / 12h / 6h：切换即按新窗口取数，窗口文案随之更新', async () => {
     const screen = await mount()
     await expect.element(screen.getByText('SDD', { exact: true })).toBeInTheDocument()
 
     await screen.getByRole('button', { name: '12 小时' }).click()
     expect(getAgentActivity).toHaveBeenLastCalledWith({ hours: 12 })
+    await expect
+      .element(screen.getByText('最近 12 小时各 agent 执行次数，30 分钟桶'))
+      .toBeInTheDocument()
 
     await screen.getByRole('button', { name: '6 小时' }).click()
     expect(getAgentActivity).toHaveBeenLastCalledWith({ hours: 6 })
