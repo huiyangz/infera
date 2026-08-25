@@ -16,6 +16,7 @@ import {
   me,
 } from '@/lib/infera-api'
 import { getTaskSyncStatus } from '@/features/task-sync/api'
+import { getAgentActivity } from '@/features/agent-activity/api'
 import type {
   Delivery,
   Project,
@@ -60,6 +61,16 @@ vi.mock('@/features/requirements/api', async (importOriginal) => {
     listRequirements: vi.fn(),
     getRequirement: vi.fn(),
     listRequirementAudit: vi.fn(),
+  }
+})
+
+vi.mock('@/features/agent-activity/api', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/features/agent-activity/api')>()
+  return {
+    ...actual,
+    // 时序接口与本文件多数断言无关——mock 掉，避免真实 fetch 打到 vite 代理报错
+    getAgentActivity: vi.fn(),
   }
 })
 
@@ -164,6 +175,23 @@ async function renderApp(initialPath: string) {
     title: '需求甲',
   } as never)
   vi.mocked(listRequirementAudit).mockResolvedValue([])
+  // Agent 执行时序 tab 页数据源：窗口对齐的两条曲线（含 unbound）
+  vi.mocked(getAgentActivity).mockResolvedValue({
+    window: { from: '2026-08-25T04:00:00Z', to: '2026-08-25T05:00:00Z' },
+    bucket_minutes: 30,
+    series: [
+      {
+        agent_id: 'a1',
+        agent_name: 'SDD',
+        points: [{ t: '2026-08-25T04:00:00Z', count: 1 }],
+      },
+      {
+        agent_id: '',
+        agent_name: 'unbound',
+        points: [{ t: '2026-08-25T04:00:00Z', count: 2 }],
+      },
+    ],
+  })
 
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -309,6 +337,74 @@ describe('项目详情 tab 双向切换（INFERA-248：总览 ⇄ 项目任务�
     const overviewLinks = overviewNav?.querySelectorAll('a') ?? []
     expect(overviewLinks[0]?.getAttribute('aria-current')).toBe('page')
     expect(overviewLinks[1]?.getAttribute('aria-current')).toBeNull()
+  })
+})
+
+describe('项目详情 Agent 执行时序 tab（INFERA-259：原独立路由迁入项目域）', () => {
+  it('AC1-1: 直达 /projects/{id}/agent-activity 渲染原可视化主体，URL 停留项目域', async () => {
+    const { screen, router } = await renderApp('/projects/p1/agent-activity')
+    await router.navigate({
+      to: '/projects/$id/agent-activity',
+      params: { id: 'p1' },
+    })
+
+    // 原可视化标志性内容：窗口切换控件 + 真 echarts 图面（legend 出现即图已装配）
+    await expect
+      .element(screen.getByRole('button', { name: '12 小时' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('SDD', { exact: true }))
+      .toBeInTheDocument()
+    expect(screen.container.querySelector('[role="img"] svg')).not.toBeNull()
+    expect(getAgentActivity).toHaveBeenCalledWith({ hours: 24 })
+    // 页内一级导航在位，当前页签为第三个「Agent 执行时序」
+    const nav = await screen.getByRole('navigation', { name: '项目导航' }).element()
+    const links = nav?.querySelectorAll('a') ?? []
+    expect(links[2]?.getAttribute('aria-current')).toBe('page')
+    // 不是项目总览（总览独有内容不应出现）
+    expect(await screen.getByText('项目统计', { exact: true }).query()).toBeNull()
+    expect(router.state.location.pathname).toBe('/projects/p1/agent-activity')
+  })
+
+  it('AC1-2: 总览页点击「Agent 执行时序」页签进入该页（tab 可达另一半）', async () => {
+    const { screen, router } = await renderApp('/projects/p1')
+    await router.navigate({ to: '/projects/$id', params: { id: 'p1' } })
+    await expect
+      .element(screen.getByText('项目统计', { exact: true }))
+      .toBeInTheDocument()
+
+    // 页签以「项目导航」作用域定位（总览页同名 section 标题非链接，不算重名）
+    await screen
+      .getByRole('navigation', { name: '项目导航' })
+      .getByRole('link', { name: 'Agent 执行时序' })
+      .click()
+
+    await expect
+      .element(screen.getByRole('button', { name: '12 小时' }))
+      .toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects/p1/agent-activity')
+  })
+
+  it('AC1-3: 该页点击「总览」页签可切回项目总览（第三个页签不破坏既有双向切换）', async () => {
+    const { screen, router } = await renderApp('/projects/p1/agent-activity')
+    await expect
+      .element(screen.getByRole('button', { name: '12 小时' }))
+      .toBeInTheDocument()
+
+    await screen.getByRole('link', { name: /总览/ }).click()
+
+    await expect
+      .element(screen.getByText('项目统计', { exact: true }))
+      .toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects/p1')
+  })
+
+  it('AC2: 独立路由 /agent-activity 已移除——直达落 404（侧栏入口移除见 sidebar-data.test）', async () => {
+    const { screen } = await renderApp('/agent-activity')
+
+    await expect
+      .element(screen.getByText(/Page Not Found/))
+      .toBeInTheDocument()
   })
 })
 

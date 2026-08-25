@@ -1,19 +1,21 @@
 import { Link } from '@tanstack/react-router'
-import { LayoutDashboard, ListTree } from 'lucide-react'
+import { Activity, LayoutDashboard, ListTree } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
  * 项目域页内一级导航（INFERA-243）：总览 / 项目任务两页签，
  * 取代旧版任务分组卡片角落里的「项目任务」小链接。
+ * INFERA-259 增第三个页签「Agent 执行时序」——原独立路由 /agent-activity
+ * 的可视化主体迁入项目详情（工作区全局口径，见 project-agent-activity.tsx）。
  * 编辑风页签语言：hairline 底线 + 墨色下划线标当前页（DESIGN.md
- * 无信号色原则），路由各自独立（/projects/{id} 与 /projects/{id}/tasks）。
+ * 无信号色原则），路由各自独立（/projects/{id} 下三个子路径）。
  */
 export function ProjectTabs({
   projectId,
   active = 'overview',
 }: {
   projectId: string
-  active?: 'overview' | 'tasks'
+  active?: 'overview' | 'tasks' | 'agent-activity'
 }) {
   const tabs = [
     {
@@ -27,6 +29,12 @@ export function ProjectTabs({
       to: '/projects/$id/tasks',
       label: '项目任务',
       icon: ListTree,
+    },
+    {
+      key: 'agent-activity' as const,
+      to: '/projects/$id/agent-activity',
+      label: 'Agent 执行时序',
+      icon: Activity,
     },
   ]
 

@@ -30,14 +30,17 @@ afterEach(async () => {
 })
 
 describe('ProjectTabs（项目域页内一级导航）', () => {
-  it('总览 / 项目任务两个入口，分别链到 /projects/{id} 与 /projects/{id}/tasks', async () => {
+  it('总览 / 项目任务 / Agent 执行时序三个入口，分别链到对应项目子路径', async () => {
     const screen = await render(<ProjectTabs projectId='p1' />)
 
     const nav = await screen.getByRole('navigation', { name: '项目导航' }).element()
     const links = nav?.querySelectorAll('a') ?? []
-    expect(links.length).toBe(2)
+    expect(links.length).toBe(3)
     expect(links[0]?.getAttribute('href')).toBe('/projects/p1')
     expect(links[1]?.getAttribute('href')).toBe('/projects/p1/tasks')
+    // INFERA-259：原独立路由 /agent-activity 的可视化迁作第三个页签
+    expect(links[2]?.getAttribute('href')).toBe('/projects/p1/agent-activity')
+    expect(links[2]?.textContent).toContain('Agent 执行时序')
   })
 
   it('默认总览页签激活：aria-current 标注当前页', async () => {
@@ -56,5 +59,20 @@ describe('ProjectTabs（项目域页内一级导航）', () => {
     expect(tasks?.getAttribute('aria-current')).toBe('page')
     const overview = await screen.getByRole('link', { name: /总览/ }).element()
     expect(overview?.getAttribute('aria-current')).toBeNull()
+  })
+
+  it('active 可切换：Agent 执行时序页签态下第三个页签激活（INFERA-259）', async () => {
+    const screen = await render(
+      <ProjectTabs projectId='p1' active='agent-activity' />
+    )
+
+    const activity = await screen.getByRole('link', {
+      name: /Agent 执行时序/,
+    }).element()
+    expect(activity?.getAttribute('aria-current')).toBe('page')
+    const overview = await screen.getByRole('link', { name: /总览/ }).element()
+    expect(overview?.getAttribute('aria-current')).toBeNull()
+    const tasks = await screen.getByRole('link', { name: /项目任务/ }).element()
+    expect(tasks?.getAttribute('aria-current')).toBeNull()
   })
 })

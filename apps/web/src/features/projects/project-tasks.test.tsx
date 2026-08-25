@@ -660,15 +660,17 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
 })
 
 describe('ProjectTasks 页内一级导航（INFERA-248：任务页渲染 tab 条，可切回总览）', () => {
-  it('AC1: 任务页渲染「项目导航」tab 条——总览 / 项目任务两入口，总览链回 /projects/{id}', async () => {
+  it('AC1: 任务页渲染「项目导航」tab 条——总览 / 项目任务 / Agent 执行时序三入口，总览链回 /projects/{id}', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await waitForTasks(screen, '本地任务')
 
     const nav = await screen.getByRole('navigation', { name: '项目导航' }).element()
     const links = nav?.querySelectorAll('a') ?? []
-    expect(links.length).toBe(2)
+    // INFERA-259：第三个页签「Agent 执行时序」挂在项目域导航上
+    expect(links.length).toBe(3)
     expect(links[0]?.getAttribute('href')).toBe('/projects/p1')
     expect(links[1]?.getAttribute('href')).toBe('/projects/p1/tasks')
+    expect(links[2]?.getAttribute('href')).toBe('/projects/p1/agent-activity')
   })
 
   it('AC2: 当前页为项目任务——「项目任务」tab 激活、「总览」待切换（与路由一致）', async () => {

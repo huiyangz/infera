@@ -1,5 +1,4 @@
 import {
-  Activity,
   Compass,
   FolderKanban,
   SquareCheck,
@@ -39,11 +38,7 @@ export const sidebarData: SidebarData = {
           url: '/discovery',
           icon: Compass,
         },
-        {
-          title: 'Agent 执行时序',
-          url: '/agent-activity',
-          icon: Activity,
-        },
+        // 「Agent 执行时序」不再有独立入口：可视化迁入项目详情页签（INFERA-259）
       ],
     },
   ],
