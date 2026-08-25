@@ -102,6 +102,9 @@ func (s *Server) Mux() http.Handler {
 		// 项目 agent 执行时序（INFERA-234 T01 冻结契约）：stage_run 明细 +
 		// 分 stage 聚合，dashboard 顶部统计与时序图的唯一数据源。
 		r.Get("/api/projects/{id}/stage-runs", s.handleProjectStageRuns)
+		// 跨项目 agent 执行时序（INFERA-253 冻结契约）：时间分桶聚合曲线，
+		// 前端「Agent 执行时序」页面的唯一数据源。
+		r.Get("/api/agent-activity", s.handleAgentActivity)
 		// 项目任务分组视图（L202608221704-1-T01 冻结契约）：父任务 + 子任务按阶段分组。
 		r.Get("/api/projects/{id}/task-groups", s.handleProjectTaskGroups)
 		// 需求发现视图（INFERA-225 冻结契约）：两类 agent 任务跨项目列表。

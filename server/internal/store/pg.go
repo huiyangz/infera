@@ -6,6 +6,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -735,6 +736,44 @@ func (pg *Pg) ProjectStageRuns(ctx context.Context, projectID string) (ProjectSt
 		details = append(details, r)
 	}
 	return ProjectStageRuns{ProjectID: projectID, Runs: details, ByStage: aggregateByStage(details)}, rows.Err()
+}
+
+// AgentActivity 跨项目 agent 执行时序聚合（语义与 Memory 一致）：一条 JOIN
+// 查询（stage_runs → deliveries → 项目/全局两级绑定 → agents）取 [from,to)
+// 内原始行，归属 agent 经 LEFT JOIN 带回——项目绑定优先（COALESCE），全局
+// 兜底，无绑定 → NULL → unbound；分桶走共用 assembleAgentActivity。半开
+// 区间：started_at == from 计入、== to 剔除。
+func (pg *Pg) AgentActivity(ctx context.Context, from, to time.Time, bucketMinutes int) ([]AgentActivitySeries, error) {
+	rows, err := pg.pool.Query(ctx,
+		`SELECT a.id, a.name, sr.started_at
+		   FROM stage_runs sr
+		   JOIN deliveries d ON d.id = sr.delivery_id
+		   LEFT JOIN pipeline_bindings pb_project ON pb_project.project_id = d.project_id AND pb_project.node = sr.stage
+		   LEFT JOIN pipeline_bindings pb_global ON pb_global.project_id IS NULL AND pb_global.node = sr.stage
+		   LEFT JOIN agents a ON a.id = COALESCE(pb_project.agent_id, pb_global.agent_id)
+		  WHERE sr.started_at >= $1 AND sr.started_at < $2`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	raw := make([]agentActivityRow, 0)
+	for rows.Next() {
+		var r agentActivityRow
+		var id, name sql.NullString
+		if err := rows.Scan(&id, &name, &r.StartedAt); err != nil {
+			return nil, err
+		}
+		if id.Valid && name.Valid {
+			r.AgentID, r.AgentName = id.String, name.String
+		} else {
+			r.AgentName = unboundAgentName
+		}
+		raw = append(raw, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return assembleAgentActivity(raw, from, to, bucketMinutes)
 }
 
 // agents / pipeline bindings

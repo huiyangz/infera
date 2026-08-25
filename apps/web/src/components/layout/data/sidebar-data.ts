@@ -1,4 +1,10 @@
-import { Compass, FolderKanban, SquareCheck, Workflow } from 'lucide-react'
+import {
+  Activity,
+  Compass,
+  FolderKanban,
+  SquareCheck,
+  Workflow,
+} from 'lucide-react'
 import { type SidebarData } from '../types'
 
 export const sidebarData: SidebarData = {
@@ -32,6 +38,11 @@ export const sidebarData: SidebarData = {
           title: '需求发现',
           url: '/discovery',
           icon: Compass,
+        },
+        {
+          title: 'Agent 执行时序',
+          url: '/agent-activity',
+          icon: Activity,
         },
       ],
     },

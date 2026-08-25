@@ -247,6 +247,24 @@ type ProjectStageRuns struct {
 	ByStage   []StageRunStageStats `json:"by_stage"`
 }
 
+// AgentActivityPoint 单个时间桶（INFERA-253 冻结契约：GET /api/agent-activity
+// 响应 points 数组元素）：T 为桶起点（RFC3339），Count 为该桶内 started_at
+// 落桶的 stage_runs 条数（attempt 各计一次、不分 status）。
+type AgentActivityPoint struct {
+	T     time.Time `json:"t"`
+	Count int       `json:"count"`
+}
+
+// AgentActivitySeries 单个 agent 的执行时序曲线（INFERA-253 冻结契约：响应
+// series 数组元素）。Points 覆盖窗口内全部桶（含 count=0，各曲线等长对齐，
+// 前端免补零）；AgentID 空串 + AgentName "unbound" = 无绑定 stage 的运行
+// 归组；series 按 AgentName 升序，窗口内零执行的 agent 不出现。
+type AgentActivitySeries struct {
+	AgentID   string               `json:"agent_id"`
+	AgentName string               `json:"agent_name"`
+	Points    []AgentActivityPoint `json:"points"`
+}
+
 type Store interface {
 	// projects
 	CreateProject(ctx context.Context, p *Project) error
@@ -263,6 +281,12 @@ type Store interface {
 	// null）+ 分 stage 聚合（次数/成败/平均耗时/p95，同一窗口）；项目不存在
 	// → ErrNotFound。
 	ProjectStageRuns(ctx context.Context, projectID string) (ProjectStageRuns, error)
+	// AgentActivity 跨项目 agent 执行时序聚合（INFERA-253 冻结契约，前端
+	// 「Agent 执行时序」唯一数据源）：[from,to) 窗口内按 bucketMinutes 分桶
+	// 统计各 agent 的 stage_runs 次数。agent 解析 stage_run → delivery →
+	// project → pipeline_bindings(node=stage)：项目绑定优先、project_id 为空
+	// 的全局绑定兜底、无绑定归 "unbound"；桶宽非正或窗口非正 → ErrInvalid。
+	AgentActivity(ctx context.Context, from, to time.Time, bucketMinutes int) ([]AgentActivitySeries, error)
 	// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空
 	// 且未完结），JOIN projects 带 ProjectName，按 updated_at 降序。
 	ListPendingDecisions(ctx context.Context) ([]PendingDecision, error)
