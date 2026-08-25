@@ -206,7 +206,7 @@ func (pg *Pg) RequirementStats(ctx context.Context, id string) (RequirementStats
 // ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空且未
 // 完结），JOIN projects 带 ProjectName，按 updated_at 降序。RootExternalIssueID
 // 由递归 CTE 沿 parent_id 爬链根（INFERA-267）：普通行根=自身；拆分子行根=
-// 链根。UNION（非 ALL）去重兜底环（环成员永不成根，LEFT JOIN 落空 → ''）。
+// 链根。UNION（非 ALL）去重兜底环（环成员永不成根，LEFT JOIN 落空 → ”）。
 // 不 JOIN requirements——该表归 reqservice/flow 消费面，source 由 api 层回填。
 func (pg *Pg) ListPendingDecisions(ctx context.Context) ([]PendingDecision, error) {
 	rows, err := pg.pool.Query(ctx,
@@ -784,6 +784,52 @@ func (pg *Pg) AgentActivity(ctx context.Context, from, to time.Time, bucketMinut
 		return nil, err
 	}
 	return assembleAgentActivity(raw, from, to, bucketMinutes)
+}
+
+// WorkspaceStats 跨项目统计聚合（语义与 Memory 一致）：状态计数与窗口内
+// stage_runs 两条只读查询取数（纯读路径，无 JOIN 无写），装配走共用
+// assembleWorkspaceStats。窗口非正先短路，免打无谓查询。
+func (pg *Pg) WorkspaceStats(ctx context.Context, from, to time.Time, loc *time.Location) (WorkspaceStats, error) {
+	if !from.Before(to) {
+		return WorkspaceStats{}, ErrInvalid
+	}
+	statusCounts := map[string]int{}
+	statusRows, err := pg.pool.Query(ctx, `SELECT status, count(*) FROM deliveries GROUP BY status`)
+	if err != nil {
+		return WorkspaceStats{}, err
+	}
+	defer statusRows.Close()
+	for statusRows.Next() {
+		var status string
+		var n int
+		if err := statusRows.Scan(&status, &n); err != nil {
+			return WorkspaceStats{}, err
+		}
+		statusCounts[status] = n
+	}
+	if err := statusRows.Err(); err != nil {
+		return WorkspaceStats{}, err
+	}
+
+	runRows, err := pg.pool.Query(ctx,
+		`SELECT `+stageRunCols+` FROM stage_runs WHERE started_at >= $1 AND started_at < $2 ORDER BY started_at, id`,
+		from, to)
+	if err != nil {
+		return WorkspaceStats{}, err
+	}
+	defer runRows.Close()
+	runs := make([]StageRun, 0)
+	for runRows.Next() {
+		var r StageRun
+		if err := runRows.Scan(&r.ID, &r.DeliveryID, &r.Stage, &r.Attempt, &r.Status, &r.StartedAt, &r.FinishedAt); err != nil {
+			return WorkspaceStats{}, err
+		}
+		runs = append(runs, r)
+	}
+	if err := runRows.Err(); err != nil {
+		return WorkspaceStats{}, err
+	}
+	return assembleWorkspaceStats(statusCounts, runs, from, to, loc)
 }
 
 // agents / pipeline bindings
