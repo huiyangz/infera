@@ -77,8 +77,13 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
 
   return (
     // 页面骨架（INFERA-261）：整页锁定一屏（头部 → tab 头 → 内容区），文档
-    // 不再滚动；滚动收敛进左右两栏各自内部，tab 头与右栏不随列表滚动移动
-    <div className='flex h-svh flex-col'>
+    // 不再滚动；滚动收敛进左右两栏各自内部，tab 头与右栏不随列表滚动移动。
+    // 锁高方式（INFERA-271）：根节点 data-layout='fixed' 触发
+    // AuthenticatedLayout 的 SidebarInset 高度锁（has-data-[layout=fixed]:
+    // h-svh；inset 变体下 calc(100svh - 1rem) 抵掉 peer m-2 的上下 16px
+    // 边距），本根节点以 h-full 填满锁高——页自身再写死 h-svh 会与 inset
+    // 边距叠加撑出 16px 文档级滚动（应用默认 DEFAULT_VARIANT = 'inset'）
+    <div data-layout='fixed' className='flex h-full flex-col'>
       <Header fixed>
         <div className='flex w-full min-w-0 items-start justify-between gap-4'>
           <div className='flex min-w-0 flex-col gap-1'>
