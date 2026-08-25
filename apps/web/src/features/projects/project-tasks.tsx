@@ -77,8 +77,12 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
 
   return (
     // 页面骨架（INFERA-261）：整页锁定一屏（头部 → tab 头 → 内容区），文档
-    // 不再滚动；滚动收敛进左右两栏各自内部，tab 头与右栏不随列表滚动移动
-    <div className='flex h-svh flex-col'>
+    // 不再滚动；滚动收敛进左右两栏各自内部，tab 头与右栏不随列表滚动移动。
+    // 锁屏高度（INFERA-272）：根标记 data-layout='fixed'，由 authenticated-
+    // layout 的 SidebarInset 施加锁屏高（inset 变体为 100svh - 1rem，计入
+    // m-2 上下边距）；根自身用 h-full 填满 inset——不再自锁 h-svh，否则
+    // inset 边距把文档撑到 100svh + 16px 产生页面级滚动
+    <div data-layout='fixed' className='flex h-full flex-col'>
       <Header fixed>
         <div className='flex w-full min-w-0 items-start justify-between gap-4'>
           <div className='flex min-w-0 flex-col gap-1'>

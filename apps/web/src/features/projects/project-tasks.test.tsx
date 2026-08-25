@@ -20,7 +20,8 @@ import type {
   TaskChild,
   TaskGroupRow,
 } from '@/lib/infera-types'
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { Sidebar, SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
 import { createProjectRequirement } from './api'
 import { ProjectTasks } from './project-tasks'
 
@@ -147,6 +148,42 @@ async function renderProjectTasks(
     <QueryClientProvider client={queryClient}>
       <SidebarProvider>
         <SidebarInset>
+          <ProjectTasks projectId={project.id} />
+        </SidebarInset>
+      </SidebarProvider>
+    </QueryClientProvider>
+  )
+}
+
+/**
+ * 真实应用布局渲染（INFERA-272 返工）：对齐 authenticated-layout 的骨架 ——
+ * 渲染真实 Sidebar peer（inset 变体下 SidebarInset 命中 m-2 边距）并带上
+ * 布局锁定高度链（has-data-[layout=fixed]）。原 renderProjectTasks 没有
+ * Sidebar peer，inset 边距永不生效，「整页锁一屏」类断言验证的并非真实
+ * 页面布局（测试绿但真实页面仍滚）。默认 inset 即应用默认变体
+ * （layout-provider 的 DEFAULT_VARIANT）。
+ */
+async function renderProjectTasksInLayout(
+  project: Project,
+  groups: TaskGroupRow[],
+  variant: 'inset' | 'sidebar' | 'floating' = 'inset'
+): Promise<RenderResult> {
+  vi.mocked(getProject).mockResolvedValue(project)
+  vi.mocked(listProjectTaskGroups).mockResolvedValue(groups)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return await render(
+    <QueryClientProvider client={queryClient}>
+      <SidebarProvider defaultOpen>
+        <Sidebar variant={variant} collapsible='icon' />
+        <SidebarInset
+          className={cn(
+            '@container/content',
+            'has-data-[layout=fixed]:h-svh',
+            'peer-data-[variant=inset]:has-data-[layout=fixed]:h-[calc(100svh-(var(--spacing)*4))]'
+          )}
+        >
           <ProjectTasks projectId={project.id} />
         </SidebarInset>
       </SidebarProvider>
@@ -844,8 +881,14 @@ const tabsNav = () =>
   document.querySelector("nav[aria-label='项目导航']") as HTMLElement
 
 describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab 头与右栏不动）', () => {
-  it('AC1-a: 整页锁定一屏，不产生文档级滚动', async () => {
-    const screen = await renderProjectTasks(makeProject(), longListFixture())
+  it('AC1-a: 整页锁定一屏，不产生文档级滚动（真实默认 inset 布局）', async () => {
+    // INFERA-272：渲染路径带真实 variant='inset' Sidebar peer，SidebarInset
+    // 命中 m-2 边距（上下各 8px）——高度锁定必须计入该边距，否则文档被撑到
+    // 100svh + 16px 出现页面级滚动（1280×720 下 736 > 720）
+    const screen = await renderProjectTasksInLayout(
+      makeProject(),
+      longListFixture()
+    )
     await waitForTasks(screen, '长列表任务 01')
 
     const de = document.documentElement
@@ -858,8 +901,27 @@ describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab �
     expect(navRect.bottom).toBeLessThanOrEqual(window.innerHeight)
   })
 
+  it('AC1-a2: 锁屏高度计入 inset 边距——内容链填满 inset 而非固定 100svh', async () => {
+    const screen = await renderProjectTasksInLayout(
+      makeProject(),
+      longListFixture()
+    )
+    await waitForTasks(screen, '长列表任务 01')
+
+    // inset 边距上下各 8px：内容链高度应为视口 - 16px，底缘与视口对齐
+    // （既不外溢也不欠填）。h-svh 硬锁 100svh 会把 provider 撑到 736px
+    const root = document.querySelector('[data-layout="fixed"]') as HTMLElement
+    expect(root).toBeTruthy()
+    const rootRect = root.getBoundingClientRect()
+    expect(Math.abs(rootRect.height - (window.innerHeight - 16))).toBeLessThanOrEqual(1)
+    expect(Math.abs(rootRect.bottom - (window.innerHeight - 8))).toBeLessThanOrEqual(1)
+  })
+
   it('AC1-b: 左栏自身是滚动容器，长列表在栏内溢出而非撑高页面', async () => {
-    const screen = await renderProjectTasks(makeProject(), longListFixture())
+    const screen = await renderProjectTasksInLayout(
+      makeProject(),
+      longListFixture()
+    )
     await waitForTasks(screen, '长列表任务 01')
 
     const master = masterPane()
@@ -868,7 +930,10 @@ describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab �
   })
 
   it('AC1-c: 滚动左栏时顶部 tab 头与右栏面板位置不动', async () => {
-    const screen = await renderProjectTasks(makeProject(), longListFixture())
+    const screen = await renderProjectTasksInLayout(
+      makeProject(),
+      longListFixture()
+    )
     await waitForTasks(screen, '长列表任务 01')
 
     const master = masterPane()
@@ -891,7 +956,10 @@ describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab �
   })
 
   it('AC2: 右栏自身是滚动容器，内容超高时栏内滚动、tab 头不动', async () => {
-    const screen = await renderProjectTasks(makeProject(), tallDetailFixture())
+    const screen = await renderProjectTasksInLayout(
+      makeProject(),
+      tallDetailFixture()
+    )
     await waitForTasks(screen, '右栏子任务 01')
 
     const detail = detailPane()
@@ -905,6 +973,31 @@ describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab �
     expect(document.documentElement.scrollTop).toBe(0)
     expect(nav.getBoundingClientRect().top).toBe(navBefore.top)
   })
+
+  // INFERA-272 AC：审查已确认 sidebar / floating 变体当前无溢出，修复不得
+  // 引入新问题（既不外溢也不欠填——防止用「无差别扣 16px」的方式修 inset）
+  it.each(['sidebar', 'floating'] as const)(
+    'AC-无回归: %s 变体下仍无文档级滚动且内容填满视口',
+    async (variant) => {
+      const screen = await renderProjectTasksInLayout(
+        makeProject(),
+        longListFixture(),
+        variant
+      )
+      await waitForTasks(screen, '长列表任务 01')
+
+      const de = document.documentElement
+      expect(de.scrollHeight).toBeLessThanOrEqual(de.clientHeight + 1)
+      expect(de.scrollTop).toBe(0)
+
+      // 无 inset 边距：内容链高度应恰为视口高（欠填说明高度被错误扣减）
+      const root = document.querySelector('[data-layout="fixed"]') as HTMLElement
+      expect(root).toBeTruthy()
+      expect(
+        Math.abs(root.getBoundingClientRect().height - window.innerHeight)
+      ).toBeLessThanOrEqual(1)
+    }
+  )
 })
 
 describe('ProjectTasks 不渲染「情报」「候选」（INFERA-261：需求挖掘域分类不进项目任务页）', () => {
