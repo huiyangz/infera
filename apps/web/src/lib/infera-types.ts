@@ -166,6 +166,63 @@ export interface RequirementStats {
   last_synced_at: string | null
 }
 
+// —— 项目 agent 执行时序（契约冻结于 INFERA-234 T01：
+// GET /api/projects/{id}/stage-runs ← server/internal/store
+// store.ProjectStageRuns / StageRunDetail / StageRunStageStats，
+// 逐字段镜像，不得静默变更） ——
+
+/** 一次 stage 运行的状态域（store.StageRunDetail.Status） */
+export type StageRunStatus = 'running' | 'done' | 'failed'
+
+/** 时序明细行：项目内各 delivery 的 stage_run（runs 数组元素） */
+export interface StageRunDetail {
+  id: string
+  delivery_id: string
+  title: string
+  /** 空 = 本地需求（非同步来源） */
+  external_issue_key: string
+  stage: string
+  /** 重试序号（1 起） */
+  attempt: number
+  status: StageRunStatus
+  /**
+   * 绑定到该 stage 的 agent 名（pipeline_bindings: node=stage）；
+   * 未配置绑定、或门禁/命令节点 → null。
+   */
+  agent_name: string | null
+  /** RFC3339（Go time.Time 原样序列化，可带纳秒小数位） */
+  started_at: string
+  /** running 未收尾 → null */
+  finished_at: string | null
+  /** finished_at - started_at 的毫秒数；running 未收尾 → null */
+  duration_ms: number | null
+}
+
+/** 分 stage 聚合行（by_stage 数组元素） */
+export interface StageRunStageStats {
+  stage: string
+  total: number
+  done: number
+  failed: number
+  running: number
+  /** 只统计已收尾（finished_at 非空）的运行；无已收尾运行时为 0（非 null） */
+  avg_ms: number
+  /** 最近邻位法 p95；口径同 avg_ms */
+  p95_ms: number
+}
+
+/**
+ * 项目 agent 执行时序整体载荷。runs 按 started_at 倒序，最多 200 条
+ * （stageRunsDetailLimit），by_stage 聚合同一窗口；空项目两者为空数组。
+ * 注意 by_stage 按 stage **字典序**返回——不是流水线阶段序，消费方须按
+ * 自身的阶段序重排（见 STAGE_ORDER），此处不假设也不改写顺序。
+ */
+export interface ProjectStageRuns {
+  project_id: string
+  runs: StageRunDetail[]
+  by_stage: StageRunStageStats[]
+}
+
 export interface Project {
   id: string
   name: string

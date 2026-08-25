@@ -10,6 +10,7 @@ import type {
   GateInfo,
   Project,
   ProjectPipeline,
+  ProjectStageRuns,
   RequirementStats,
   TaskGroupRow,
   TaskSpec,
@@ -107,6 +108,15 @@ export async function listProjectTaskGroups(
 /** 项目维度需求统计（T01 冻结契约，形状见 RequirementStats） */
 export async function getProjectStats(id: string): Promise<RequirementStats> {
   return json(await fetch(`/api/projects/${id}/stats`))
+}
+/**
+ * 项目 agent 执行时序（INFERA-234 T01 冻结契约，形状见 ProjectStageRuns）：
+ * stage_run 明细 + 分 stage 聚合。项目不存在 → ApiError(404)。
+ */
+export async function getProjectStageRuns(
+  id: string
+): Promise<ProjectStageRuns> {
+  return json(await fetch(`/api/projects/${id}/stage-runs`))
 }
 
 // —— agent 编排 ——
