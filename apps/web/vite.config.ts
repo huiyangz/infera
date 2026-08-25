@@ -21,6 +21,16 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    // vitest-browser-react 的 render() 是动态 import('react-dom/client')，
+    // vite 启动期的静态依赖扫描看不见它：全量并行跑测试时，首个 render() 执行
+    // 才触发 "new dependencies found: react-dom/client" → 重新预构建 →
+    // "optimized dependencies changed. reloading" 全体测试页中途 full-reload，
+    // 正在动态加载的文件就偶发 "Failed to fetch dynamically imported module" /
+    // "Vitest failed to find the current suite"（INFERA-255）。
+    // 预置进 include 让它在首跑就一次构建完成，消除该竞态（冷缓存/新装依赖时最易复现）。
+    include: ['react-dom/client'],
+  },
   server: {
     // dev 下把 /api 与 /ws（WebSocket）转发到 infera Go 后端：
     // 前端一律用同源地址，环境差异收敛在代理层（不再硬编码 ws://localhost:8080）
