@@ -21,11 +21,11 @@
 #### Scenario: 未知节点即终态
 
 - **WHEN** 交付的 current_stage 不在阶段图中
-- **THEN** 交付转 blocked 并产生写明该阶段的 stage_failed 事件
+- **THEN** 交付转 blocked 并产生 `delivery_blocked` 事件（reason 写明该未知阶段名）
 
 ## Requirement: 按复杂度分岔阶段链
 
-系统 SHALL 在规格审批时确定复杂度并据此分岔阶段链：small（含历史空值）跳过 design / design_approval / tasks / tasks_approval 四节点直达 test_gen；large 走完整 11 节点链。
+系统 SHALL 在规格审批时确定复杂度并据此分岔阶段链：small（含历史空值）跳过 design / design_approval / tasks / tasks_approval 四节点直达 test_gen；large 走完整 11 节点链。复杂度取值由 spec_approval 门的裁定决定——批准不带选项时自动解析规格产物的 `infera-complexity` 建议块、无有效建议默认 small（裁定面语义见 gates-approvals「规格门裁定交付模式」）。
 
 #### Scenario: 批准为小需求
 
@@ -86,6 +86,11 @@
 
 节点绑定 SHALL 只有项目级一种来源：六个必需节点（spec / test_gen / code_gen / code_review / spec_conformance / code_quality）必须全部有指向存在 agent 的有效绑定，否则交付阻断；design 与 tasks 为可选节点，缺省时回落到进程默认 runner。保存绑定为单事务全量替换。（orchestration/ 包）
 
+#### Scenario: 可绑定节点集由服务端单一事实源决定
+
+- **WHEN** 前端渲染绑定编辑表（web features/pipeline/binding-editor）
+- **THEN** 只渲染服务端下发的可绑定节点清单（八个 agent 节点），门禁类节点（spec_approval 等）不出现在可绑定集——组件不自行列节点，也不做取数与保存（调用方负责）
+
 #### Scenario: 缺必需绑定即阻断
 
 - **WHEN** 交付进入某必需节点而所属项目缺该节点的有效绑定，或绑定指向不存在的 agent
@@ -137,7 +142,7 @@
 #### Scenario: 无清单整体实现
 
 - **WHEN** 交付没有任务清单产物
-- **THEN** code_gen 退化为一次整体实现调用，最终以任务清单摘要形式落 summary 产物
+- **THEN** code_gen 退化为一次整体实现调用，agent 原始输出全文即落为 summary 产物（任务清单摘要形式仅出现在带清单路径）
 
 ## Requirement: 运行 unit_test 并回环
 
@@ -236,7 +241,7 @@ unit_test 命令节点 SHALL 在交付 workdir 内执行配置的测试命令（
 
 ## Requirement: 呈现双道审查意见
 
-code_review 人工门前 SHALL 编排两道独立 agent 审查——规格符合性（有任务清单时逐项核验）与代码质量——解析输出末尾的 infera-findings 结构化块并容错；两道都产出才挂人工门；意见 SHALL 只呈现不参与流转判定。（engine/reviews.go）
+code_review 人工门前 SHALL 编排两道独立 agent 审查——规格符合性（有任务清单时逐项核验）与代码质量——解析输出末尾的 infera-findings 结构化块并容错；两道都产出才挂人工门；意见 SHALL 只呈现不参与流转判定。双道之外门禁还有一道前置预审（code_review 角色 agent，先于双道执行并落 agent_output 产物，失败同 agent 失败约定转 blocked；挂起时序见 gates-approvals「挂起交付门禁并按裁定流转」）。（engine/reviews.go）
 
 #### Scenario: 两道产出后挂门
 
@@ -255,7 +260,7 @@ code_review 人工门前 SHALL 编排两道独立 agent 审查——规格符合
 
 ## Requirement: 拆分需求并按波次调度
 
-批准并拆分时系统 SHALL 为每条子方案创建子交付并标记波次：父交付跳过 tasks / tasks_approval / test_gen 停在 code_gen 等待合并；同波次子交付并行启动，某波次全部完成且合并后下一波次才启动；子交付按（波次、创建时间）顺序增量合并进父（完成一个合一个，不等齐），合并进度以持久标记留存、重启不丢。（engine/split.go）
+批准并拆分时系统 SHALL 为每条子方案创建子交付并标记波次：父交付跳过 tasks / tasks_approval / test_gen 停在 code_gen 等待合并；同波次子交付并行启动，某波次全部完成且合并后下一波次才启动；子交付按（波次、创建时间）顺序增量合并进父（完成一个合一个，不等齐），合并进度以持久标记留存、重启不丢；拆分要求项目绑定仓库，绿地项目（未绑定仓库）SHALL 拒绝拆分（选项校验见 gates-approvals「门禁裁定选项按门校验」）。（engine/split.go）
 
 #### Scenario: 拆分落库与父停驻
 
@@ -329,41 +334,3 @@ code_review 人工门前 SHALL 编排两道独立 agent 审查——规格符合
 
 - **WHEN** 交回针对的交付非执行中、停驻节点并非 local 绑定、或为拆分父停驻点
 - **THEN** 拒绝该交回且不产生任何状态变更
-
-## Requirement: 呈现拆分交付的执行进度
-
-针对拆分交付，执行视图 SHALL 按交付模式派生阶段条并呈现拆分语义：小需求显示 7 阶段、大需求显示 11 阶段；拆分父对被跳过的阶段以「跳过」形态呈现（虚线勾选而非失败），等待合并期间显示子交付完成计数而非「进行中」，冲突时给出可复制的解决指引与恢复入口。（web features/deliveries）
-
-#### Scenario: 阶段条按模式派生
-
-- **WHEN** 查看一条交付的执行详情
-- **THEN** 复杂度为 large 时阶段条含全部 11 阶段，否则（small 或历史空值）显示 7 阶段；门禁节点带门禁标识，当前节点区分「进行中」与「等待审批」两种活动态
-
-#### Scenario: 拆分父的跳过与等待
-
-- **WHEN** 查看一条拆分父交付
-- **THEN** tasks / tasks_approval / test_gen 三阶段以跳过形态呈现并附跳过原因；code_gen 阶段显示「等待子任务 已完成数/总数」，处于冲突时改为冲突标识
-
-#### Scenario: 冲突指引与恢复入口
-
-- **WHEN** 拆分父处于合并冲突状态
-- **THEN** 详情页展示冲突说明与来自冲突事件的完整 git 指引（可一键复制），并提供「合并已推送，继续」入口触发恢复；子交付清单逐条显示各自的批次号、当前阶段与状态
-
-## Requirement: 呈现 Agent 执行时序
-
-系统 SHALL 提供 agent 执行时序的只读呈现：按 agent 分组统计各时间桶内的执行次数，支持时间窗口切换，窗口内无记录时给出空态而非空白图；时序统计为工作区级（跨项目聚合），不按单个项目过滤。（web features/agent-activity）
-
-#### Scenario: 按 agent 分桶计数
-
-- **WHEN** 查看执行时序面板
-- **THEN** 每个 agent 一条曲线，按固定时长的时间桶统计执行次数，桶覆盖整个窗口（含零计数桶），各序列等长；未绑定 agent 的执行归入同一条曲线
-
-#### Scenario: 窗口切换与空态
-
-- **WHEN** 切换时间窗口（如 24 / 12 / 6 小时）
-- **THEN** 时序按新窗口重新拉取并整窗重绘；窗口内没有任何执行记录时显示明确的空态提示，不渲染空图
-
-#### Scenario: 交付级执行甘特
-
-- **WHEN** 查看项目概览的执行时序
-- **THEN** 每条交付一条泳道，按时间排布各阶段执行区间：agent 执行与门禁/系统节点以不同形态区分，失败与进行中可辨，重试次数以标记呈现，悬停可见阶段、次序、状态、执行者与耗时

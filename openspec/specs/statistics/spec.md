@@ -23,6 +23,20 @@ GET /api/projects/{id}/stats SHALL 返回冻结形状的统计载荷：任务总
 - **WHEN** 查询不存在的项目 id
 - **THEN** 返回 404「项目不存在」，而非全零统计
 
+## Requirement: 项目列表统计行口径
+
+`GET /api/projects?include=stats` SHALL 为每个项目附带三值统计行（活跃数 / 待审批数 / 最近活动时间）：活跃 = 状态为 `active` 的交付数；待审批 = `pending_gate` 非空的交付数（**不排除 completed**——与「项目需求统计」的待决策口径不同，后者排除已完结；两个数字口径不同、用途不同，SHALL NOT 相互覆写或混用）；最近活动 = 该项目交付的最大 `updated_at` 与项目行 `updated_at` 取较大者（无交付时回退项目更新时间）。该统计行是项目列表徽标与「置顶在前、其余按最近活动倒序」排序的唯一数据源（列表组织与徽标呈现归 projects-board 域）。（REST 面：api/projects.go；存储口径：store.ProjectStats）
+
+#### Scenario: 三值统计行随列表返回
+
+- **WHEN** 以 `include=stats` 读取项目列表
+- **THEN** 每行附带 active / pending / last_activity 三值，无交付的项目 active=0 且 last_activity 回退项目更新时间
+
+#### Scenario: 两个「待审批」口径不混用
+
+- **WHEN** 某项目有 2 张停门禁的在途交付与 1 张已完结但仍带 `pending_gate` 的历史交付
+- **THEN** 列表统计行 pending=3（不排除 completed），而 `GET /api/projects/{id}/stats` 的待决策数为 2（排除 completed）——两口径各自稳定
+
 ## Requirement: 项目执行时序限窗明细与分阶段聚合
 
 GET /api/projects/{id}/stage-runs SHALL 返回项目内各交付的 stage_run 时序明细与分 stage 聚合，两者同一窗口：明细按 started_at 倒序、只保留最近 200 条；聚合行含 total/done/failed/running 计数与平均耗时、P95 耗时，行按 stage 字典序升序返回（前端按流水线阶段序重排）。耗时 SHALL 只统计已收尾（finished_at 非空）的运行，P95 取最近邻位法，无已收尾运行时为 0；agent 名 SHALL 经项目编排绑定（node=stage）关联，未绑定为 null。项目不存在 SHALL 404。（REST 面：api/projects.go；存储口径：store.ProjectStageRuns）
@@ -61,6 +75,25 @@ GET /api/agent-activity SHALL 在 [now-hours, now) 窗口内按 bucket_minutes �
 - **WHEN** 某次 stage_run 的 stage 既无所属项目的绑定、也无全局绑定
 - **THEN** 该次执行计入 agent_name 为「unbound」的曲线（agent_id 空串），不并入任何已注册 agent
 
+## Requirement: Agent 执行时序视图呈现
+
+系统 SHALL 提供 agent 执行时序的只读呈现：按 agent 分组统计各时间桶内的执行次数，支持时间窗口切换，窗口内无记录时给出空态而非空白图；工作区全局口径的时序视图（「Agent 执行时序」页签）不按单个项目过滤，项目维度的执行时序泳道见「项目执行时序限窗明细与分阶段聚合」。（前端：features/agent-activity；页面挂载位置见 projects-board 域）
+
+#### Scenario: 按 agent 分桶计数
+
+- **WHEN** 查看执行时序面板
+- **THEN** 每个 agent 一条曲线，按固定时长的时间桶统计执行次数，桶覆盖整个窗口（含零计数桶），各序列等长；未绑定 agent 的执行归入同一条曲线
+
+#### Scenario: 窗口切换与空态
+
+- **WHEN** 切换时间窗口（如 24 / 12 / 6 小时）
+- **THEN** 时序按新窗口重新拉取并整窗重绘；窗口内没有任何执行记录时显示明确的空态提示，不渲染空图
+
+#### Scenario: 交付级执行甘特
+
+- **WHEN** 查看项目概览的执行时序
+- **THEN** 每条交付一条泳道，按时间排布各阶段执行区间：agent 执行与门禁/系统节点以不同形态区分，失败与进行中可辨，重试次数以标记呈现，悬停可见阶段、次序、状态、执行者与耗时
+
 ## Requirement: 工作区统计区分快照与窗口口径
 
 GET /api/stats SHALL 返回跨项目统计聚合（hours 缺省 168、1..720；tz 缺省 UTC、取 IANA 时区名；非法参数 400）：任务状态分布为全量快照，不受窗口影响，五类归并对齐 Multica 工作台口径——Done←completed、InProgress←active、Todo←queued+blocked、Cancelled←cancelled，Total 为全部任务（含未知状态），ByStatus 保留 infera 原始五键计数；执行统计与逐小时分桶只统计 [from,to) 半开窗口内的 stage_runs——执行次数含进行中（running 计次不计时长），累计时长只累计已收尾运行的 finished−started；逐小时分桶（0..23）按查询时区的本地小时归桶，跨小时收尾的执行整段计入起始小时桶、不拆分。该接口为「统计」页唯一数据源。（REST 面：api/workspacestats.go；存储口径：store.WorkspaceStats）
@@ -82,7 +115,7 @@ GET /api/stats SHALL 返回跨项目统计聚合（hours 缺省 168、1..720；t
 
 ## Requirement: 统计页呈现快照卡片与时段分布直方图
 
-「统计」页（/stats）SHALL 全部消费 GET /api/stats（不另开入口）：数字卡片呈现任务总数/已完成/进行中/待办/已取消（快照口径）与执行次数（附注进行中·失败）、累计时长（仅计已收尾）；窗口切换 SHALL 提供 24 小时 / 7 天（缺省）/ 30 天三档，只影响执行维度；时段分布 SHALL 按浏览器时区归桶（IANA 名解析失败回退 UTC），夜间 22:00–06:00 的柱体高亮，并在图下如实标注口径说明；加载失败可重试，窗口内无执行记录显示空态。（前端：features/stats/）
+「统计」页（/stats）SHALL 全部消费 GET /api/stats（不另开入口）：数字卡片呈现任务总数/已完成/进行中/待办/已取消（快照口径）与执行次数（附注进行中·失败）、累计时长（仅计已收尾）；窗口切换 SHALL 提供 24 小时 / 7 天（缺省）/ 30 天三档，只影响执行维度；时段分布 SHALL 按浏览器时区归桶（Intl 不可用或解析出空名时回退 UTC；解析出非空但非法的时区名时原样上送，由 `GET /api/stats` 以 400 拒绝，页面按加载失败呈现并可重试），夜间 22:00–06:00 的柱体高亮，并在图下如实标注口径说明；加载失败可重试，窗口内无执行记录显示空态。（前端：features/stats/）
 
 #### Scenario: 窗口切换只影响执行维度
 
@@ -101,12 +134,12 @@ GET /api/stats SHALL 返回跨项目统计聚合（hours 缺省 168、1..720；t
 
 ## Requirement: 统计面只读且契约冻结
 
-统计域各响应形状 SHALL 视为前端的冻结契约（项目需求统计、项目执行时序、跨项目 agent 执行时序、工作区统计四个入口各自冻结），SHALL NOT 静默变更形状或另开并行统计入口；聚合 SHALL 纯只读——无写路径、无 schema 变更，窗口右端恒取当前时刻。
+统计域各响应形状 SHALL 视为前端的冻结契约（项目需求统计、项目列表统计行、项目执行时序、跨项目 agent 执行时序、工作区统计五个入口各自冻结），SHALL NOT 静默变更形状或另开并行统计入口；聚合 SHALL 纯只读——无写路径、无 schema 变更，窗口右端恒取当前时刻。
 
 #### Scenario: 不另开并行入口
 
 - **WHEN** 前端页面需要统计数据
-- **THEN** 只消费四个冻结入口之一；新增统计维度须扩展现有载荷或另立提案评审，不新增并行的统计查询端点
+- **THEN** 只消费五个冻结入口之一；新增统计维度须扩展现有载荷或另立提案评审，不新增并行的统计查询端点
 
 #### Scenario: 只读聚合
 

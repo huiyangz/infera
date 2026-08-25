@@ -44,7 +44,7 @@
 
 ## Requirement: 兜底不漏合并闸门
 
-系统 SHALL 以保守兜底防止漏掉合并闸门：识别不了前缀的评论一律落「有新动态」卡（卡上带任务源深链供一键查看完整时间线）；父 issue 状态跃入 in_review 但该需求从未见过任何 `verdict:` 评论时，SHALL 落一张中性「有新动态」卡提醒人工查看执行平台进展——首次轮询（无上次状态）视同跃入，停留在 in_review（状态未变）不算跃迁、不重复弹卡。
+系统 SHALL 以保守兜底防止漏掉合并闸门：识别不了前缀的评论一律落「有新动态」卡（卡面经所属需求行的任务源深链可一键查看完整时间线）；父 issue 状态跃入 in_review 但该需求从未见过任何 `verdict:` 评论时，SHALL 落一张中性「有新动态」卡提醒人工查看执行平台进展——首次轮询（无上次状态）视同跃入，停留在 in_review（状态未变）不算跃迁、不重复弹卡。
 
 #### Scenario: 跃入待验收且无结论
 
@@ -63,7 +63,7 @@
 
 ## Requirement: 审批卡等人工批复
 
-审批卡 SHALL 以 pending 态等待人工批复：批准 SHALL 向任务源父 issue 代发固定文本 `approved`；驳回 SHALL 要求非空反馈并原样代发。动作 SHALL 先成功代发，再在单事务内收卡（resolved）并写审计（actor=user）；任务源代发失败时卡 SHALL 保持 pending、不写审计（失败动作不算动作），可重试。动作 SHALL 只适用于同类型的待处理卡：卡已处理或类型不符时以冲突拒绝。每张卡 SHALL 带任务源深链（external_issue_url）。（REST 面：`/api/requirements/{id}/cards/{cardID}/approve|reject`）
+审批卡 SHALL 以 pending 态等待人工批复：批准 SHALL 向任务源父 issue 代发固定文本 `approved`；驳回 SHALL 要求非空反馈并原样代发。动作 SHALL 先成功代发，再在单事务内收卡（resolved）并写审计（actor=user）；任务源代发失败时卡 SHALL 保持 pending、不写审计（失败动作不算动作），可重试。动作 SHALL 只适用于同类型的待处理卡：卡已处理或类型不符时以冲突拒绝。卡面呈现的任务源深链取自所属需求行的 `external_issue_url`（卡资源本身不携带链接字段）。（REST 面：`/api/requirements/{id}/cards/{cardID}/approve|reject`）
 
 #### Scenario: 批准
 
@@ -102,7 +102,7 @@
 
 ## Requirement: 合并卡人工终审
 
-`verdict: PASS|FAIL` 评论 SHALL 落合并卡并标记该需求已见结论（结论词全词、大小写敏感，PASSING 不算 PASS）。合并卡 SHALL 等待人工裁定：合并 SHALL 经 GitHub API 合并该需求关联的 PR；拒绝并返工 SHALL 要求非空反馈并原样代发。人工合并成功 SHALL 收卡并写审计（actor=user），但 SHALL NOT 推进大节点——节点由轮询按上游父 issue 状态推进（单一状态源；自动合并档位的直达已交付是显式例外，见「按项目合并策略自动合并」）。需求尚无 PR 关联时合并 SHALL 以冲突拒绝；PR 当前不可合并（如 CI 未过）SHALL 归因为「稍后可重试」类错误且卡保持 pending。合并卡 SHALL 带 PR 深链，并渲染 PR 的行级评审评论与 diff 概要（只读端点 `GET /api/requirements/{id}/pr-review`：不落卡、不动节点）。（`server/internal/github` 为 GitHub 代理）
+`verdict: PASS|FAIL` 评论 SHALL 落合并卡并标记该需求已见结论（结论词全词、大小写敏感，PASSING 不算 PASS）。合并卡 SHALL 等待人工裁定：合并 SHALL 经 GitHub API 合并该需求关联的 PR；拒绝并返工 SHALL 要求非空反馈并原样代发。人工合并成功 SHALL 收卡并写审计（actor=user），但 SHALL NOT 推进大节点——节点由轮询按上游父 issue 状态推进（单一状态源；自动合并档位的直达已交付是显式例外，见「按项目合并策略自动合并」）。需求尚无 PR 关联时合并 SHALL 以冲突拒绝；PR 当前不可合并（如 CI 未过）SHALL 归因为「稍后可重试」类错误且卡保持 pending。合并卡面呈现的 PR 深链取自所属需求行的 `pr_url`（卡资源本身不携带链接字段），并渲染 PR 的行级评审评论与 diff 概要（只读端点 `GET /api/requirements/{id}/pr-review`：不落卡、不动节点）。（`server/internal/github` 为 GitHub 代理）
 
 #### Scenario: PASS 卡人工合并
 
@@ -121,16 +121,16 @@
 
 ## Requirement: 按项目合并策略自动合并
 
-系统 SHALL 支持项目级合并策略三档（`GET/PUT /api/projects/{id}/merge-policy`）：`manual`（默认，未设置即手动档）——自动合并完全不动作，合并卡留待人点；`auto_pass`——verdict PASS 的 pending 合并卡每轮清扫时立即自动合并；`threshold`——PR diff 行数（additions+deletions）≤ 阈值自动合并，超过弹卡留人。档位校验 SHALL 拒绝 manual/auto_pass 携带阈值、threshold 缺正阈值与未知档位；解析不出有效档位时 SHALL 回落手动档（自动合并是风险动作，数据异常取最保守行为）。自动合并成功 SHALL 一次性收口：卡 resolved、审计 actor=system、节点直达 delivered、游标落库。合并暂被阻塞 SHALL 保持卡 pending、下一轮自然重试；PR 已 closed 且未合并（被驳回关闭）SHALL NOT 视为了结——卡转人工，不误置已交付、不误记 merge 审计；PR 已 closed 且已合并（合并后收口丢失的崩溃窗口）SHALL 收敛收口。FAIL 结论 SHALL NOT 被自动动作（拒绝返工是人决策）。
+系统 SHALL 支持合并策略三档，档位经 `GET/PUT /api/projects/{id}/merge-policy` 按项目读写（UPSERT 以 project_id 为键）：`manual`（默认，未设置即手动档）——自动合并完全不动作，合并卡留待人点；`auto_pass`——verdict PASS 的 pending 合并卡每轮清扫时立即自动合并；`threshold`——PR diff 行数（additions+deletions）≤ 阈值自动合并，超过弹卡留人。**自动合并清扫解析档位时是部署级单行语义**：requirements 冻结 schema 无项目关联列，清扫器取 `project_settings` 中 `project_id` 最小的一行对全部需求生效——单项目部署下与「项目级」等价，多项目部署下后写的其它项目档位对自动合并不生效（见交付说明「建议后续」）。档位校验 SHALL 拒绝 manual/auto_pass 携带阈值、threshold 缺正阈值与未知档位；解析不出有效档位时 SHALL 回落手动档（自动合并是风险动作，数据异常取最保守行为）。自动合并成功 SHALL 一次性收口：卡 resolved、审计 actor=system、节点直达 delivered、游标落库。合并暂被阻塞 SHALL 保持卡 pending、下一轮自然重试；PR 已 closed 且未合并（被驳回关闭）SHALL NOT 视为了结——卡转人工，不误置已交付、不误记 merge 审计；PR 已 closed 且已合并（合并后收口丢失的崩溃窗口）SHALL 收敛收口。FAIL 结论 SHALL NOT 被自动动作（拒绝返工是人决策）。清扫中除「稍后可重试」类外的失败（diff 统计/PR 读取失败、鉴权或网络错误等硬失败）SHALL 只记服务端日志并保持卡 pending 留待人工——不落卡、不写审计、不动节点，自动合并对该卡静默停手。
 
 #### Scenario: auto_pass 即时合并
 
-- **WHEN** 项目档位为 auto_pass 且出现 verdict PASS 的 pending 合并卡
+- **WHEN** 生效档位为 auto_pass 且出现 verdict PASS 的 pending 合并卡
 - **THEN** 轮询清扫时自动合并，卡 resolved、审计记 actor=system、节点直达 delivered
 
 #### Scenario: threshold 按量分流
 
-- **WHEN** 档位为 threshold（阈值 N）且存在 PASS 合并卡
+- **WHEN** 生效档位为 threshold（阈值 N）且存在 PASS 合并卡
 - **THEN** PR diff 行数 ≤ N 时自动合并收口；> N 时合并卡保持 pending 留人处理
 
 #### Scenario: 被驳回关闭的 PR 转人工
@@ -138,19 +138,24 @@
 - **WHEN** PASS 合并卡对应的 PR 状态为 closed 且 merged=false
 - **THEN** 卡保持 pending 转人工处理，节点不置 delivered、不写 merge 审计
 
+#### Scenario: 硬失败静默停手
+
+- **WHEN** 清扫自动合并时拉取 diff 统计或 PR 元数据失败，或合并返回鉴权/网络类硬失败
+- **THEN** 卡保持 pending、不产生新卡与审计、节点不变，失败只进服务端日志，人工仍可对该卡手动合并
+
 ## Requirement: 挂起交付门禁并按裁定流转
 
-交付流水线 SHALL 在四个人工门禁（spec_approval / design_approval / tasks_approval / code_review）暂停等人：推进到门禁节点时先执行前置——code_review 门先固化产出（commit、push 分支、开 PR、落 diff 产物），再跑 Reviewer 预审与双道审查——然后置 pending_gate、发 `gate_pending` 事件并停住。批准 SHALL 清 pending_gate、发 `gate_approved` 并前进到后继阶段（code_review 批准即交付完成、释放 workspace，但 SHALL NOT 自动合并 PR——交付 PR 的合并由人在 GitHub 完成）。打回 SHALL 清 pending_gate、把理由持久化在交付上、发 `gate_rejected`（含理由）并回退到该门的打回目标（spec_approval→spec、design_approval→design、tasks_approval→tasks、code_review→code_gen），理由在被打回阶段的首次重跑注入 prompt 后清空；打回本身 SHALL NOT 立即重跑 agent。交付无待审批门禁时，门禁读取 / 批准 / 打回 SHALL 报错（400）。门禁事件 SHALL 全部进入交付时间线（append-only，按发生序）。
+交付流水线 SHALL 在四个人工门禁（spec_approval / design_approval / tasks_approval / code_review）暂停等人：推进到门禁节点时先执行前置——code_review 门先固化产出（commit、push 分支、开 PR、落 diff 产物），再跑门禁前置预审（code_review 角色 agent，产出 agent_output 产物）与双道审查——然后置 pending_gate、发 `gate_pending` 事件并停住。批准 SHALL 清 pending_gate、发 `gate_approved` 并前进到后继阶段（code_review 批准即交付完成、释放 workspace，但 SHALL NOT 自动合并 PR——交付 PR 的合并由人在 GitHub 完成）。打回 SHALL 清 pending_gate、把理由持久化在交付上、发 `gate_rejected`（含理由）并回退到该门的打回目标（spec_approval→spec、design_approval→design、tasks_approval→tasks、code_review→code_gen）；打回成功后两个驾驶面（Web / MCP）SHALL 把锁移交给后台驱动立即重跑被打回的阶段，理由在该次重跑的 prompt 注入一次后清空（引擎裸调用 Reject 只回退停车不重点火，但产品入口都经后台驱动）。交付无待审批门禁时，门禁读取 / 批准 / 打回 SHALL 报错（400）。门禁事件 SHALL 全部进入交付时间线（append-only，按发生序）。
 
 #### Scenario: code_review 门挂起时序
 
 - **WHEN** 交付推进到 code_review 节点
-- **THEN** 时间线依次出现产出固化（persist_done）、双道审查产出（review_findings）与 gate_pending，交付停在待审批
+- **THEN** 时间线依次出现产出固化（persist_done）、门禁预审产出（agent_output）、双道审查产出（review_findings）与 gate_pending，交付停在待审批
 
 #### Scenario: 打回回退并注入理由
 
 - **WHEN** 用户对 code_review 门提交打回理由 R
-- **THEN** 交付回退到 code_gen 并停住（不立即重跑），gate_rejected 记理由 R，coder 首次重跑时 prompt 注入「人打回：R」一次后清空
+- **THEN** 交付回退到 code_gen，gate_rejected 记理由 R，后台驱动立即重跑 code_gen 且该次 prompt 注入「人打回：R」一次后清空
 
 #### Scenario: 批准终审门即完成
 

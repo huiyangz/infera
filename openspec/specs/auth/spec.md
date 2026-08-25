@@ -6,7 +6,12 @@
 
 ## Requirement: 口令登录与会话建立
 
-`POST /api/login` SHALL 以请求体 `{password}` 校验口令（与 `INFERA_PASSWORD` 常数时间比较，防时序侧信道）：正确 SHALL 建立服务端会话并以 HttpOnly cookie `infera_session` 下发（`SameSite=Lax`，`Secure` 属性按 HTTPS 部署开启，会话 TTL 7 天）；错误 SHALL 返回 401。会话保存于服务端内存（实现现状：重启即全部失效，需重新登录）。
+`POST /api/login` SHALL 以请求体 `{password}` 校验口令（与 `INFERA_PASSWORD` 常数时间比较，防时序侧信道）：正确 SHALL 建立服务端会话并以 HttpOnly cookie `infera_session` 下发（`SameSite=Lax`，`Secure` 属性按 HTTPS 部署开启，会话 TTL 7 天）；错误 SHALL 返回 401。会话保存于服务端内存（实现现状：重启即全部失效，需重新登录）。`INFERA_PASSWORD` 未设置时进程 SHALL 在启动期直接退出（fatal）——口令面永不允许空置开放，不存在「未配置即免登录」形态。
+
+#### Scenario: 未配置口令拒绝启动
+
+- **WHEN** 服务以 `INFERA_PASSWORD` 未设置（空值）启动
+- **THEN** 进程在启动期即 fatal 退出并写明原因，不进入监听态
 
 #### Scenario: 登录成功建会话
 
@@ -39,7 +44,7 @@
 
 ## Requirement: API 通道鉴权要求
 
-除公开端点（`/api/health`、`/api/login`、`/api/logout`、`/api/me`）外，全部 `/api/*` 业务端点与 `/ws` 事件流 SHALL 要求有效会话；未认证请求 SHALL 返回 401 并携带稳定机器可读错误码 `unauthorized`（客户端按错误码分支，不解析文案）。
+除公开端点（`/api/health`、`/api/login`、`/api/logout`、`/api/me`）外，全部 `/api/*` 业务端点与 `/ws` 事件流 SHALL 要求有效会话；未认证请求 SHALL 返回 401 并携带稳定机器可读错误码 `unauthorized`（客户端按错误码分支，不解析文案）。`/api/*` 全部 JSON 请求体（含登录）SHALL 以 1 MiB 为读取上限，超限在读入期即拒绝（400），不整包进内存（内存放大防护）。`/ws` 升级 SHALL 另受同源校验：携带 `Origin` 且与请求 Host 不同源的浏览器跨站连接拒绝 403，无 `Origin` 的非浏览器客户端放行；升级前 SHALL 校验 `delivery` 参数——缺失 400、交付不存在 404。
 
 #### Scenario: 未登录访问业务端点
 
@@ -55,6 +60,16 @@
 
 - **WHEN** 未登录向 `/ws` 发起升级请求
 - **THEN** 连接被拒绝，不得订阅任何交付的事件流
+
+#### Scenario: 事件流同源与存在性校验
+
+- **WHEN** 已登录浏览器从跨站页面（Origin 与 Host 不同源）向 `/ws?delivery=<id>` 发起升级，或连接参数缺失 `delivery`、指向不存在的交付
+- **THEN** 分别拒绝 403 / 400 / 404，不建立事件流连接
+
+#### Scenario: 超大请求体拒绝
+
+- **WHEN** 向任一 `/api/*` 端点（含 `POST /api/login`）提交超过 1 MiB 的请求体
+- **THEN** 请求在读入期被拒（400），不进入业务解析
 
 ## Requirement: 登录限速（防在线爆破）
 
