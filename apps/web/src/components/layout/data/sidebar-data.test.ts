@@ -30,6 +30,12 @@ describe('全局导航（AC：Agent 入口完全移除 + 需要决策入口可�
     expect(entry?.title).toBe('需求发现')
   })
 
+  it('含「统计」顶层入口，指向 /stats（INFERA-274）', () => {
+    const top = sidebarData.navGroups.flatMap((g) => g.items)
+    const entry = top.find((i) => i.url === '/stats')
+    expect(entry?.title).toBe('统计')
+  })
+
   it('不含任何指向 /agent-activity 的导航项——可视化已迁入项目详情页签（INFERA-259）', () => {
     const urls = allItems().map((i) => i.url)
     expect(urls).not.toContain('/agent-activity')

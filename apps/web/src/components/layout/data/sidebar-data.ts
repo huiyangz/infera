@@ -1,4 +1,5 @@
 import {
+  ChartColumn,
   Compass,
   FolderKanban,
   SquareCheck,
@@ -37,6 +38,11 @@ export const sidebarData: SidebarData = {
           title: '需求发现',
           url: '/discovery',
           icon: Compass,
+        },
+        {
+          title: '统计',
+          url: '/stats',
+          icon: ChartColumn,
         },
         // 「Agent 执行时序」不再有独立入口：可视化迁入项目详情页签（INFERA-259）
       ],
