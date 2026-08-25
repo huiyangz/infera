@@ -13,6 +13,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 import { Route as AuthenticatedDiscoveryRouteImport } from './routes/_authenticated/discovery'
 import { Route as AuthenticatedDecisionsRouteImport } from './routes/_authenticated/decisions'
+import { Route as AuthenticatedAgentActivityRouteImport } from './routes/_authenticated/agent-activity'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
 import { Route as errors500RouteImport } from './routes/(errors)/500'
 import { Route as errors404RouteImport } from './routes/(errors)/404'
@@ -48,6 +49,12 @@ const AuthenticatedDecisionsRoute = AuthenticatedDecisionsRouteImport.update({
   path: '/decisions',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedAgentActivityRoute =
+  AuthenticatedAgentActivityRouteImport.update({
+    id: '/agent-activity',
+    path: '/agent-activity',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const errors503Route = errors503RouteImport.update({
   id: '/(errors)/503',
   path: '/503',
@@ -140,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
+  '/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
@@ -159,6 +167,7 @@ export interface FileRoutesByTo {
   '/404': typeof errors404Route
   '/500': typeof errors500Route
   '/503': typeof errors503Route
+  '/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
   '/': typeof AuthenticatedIndexRoute
@@ -179,6 +188,7 @@ export interface FileRoutesById {
   '/(errors)/404': typeof errors404Route
   '/(errors)/500': typeof errors500Route
   '/(errors)/503': typeof errors503Route
+  '/_authenticated/agent-activity': typeof AuthenticatedAgentActivityRoute
   '/_authenticated/decisions': typeof AuthenticatedDecisionsRoute
   '/_authenticated/discovery': typeof AuthenticatedDiscoveryRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
@@ -202,6 +212,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
+    | '/agent-activity'
     | '/decisions'
     | '/discovery'
     | '/deliveries/$id'
@@ -221,6 +232,7 @@ export interface FileRouteTypes {
     | '/404'
     | '/500'
     | '/503'
+    | '/agent-activity'
     | '/decisions'
     | '/discovery'
     | '/'
@@ -240,6 +252,7 @@ export interface FileRouteTypes {
     | '/(errors)/404'
     | '/(errors)/500'
     | '/(errors)/503'
+    | '/_authenticated/agent-activity'
     | '/_authenticated/decisions'
     | '/_authenticated/discovery'
     | '/_authenticated/'
@@ -292,6 +305,13 @@ declare module '@tanstack/react-router' {
       path: '/decisions'
       fullPath: '/decisions'
       preLoaderRoute: typeof AuthenticatedDecisionsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/agent-activity': {
+      id: '/_authenticated/agent-activity'
+      path: '/agent-activity'
+      fullPath: '/agent-activity'
+      preLoaderRoute: typeof AuthenticatedAgentActivityRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/(errors)/503': {
@@ -435,6 +455,7 @@ const AuthenticatedProjectsIdRouteWithChildren =
   )
 
 interface AuthenticatedRouteRouteChildren {
+  AuthenticatedAgentActivityRoute: typeof AuthenticatedAgentActivityRoute
   AuthenticatedDecisionsRoute: typeof AuthenticatedDecisionsRoute
   AuthenticatedDiscoveryRoute: typeof AuthenticatedDiscoveryRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
@@ -446,6 +467,7 @@ interface AuthenticatedRouteRouteChildren {
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
+  AuthenticatedAgentActivityRoute: AuthenticatedAgentActivityRoute,
   AuthenticatedDecisionsRoute: AuthenticatedDecisionsRoute,
   AuthenticatedDiscoveryRoute: AuthenticatedDiscoveryRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
