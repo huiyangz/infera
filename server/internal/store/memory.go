@@ -628,6 +628,52 @@ func (m *Memory) LatestStageRun(ctx context.Context, deliveryID, stage string) (
 	return &cp, nil
 }
 
+// ProjectStageRuns 项目维度 agent 执行时序（语义与 Pg 一致）：项目全部
+// delivery 的 stage_run 按 started_at 倒序（并列按 attempt、id 倒序）截取
+// 最近 stageRunsDetailLimit 条，agent 名经绑定表关联（node=stage，未绑定 →
+// nil）；聚合走共用 aggregateByStage。项目不存在 → ErrNotFound。
+func (m *Memory) ProjectStageRuns(_ context.Context, projectID string) (ProjectStageRuns, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.projects[projectID]; !ok {
+		return ProjectStageRuns{}, ErrNotFound
+	}
+	details := make([]StageRunDetail, 0)
+	for _, d := range m.deliveries {
+		if d.ProjectID != projectID {
+			continue
+		}
+		for _, r := range m.stageRuns[d.ID] {
+			row := StageRunDetail{
+				ID: r.ID, DeliveryID: d.ID, Title: d.Title, ExternalIssueKey: d.ExternalIssueKey,
+				Stage: r.Stage, Attempt: r.Attempt, Status: r.Status,
+				StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+				DurationMS: stageRunDurationMS(r.StartedAt, r.FinishedAt),
+			}
+			if b, ok := m.bindings[bindingKey(projectID, r.Stage)]; ok {
+				if a, ok := m.agents[b.AgentID]; ok {
+					name := a.Name
+					row.AgentName = &name
+				}
+			}
+			details = append(details, row)
+		}
+	}
+	slices.SortFunc(details, func(a, b StageRunDetail) int {
+		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
+			return c
+		}
+		if a.Attempt != b.Attempt {
+			return b.Attempt - a.Attempt
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	if len(details) > stageRunsDetailLimit {
+		details = details[:stageRunsDetailLimit]
+	}
+	return ProjectStageRuns{ProjectID: projectID, Runs: details, ByStage: aggregateByStage(details)}, nil
+}
+
 // compile-time check
 var _ Store = (*Memory)(nil)
 

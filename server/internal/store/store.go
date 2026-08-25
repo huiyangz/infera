@@ -196,6 +196,57 @@ type StageRun struct {
 	FinishedAt *time.Time `json:"finished_at"`
 }
 
+// stageRunsDetailLimit 项目执行时序明细窗口（INFERA-234 T01 冻结契约的一部分，
+// pg/memory 两库共用）：明细按 started_at 倒序最多返回最近 200 条，by_stage
+// 聚合同一窗口。200 条覆盖 dashboard 首屏（11 阶段 × 十余次重试），又不至于
+// 大项目全量倾倒。
+const stageRunsDetailLimit = 200
+
+// StageRunDetail 项目维度 agent 执行时序明细行（INFERA-234 T01 冻结契约：
+// GET /api/projects/{id}/stage-runs 响应 runs 数组元素，后续前端任务按提交
+// 代码对接，不得另开并行入口）。AgentName 是绑定到该 stage 的 agent 名
+// （pipeline_bindings: node=stage；未配置/门禁与命令节点 → null）；
+// DurationMS = finished_at - started_at（毫秒，running 未收尾 → null）；
+// ExternalIssueKey 空=本地需求（非同步来源）。
+type StageRunDetail struct {
+	ID               string     `json:"id"`
+	DeliveryID       string     `json:"delivery_id"`
+	Title            string     `json:"title"`
+	ExternalIssueKey string     `json:"external_issue_key"`
+	Stage            string     `json:"stage"`
+	Attempt          int        `json:"attempt"`
+	Status           string     `json:"status"` // running|done|failed
+	AgentName        *string    `json:"agent_name"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at"`
+	DurationMS       *int64     `json:"duration_ms"`
+}
+
+// StageRunStageStats 分 stage 聚合行（INFERA-234 T01 冻结契约：响应 by_stage
+// 数组元素）。Total/Done/Failed/Running 计的是与明细同一窗口内的运行；
+// AvgMS/P95MS 只统计已收尾（finished_at 非空）的运行，P95 取最近邻位法
+// （nearest-rank），无已收尾运行时为 0；行按 stage 字典序升序（前端按自身
+// 阶段序重排）。
+type StageRunStageStats struct {
+	Stage   string  `json:"stage"`
+	Total   int     `json:"total"`
+	Done    int     `json:"done"`
+	Failed  int     `json:"failed"`
+	Running int     `json:"running"`
+	AvgMS   float64 `json:"avg_ms"`
+	P95MS   float64 `json:"p95_ms"`
+}
+
+// ProjectStageRuns 项目 agent 执行时序整体（INFERA-234 T01 冻结契约：
+// GET /api/projects/{id}/stage-runs 响应载荷）。Runs 按 started_at 倒序
+// （并列按 attempt、id 倒序稳定），最多 stageRunsDetailLimit 条；ByStage 聚合
+// 同一窗口；空项目两者为空数组（非 null）；项目不存在 → ErrNotFound。
+type ProjectStageRuns struct {
+	ProjectID string               `json:"project_id"`
+	Runs      []StageRunDetail     `json:"runs"`
+	ByStage   []StageRunStageStats `json:"by_stage"`
+}
+
 type Store interface {
 	// projects
 	CreateProject(ctx context.Context, p *Project) error
@@ -206,6 +257,12 @@ type Store interface {
 	// RequirementStats 项目维度需求统计（INFERA-108）：总数/按状态分布/
 	// 待决策数/交付数/最近同步时间；项目不存在 → ErrNotFound。
 	RequirementStats(ctx context.Context, id string) (RequirementStats, error)
+	// ProjectStageRuns 项目维度 agent 执行时序（INFERA-234 T01 冻结契约）：
+	// 项目内各 delivery 的 stage_run 明细（started_at 倒序、限最近
+	// stageRunsDetailLimit 条，agent 名经 pipeline_bindings 关联，未绑定 →
+	// null）+ 分 stage 聚合（次数/成败/平均耗时/p95，同一窗口）；项目不存在
+	// → ErrNotFound。
+	ProjectStageRuns(ctx context.Context, projectID string) (ProjectStageRuns, error)
 	// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空
 	// 且未完结），JOIN projects 带 ProjectName，按 updated_at 降序。
 	ListPendingDecisions(ctx context.Context) ([]PendingDecision, error)
