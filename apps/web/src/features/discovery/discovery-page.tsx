@@ -190,7 +190,9 @@ function DiscoveryColumn({
                 </span>
               </div>
             )}
-            <div className='grid gap-3'>
+            {/* grid-cols-1 = minmax(0,1fr)：轨道零最小宽，卡片只随栏宽收缩，
+                不再按 nowrap min-content 撑破栏框（INFERA-250 压叠根因） */}
+            <div className='grid grid-cols-1 gap-3'>
               {g.rows.map((r) => (
                 <DiscoveryTaskCard key={r.id} row={r} />
               ))}
