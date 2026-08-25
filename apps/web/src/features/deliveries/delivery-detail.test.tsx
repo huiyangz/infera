@@ -253,6 +253,29 @@ const LABELS = {
   intel: { name: '情报', color: '#3b82f6' },
 }
 
+describe('DeliveryDetail 已取消终态（INFERA-233：cancelled 全站接入）', () => {
+  it('cancelled 任务正常渲染：徽标「已取消」，阶段条不再出现进行中 spinner', async () => {
+    const screen = await renderDetail(
+      makeDelivery({ status: 'cancelled', current_stage: 'code_gen' })
+    )
+    await waitForLoad(screen)
+
+    // 顶栏徽标按新词表渲染（不再落入「已完成」兜底）
+    await expect
+      .element(screen.getByText('已取消', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('已完成', { exact: true }).query()).toBeNull()
+
+    // 阶段条语义：放弃 = 无进行中阶段（无 spinner、无门禁等待文案）
+    const stageCard = [...document.querySelectorAll("[data-slot='card']")].find(
+      (c) => c.textContent?.includes('阶段推进')
+    )
+    expect(stageCard).toBeTruthy()
+    expect(stageCard!.querySelector('.animate-spin')).toBeNull()
+    expect(stageCard!.textContent).not.toContain('等待你的审批')
+  })
+})
+
 describe('DeliveryDetail 标签展示（INFERA-220：任务详情渲染 Multica 标签 chip）', () => {
   it('AC1-a: 任务信息卡显示标签 chip，名称与底色（hex 原值）与后端一致', async () => {
     const screen = await renderDetail(

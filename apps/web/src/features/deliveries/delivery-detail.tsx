@@ -146,7 +146,8 @@ function taskProgress(
 
 /**
  * 阶段状态需结合 delivery 终态判定：
- * completed → 全部 done；blocked → 当前阶段 failed（无 spinner），之前 done，之后 pending。
+ * completed → 全部 done；blocked → 当前阶段 failed（无 spinner），之前 done，之后 pending；
+ * cancelled → 停在放弃点（之前 done，之后 pending，无 spinner/门禁等待——放弃后不再推进）。
  * 拆分父的 tasks/tasks_approval/test_gen 恒为跳过态（任务与测试由子需求承担）。
  */
 function stageState(
@@ -159,6 +160,9 @@ function stageState(
 ): StageState {
   if (splitMode && SPLIT_PARENT_SKIPPED.has(stage)) return 'skipped'
   if (status === 'completed') return 'done'
+  if (status === 'cancelled') {
+    return idx < currentIdx ? 'done' : 'pending'
+  }
   if (status === 'blocked') {
     if (idx < currentIdx) return 'done'
     if (idx === currentIdx) return 'failed'

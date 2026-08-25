@@ -39,7 +39,7 @@ import { Header } from '@/components/layout/header'
 import { BindingEditor } from '@/features/pipeline/binding-editor'
 import { CreateRequirementDialog } from './requirement-create-dialog'
 
-/** 状态桶展示口径（与 StatusBadge 一致的中文名） */
+/** 状态桶展示口径（与 StatusBadge 一致的中文名；cancelled 殿后） */
 const STATUS_BUCKETS: Array<{
   key: keyof RequirementStats['by_status']
   label: string
@@ -48,6 +48,7 @@ const STATUS_BUCKETS: Array<{
   { key: 'queued', label: '未启动' },
   { key: 'completed', label: '已完成' },
   { key: 'blocked', label: '已阻塞' },
+  { key: 'cancelled', label: '已取消' },
 ]
 
 /**

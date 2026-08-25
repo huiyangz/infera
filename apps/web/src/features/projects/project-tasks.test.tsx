@@ -153,8 +153,8 @@ async function renderProjectTasks(
 
 /**
  * 分组 fixture（L202608222116-1-T02 多阶段覆盖）：本地父（无子任务）+
- * 同步父（两个阶段共四个子任务，四种状态各一：一完成、一未启动、
- * 一进行中、一阻塞），进度计数 1/4。
+ * 同步父（两个阶段共五个子任务，五种状态各一：一完成、一未启动、
+ * 一进行中、一阻塞、一已取消），进度计数 1/5（cancelled 不计入完成）。
  */
 function groupsFixture(): TaskGroupRow[] {
   return [
@@ -168,7 +168,7 @@ function groupsFixture(): TaskGroupRow[] {
       external_issue_key: 'INFERA-77',
       assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
       external_synced_at: '2026-08-22T03:00:05Z',
-      child_total: 4,
+      child_total: 5,
       child_completed: 1,
       stages: [
         {
@@ -201,6 +201,12 @@ function groupsFixture(): TaskGroupRow[] {
               id: 'c6',
               title: '第二批阻塞任务',
               status: 'blocked',
+              stage: 2,
+            }),
+            makeChild({
+              id: 'c7',
+              title: '第二批放弃任务',
+              status: 'cancelled',
               stage: 2,
             }),
           ],
@@ -292,7 +298,7 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       .element(screen.getByText('子任务', { exact: true }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('1/4', { exact: true }))
+      .element(screen.getByText('1/5', { exact: true }))
       .toBeInTheDocument()
   })
 
@@ -325,12 +331,12 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
     expect(dx).toBeGreaterThan(8)
   })
 
-  it('AC1-d: 每个子任务行带状态图标（已完成/未启动/进行中/已阻塞）', async () => {
+  it('AC1-d: 每个子任务行带状态图标（已完成/未启动/进行中/已阻塞/已取消）', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '第二批阻塞任务')
 
-    for (const label of ['已完成', '未启动', '进行中', '已阻塞']) {
+    for (const label of ['已完成', '未启动', '进行中', '已阻塞', '已取消']) {
       // 左栏（INFERA-229）也渲染同名状态图标——收窄到右栏断言
       expect(
         (await paneRoleEls(screen, DETAIL_SLOT, 'img', {
@@ -341,7 +347,7 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
     }
   })
 
-  it('INFERA-145 返工: 四态图标 class 逐属性钉死（尺寸/单色/进行中 spin），重构前后渲染一致', async () => {
+  it('INFERA-145 返工: 五态图标 class 逐属性钉死（尺寸/单色/进行中 spin），重构前后渲染一致', async () => {
     const screen = await renderProjectTasks(makeProject(), groupsFixture())
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '第二批阻塞任务')
@@ -358,6 +364,11 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       [
         '未启动',
         'lucide lucide-circle-dashed size-3.5 shrink-0 text-muted-foreground',
+      ],
+      // INFERA-233：已取消 = 灰色禁用圈（中性弱化，与 StatusBadge 口径一致）
+      [
+        '已取消',
+        'lucide lucide-circle-off size-3.5 shrink-0 text-muted-foreground',
       ],
     ]
     for (const [label, cls] of cases) {
@@ -582,7 +593,7 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
       .element(screen.getByRole('link', { name: /同步父任务/ }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('1/4', { exact: true }))
+      .element(screen.getByText('1/5', { exact: true }))
       .toBeInTheDocument()
 
     // 再展开：子任务恢复
