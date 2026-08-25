@@ -674,6 +674,41 @@ func (m *Memory) ProjectStageRuns(_ context.Context, projectID string) (ProjectS
 	return ProjectStageRuns{ProjectID: projectID, Runs: details, ByStage: aggregateByStage(details)}, nil
 }
 
+// AgentActivity 跨项目 agent 执行时序聚合（语义与 Pg 一致）：遍历全部
+// stage_runs，经 delivery → project → 绑定解析归属 agent（项目绑定优先、
+// 全局兜底、无绑定归 unbound），分桶走共用 assembleAgentActivity。
+func (m *Memory) AgentActivity(_ context.Context, from, to time.Time, bucketMinutes int) ([]AgentActivitySeries, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rows := make([]agentActivityRow, 0)
+	for deliveryID, runs := range m.stageRuns {
+		d, ok := m.deliveries[deliveryID]
+		if !ok {
+			continue
+		}
+		for _, r := range runs {
+			id, name := m.agentIdentityLocked(d.ProjectID, r.Stage)
+			rows = append(rows, agentActivityRow{AgentID: id, AgentName: name, StartedAt: r.StartedAt})
+		}
+	}
+	return assembleAgentActivity(rows, from, to, bucketMinutes)
+}
+
+// agentIdentityLocked stage → 归属 agent（调用方必须已持锁）：项目绑定优先，
+// 全局（projectID 空）兜底；绑定存在但 agent 行缺失（FK 约束下不可达）与
+// 无绑定同归 unbound——与 Pg 的 COALESCE + LEFT JOIN 语义对齐。
+func (m *Memory) agentIdentityLocked(projectID, stage string) (string, string) {
+	for _, key := range []string{bindingKey(projectID, stage), bindingKey("", stage)} {
+		if b, ok := m.bindings[key]; ok {
+			if a, ok := m.agents[b.AgentID]; ok {
+				return a.ID, a.Name
+			}
+			break // 命中的绑定即生效（含绑定悬空的退化情形），不回落下一级
+		}
+	}
+	return "", unboundAgentName
+}
+
 // compile-time check
 var _ Store = (*Memory)(nil)
 
