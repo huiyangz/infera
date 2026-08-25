@@ -10,6 +10,9 @@ import (
 	"slices"
 	"syscall"
 	"time"
+	// 嵌入 IANA 时区库：/api/stats 的 tz 参数（如 Asia/Shanghai）在任何
+	// 部署环境可解析，不依赖宿主机 zoneinfo。
+	_ "time/tzdata"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/tokfinity/infera/internal/agent"
