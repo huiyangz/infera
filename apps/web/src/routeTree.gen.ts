@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedStatsRouteImport } from './routes/_authenticated/stats'
 import { Route as AuthenticatedDiscoveryRouteImport } from './routes/_authenticated/discovery'
 import { Route as AuthenticatedDecisionsRouteImport } from './routes/_authenticated/decisions'
 import { Route as errors503RouteImport } from './routes/(errors)/503'
@@ -37,6 +38,11 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedStatsRoute = AuthenticatedStatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedDiscoveryRoute = AuthenticatedDiscoveryRouteImport.update({
@@ -149,6 +155,7 @@ export interface FileRoutesByFullPath {
   '/503': typeof errors503Route
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
+  '/stats': typeof AuthenticatedStatsRoute
   '/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/projects/$id': typeof AuthenticatedProjectsIdRouteWithChildren
@@ -169,6 +176,7 @@ export interface FileRoutesByTo {
   '/503': typeof errors503Route
   '/decisions': typeof AuthenticatedDecisionsRoute
   '/discovery': typeof AuthenticatedDiscoveryRoute
+  '/stats': typeof AuthenticatedStatsRoute
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/requirements/$id': typeof AuthenticatedRequirementsIdRoute
@@ -190,6 +198,7 @@ export interface FileRoutesById {
   '/(errors)/503': typeof errors503Route
   '/_authenticated/decisions': typeof AuthenticatedDecisionsRoute
   '/_authenticated/discovery': typeof AuthenticatedDiscoveryRoute
+  '/_authenticated/stats': typeof AuthenticatedStatsRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/deliveries/$id': typeof AuthenticatedDeliveriesIdRouteWithChildren
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
@@ -214,6 +223,7 @@ export interface FileRouteTypes {
     | '/503'
     | '/decisions'
     | '/discovery'
+    | '/stats'
     | '/deliveries/$id'
     | '/errors/$error'
     | '/projects/$id'
@@ -234,6 +244,7 @@ export interface FileRouteTypes {
     | '/503'
     | '/decisions'
     | '/discovery'
+    | '/stats'
     | '/'
     | '/errors/$error'
     | '/requirements/$id'
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
     | '/(errors)/503'
     | '/_authenticated/decisions'
     | '/_authenticated/discovery'
+    | '/_authenticated/stats'
     | '/_authenticated/'
     | '/_authenticated/deliveries/$id'
     | '/_authenticated/errors/$error'
@@ -291,6 +303,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/stats': {
+      id: '/_authenticated/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof AuthenticatedStatsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/discovery': {
@@ -460,6 +479,7 @@ const AuthenticatedProjectsIdRouteWithChildren =
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDecisionsRoute: typeof AuthenticatedDecisionsRoute
   AuthenticatedDiscoveryRoute: typeof AuthenticatedDiscoveryRoute
+  AuthenticatedStatsRoute: typeof AuthenticatedStatsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedDeliveriesIdRoute: typeof AuthenticatedDeliveriesIdRouteWithChildren
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
@@ -471,6 +491,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDecisionsRoute: AuthenticatedDecisionsRoute,
   AuthenticatedDiscoveryRoute: AuthenticatedDiscoveryRoute,
+  AuthenticatedStatsRoute: AuthenticatedStatsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedDeliveriesIdRoute: AuthenticatedDeliveriesIdRouteWithChildren,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,

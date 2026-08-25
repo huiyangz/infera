@@ -273,6 +273,52 @@ type AgentActivitySeries struct {
 	Points    []AgentActivityPoint `json:"points"`
 }
 
+// WorkspaceTaskStatus 跨项目任务状态分布（L202608251850-1-T01 冻结契约：
+// GET /api/stats 响应 task_status 的形态）。五类归并对齐 Multica 工作台
+// 统计口径：Done←completed、InProgress←active、Todo←queued+blocked
+// （均未被引擎自动推进）、Cancelled←cancelled；Total 为全部任务（含未知
+// 状态）。ByStatus 为 infera 原始状态计数（恒含 active/queued/completed/
+// blocked/cancelled 五键，无行为 0）。
+type WorkspaceTaskStatus struct {
+	Total      int            `json:"total"`
+	Done       int            `json:"done"`
+	InProgress int            `json:"in_progress"`
+	Todo       int            `json:"todo"`
+	Cancelled  int            `json:"cancelled"`
+	ByStatus   map[string]int `json:"by_status"`
+}
+
+// WorkspaceExecution 窗口内执行维度基础统计（L202608251850-1-T01 冻结
+// 契约）：RunsTotal 计窗口内全部 stage_runs（attempt 各计一次、不分状态，
+// 含 in-flight）；Running/Done/Failed 为状态分布；DurationMSTotal 只累计
+// 已收尾（finished_at 非空）行的 finished-started（毫秒），running 不计。
+type WorkspaceExecution struct {
+	RunsTotal       int   `json:"runs_total"`
+	Running         int   `json:"running"`
+	Done            int   `json:"done"`
+	Failed          int   `json:"failed"`
+	DurationMSTotal int64 `json:"duration_ms_total"`
+}
+
+// WorkspaceHourBucket 执行时段分布单桶（L202608251850-1-T01 冻结契约）：
+// Hour 0..23 为 started_at 换算到查询时区后的本地小时；Runs 该小时启动的
+// 执行次数（含 running/failed）；DurationMS 已收尾执行的累计耗时——整段
+// 计入起始桶，跨小时收尾不拆分。
+type WorkspaceHourBucket struct {
+	Hour       int   `json:"hour"`
+	Runs       int   `json:"runs"`
+	DurationMS int64 `json:"duration_ms"`
+}
+
+// WorkspaceStats 跨项目统计聚合（L202608251850-1-T01 冻结契约，前端
+// 「统计」页唯一数据源，不得另开并行入口）。TaskStatus 为全量快照；Execution
+// 与 Hourly 只统计窗口内执行（窗口/时区信封由 api 层补）。
+type WorkspaceStats struct {
+	TaskStatus WorkspaceTaskStatus   `json:"task_status"`
+	Execution  WorkspaceExecution    `json:"execution"`
+	Hourly     []WorkspaceHourBucket `json:"hourly"`
+}
+
 type Store interface {
 	// projects
 	CreateProject(ctx context.Context, p *Project) error
@@ -295,6 +341,12 @@ type Store interface {
 	// project → pipeline_bindings(node=stage)：项目绑定优先、project_id 为空
 	// 的全局绑定兜底、无绑定归 "unbound"；桶宽非正或窗口非正 → ErrInvalid。
 	AgentActivity(ctx context.Context, from, to time.Time, bucketMinutes int) ([]AgentActivitySeries, error)
+	// WorkspaceStats 跨项目统计聚合（L202608251850-1-T01 冻结契约，前端
+	// 「统计」页唯一数据源）：任务状态分布为全量快照；执行统计与逐小时
+	// （0..23）分桶取窗口 [from,to) 内的 stage_runs（半开区间：started_at
+	// ==from 计入、==to 剔除），按 loc 本地小时归桶（nil → UTC）。纯只读。
+	// 窗口非正 → ErrInvalid。
+	WorkspaceStats(ctx context.Context, from, to time.Time, loc *time.Location) (WorkspaceStats, error)
 	// ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空
 	// 且未完结），JOIN projects 带 ProjectName，按 updated_at 降序。
 	ListPendingDecisions(ctx context.Context) ([]PendingDecision, error)

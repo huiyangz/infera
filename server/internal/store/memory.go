@@ -705,6 +705,25 @@ func (m *Memory) AgentActivity(_ context.Context, from, to time.Time, bucketMinu
 	return assembleAgentActivity(rows, from, to, bucketMinutes)
 }
 
+// WorkspaceStats 跨项目统计聚合（语义与 Pg 一致）：全量 deliveries 按状态
+// 计数 + 全部 stage_runs 一次读回，装配走共用 assembleWorkspaceStats
+// （窗口过滤与分桶都在装配层）。
+func (m *Memory) WorkspaceStats(_ context.Context, from, to time.Time, loc *time.Location) (WorkspaceStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	statusCounts := map[string]int{}
+	for _, d := range m.deliveries {
+		statusCounts[d.Status]++
+	}
+	runs := make([]StageRun, 0)
+	for _, rs := range m.stageRuns {
+		for _, r := range rs {
+			runs = append(runs, *r)
+		}
+	}
+	return assembleWorkspaceStats(statusCounts, runs, from, to, loc)
+}
+
 // agentIdentityLocked stage → 归属 agent（调用方必须已持锁）：项目绑定优先，
 // 全局（projectID 空）兜底；绑定存在但 agent 行缺失（FK 约束下不可达）与
 // 无绑定同归 unbound——与 Pg 的 COALESCE + LEFT JOIN 语义对齐。
