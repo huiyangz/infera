@@ -30,14 +30,16 @@ export const STATUS_LABEL: Record<DeliveryStatus, string> = {
   blocked: '已阻塞',
   queued: '未启动',
   completed: '已完成',
+  cancelled: '已取消',
 }
 
-/** 状态分组固定序：活跃在前，已完成殿后 */
+/** 状态分组固定序：活跃在前，已完成之后 cancelled 殿后（放弃垫底） */
 export const STATUS_ORDER: readonly DeliveryStatus[] = [
   'active',
   'blocked',
   'queued',
   'completed',
+  'cancelled',
 ]
 
 /**
@@ -84,4 +86,27 @@ export function groupDiscoveryTasks(
     const hit = rows.filter((r) => r.status === s)
     return hit.length ? [{ key: s, label: STATUS_LABEL[s], rows: hit }] : []
   })
+}
+
+/** 左右双栏拆分结果：candidates = 左栏「候选」，cancelled = 右栏「已放弃」 */
+export interface DiscoveryColumns {
+  candidates: TaskGroup[]
+  cancelled: TaskGroup[]
+}
+
+/**
+ * 左右双栏拆分（INFERA-233）：筛选与分组先作用于全量，再按 cancelled
+ * 把每个组拆成两侧——左「候选」承载全部非 cancelled 行，右「已放弃」
+ * 承载 cancelled 行。组键/组头沿用，行序不变；空侧不产出组。
+ */
+export function splitColumnsByCancelled(groups: TaskGroup[]): DiscoveryColumns {
+  const candidates: TaskGroup[] = []
+  const cancelled: TaskGroup[] = []
+  for (const g of groups) {
+    const rows = g.rows.filter((r) => r.status !== 'cancelled')
+    if (rows.length) candidates.push({ ...g, rows })
+    const dropped = g.rows.filter((r) => r.status === 'cancelled')
+    if (dropped.length) cancelled.push({ ...g, rows: dropped })
+  }
+  return { candidates, cancelled }
 }

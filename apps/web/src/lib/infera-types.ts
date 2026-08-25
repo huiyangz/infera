@@ -1,4 +1,14 @@
-export type DeliveryStatus = 'active' | 'completed' | 'blocked' | 'queued'
+/**
+ * 交付状态词表（契约冻结于 INFERA-232 / T01：server/internal/syncsvc
+ * translateStatus 与 engine 状态常量）——cancelled 是上游「放弃」的独立
+ * 终态，不折叠为 completed（放弃 ≠ 交付）。
+ */
+export type DeliveryStatus =
+  | 'active'
+  | 'completed'
+  | 'blocked'
+  | 'queued'
+  | 'cancelled'
 
 /**
  * 交付所挂标签（契约冻结于 INFERA-218：server/internal/api/labels.go 的
@@ -137,7 +147,9 @@ interface ProjectStats {
 /**
  * 项目维度需求统计（契约冻结于 INFERA-108 T01：
  * GET /api/projects/{id}/stats ← server/internal/store store.RequirementStats）。
- * by_status 恒含四个固定键（无行时为 0）；last_synced_at null = 从未同步。
+ * by_status 恒含五个固定键（无行时为 0；cancelled 为 INFERA-232 新增的
+ * 放弃终态）；delivered 与 by_status.completed 同源，cancelled 不计入。
+ * last_synced_at null = 从未同步。
  */
 export interface RequirementStats {
   project_id: string
@@ -147,6 +159,7 @@ export interface RequirementStats {
     queued: number
     completed: number
     blocked: number
+    cancelled: number
   }
   pending_decisions: number
   delivered: number

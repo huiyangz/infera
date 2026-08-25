@@ -89,7 +89,7 @@ function makeStats(
   return {
     project_id: 'p1',
     requirement_total: 7,
-    by_status: { active: 2, queued: 1, completed: 3, blocked: 1 },
+    by_status: { active: 2, queued: 1, completed: 3, blocked: 1, cancelled: 1 },
     pending_decisions: 2,
     delivered: 3,
     last_synced_at: '2026-08-22T03:00:05Z',
@@ -149,7 +149,7 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
     expect(await screen.getByText('需求', { exact: true }).query()).toBeNull()
   })
 
-  it('AC1-2: 项目统计展示 T01 冻结契约各字段（总数/四状态桶/待决策/已交付）', async () => {
+  it('AC1-2: 项目统计展示 T01 冻结契约各字段（总数/五状态桶/待决策/已交付）', async () => {
     const screen = await renderProjectDetail(makeProject(), makeStats())
     await waitForProject(screen)
 
@@ -179,6 +179,10 @@ describe('ProjectDetail 项目域重构（AC：统计 + 必需配置 + 任务列
       .toBeInTheDocument()
     await expect
       .element(screen.getByText('已阻塞', { exact: true }))
+      .toBeInTheDocument()
+    // INFERA-233：第五状态桶「已取消」（cancelled 终态接入）
+    await expect
+      .element(screen.getByText('已取消', { exact: true }))
       .toBeInTheDocument()
   })
 

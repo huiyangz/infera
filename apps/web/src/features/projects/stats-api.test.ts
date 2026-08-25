@@ -38,7 +38,7 @@ describe('getProjectStats（契约冻结于 INFERA-108 T01：server/internal/sto
     const body: RequirementStats = {
       project_id: 'p1',
       requirement_total: 7,
-      by_status: { active: 2, queued: 1, completed: 3, blocked: 1 },
+      by_status: { active: 2, queued: 1, completed: 3, blocked: 1, cancelled: 1 },
       pending_decisions: 2,
       delivered: 3,
       last_synced_at: '2026-08-22T03:00:05Z',
@@ -58,7 +58,7 @@ describe('getProjectStats（契约冻结于 INFERA-108 T01：server/internal/sto
       body: {
         project_id: 'p2',
         requirement_total: 0,
-        by_status: { active: 0, queued: 0, completed: 0, blocked: 0 },
+        by_status: { active: 0, queued: 0, completed: 0, blocked: 0, cancelled: 0 },
         pending_decisions: 0,
         delivered: 0,
         last_synced_at: null,

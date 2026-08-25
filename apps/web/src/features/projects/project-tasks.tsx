@@ -5,6 +5,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDashed,
+  CircleOff,
   ChevronDown,
   ChevronRight,
   Inbox,
@@ -408,8 +409,9 @@ function ChildTaskRow({ d }: { d: TaskChild }) {
 }
 
 /**
- * 子任务行状态图标四态查表（单色语言，语义与 StatusBadge 一致）：
- * 已完成=墨色实勾；进行中=旋转加载圈；已阻塞=墨色警示圈；未启动=灰虚线圈。
+ * 子任务行状态图标五态查表（单色语言，语义与 StatusBadge 一致）：
+ * 已完成=墨色实勾；进行中=旋转加载圈；已阻塞=墨色警示圈；未启动=灰虚线圈；
+ * 已取消=灰色禁用圈（INFERA-233，中性弱化）。
  * 图标/文案/样式一处声明，消除逐态重复 JSX；Record 按状态并集穷尽，无兜底分支。
  */
 const TASK_STATUS_ICON: Record<
@@ -434,6 +436,11 @@ const TASK_STATUS_ICON: Record<
   queued: {
     icon: CircleDashed,
     label: '未启动',
+    className: 'size-3.5 shrink-0 text-muted-foreground',
+  },
+  cancelled: {
+    icon: CircleOff,
+    label: '已取消',
     className: 'size-3.5 shrink-0 text-muted-foreground',
   },
 }
