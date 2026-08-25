@@ -1,6 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { page } from 'vitest/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from 'vitest-browser-react'
+// 布局回归需要真实 Tailwind 样式（与 project-detail / label-chip 测试同构）
+import '@/styles/index.css'
 import { listDiscoveryTasks } from './api'
 import type { DiscoveryTaskRow } from './types'
 import { DiscoveryPage } from './discovery-page'
@@ -371,5 +374,208 @@ describe('DiscoveryPage 需求发现页', () => {
     await expect
       .element(screen.getByText('没有匹配当前筛选的任务'))
       .toBeInTheDocument()
+  })
+})
+
+/* ─── INFERA-250 双栏布局回归（几何断言）───────────────────────────────
+ *
+ * 根因：栏内卡片栈的隐式 auto 轨道按卡片 nowrap min-content 撑宽，
+ * 卡片越出栏框——左栏卡压进右栏、右栏卡顶出视口（横向溢出）。
+ * 这里用真实浏览器几何（getBoundingClientRect）钉住：两栏各自独立
+ * 占位、卡片不越栏、不串栏；窄屏按既有断点退化为上下堆叠。
+ */
+
+/** 亚像素容差：布局取整误差留 0.5px */
+const EPS = 0.5
+
+/** 超长标题（nowrap min-content 远超栏宽，触发回归的驱动内容） */
+const LONG_CANDIDATE_TITLE =
+  '超长候选标题压力样本——支付渠道调研对账冲正差错追踪多币种结算与自动核销的完整链路描述'
+const LONG_CANCELLED_TITLE =
+  '超长已放弃标题压力样本——多语言站点评测本地化翻译质量抽检与发布门禁回归的完整链路描述'
+
+/** 压力夹具：左右两栏各两张卡，含超长标题与超长标签 */
+function overlapRows(): DiscoveryTaskRow[] {
+  return [
+    row({
+      title: LONG_CANDIDATE_TITLE,
+      labels: [
+        { name: '情报', color: '#22c55e' },
+        {
+          name: '一个非常长的标签名称用于验证窄栏下标签行换行与截断的表现是否稳定',
+          color: '#3b82f6',
+        },
+      ],
+    }),
+    row({
+      id: 'd-000000000002',
+      title: '候选：一键对账需求',
+      status: 'completed',
+      agent_types: ['analysis'],
+      labels: [{ name: '候选', color: '#3b82f6' }],
+      project_name: 'infera',
+    }),
+    row({
+      id: 'd-000000000004',
+      title: LONG_CANCELLED_TITLE,
+      status: 'cancelled',
+      agent_types: ['mining'],
+      labels: [],
+    }),
+    row({
+      id: 'd-000000000005',
+      title: '情报：多语言站点评测',
+      status: 'cancelled',
+      agent_types: ['analysis'],
+      labels: [],
+    }),
+  ]
+}
+
+interface Box {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+/** 元素视口矩形（.element() 回传真实 DOM 节点，几何 API 可用） */
+function boxOf(el: Element | null | undefined, what: string): Box {
+  if (!el) throw new Error(`element not found: ${what}`)
+  const r = el.getBoundingClientRect()
+  return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+}
+
+const fmt = (b: Box) =>
+  `left=${b.left.toFixed(1)} right=${b.right.toFixed(1)} top=${b.top.toFixed(1)} bottom=${b.bottom.toFixed(1)}`
+
+/** 卡片所属栏的 aria-label（沿 DOM 上溯 section[aria-label]） */
+function columnOf(card: Element): string {
+  return card.closest('section[aria-label]')?.getAttribute('aria-label') ?? ''
+}
+
+describe('DiscoveryPage 双栏布局（INFERA-250）', () => {
+  afterEach(async () => {
+    await cleanup()
+    // 还原 vitest browser 默认视口，不污染同文件其他用例
+    await page.viewport(414, 896)
+  })
+
+  it('宽屏两栏并排不压叠：栏几何互斥，卡片（含超长标题/长标签）不越出自己的栏', async () => {
+    await page.viewport(1280, 900)
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(overlapRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('候选：一键对账需求'))
+      .toBeInTheDocument()
+
+    const candidateCol = boxOf(
+      await screen.getByRole('region', { name: '候选' }).element(),
+      '候选栏'
+    )
+    const cancelledCol = boxOf(
+      await screen.getByRole('region', { name: '已放弃' }).element(),
+      '已放弃栏'
+    )
+
+    // 宽屏（md+）两栏并排：左栏整体在右栏左侧，无水平交集
+    expect(
+      candidateCol.right,
+      `候选栏 ${fmt(candidateCol)} 已放弃栏 ${fmt(cancelledCol)}`
+    ).toBeLessThanOrEqual(cancelledCol.left + EPS)
+    // 并排而非堆叠：右栏起点在左栏起点右侧
+    expect(cancelledCol.left).toBeGreaterThan(candidateCol.left)
+
+    // 每张卡都完整落在自己所属的栏框内（不越栏 → 不压叠、不横向溢出）
+    const cards = await screen.getByRole('article').elements()
+    expect(cards.length).toBe(4)
+    for (const card of cards) {
+      const label = columnOf(card)
+      const col = label === '候选' ? candidateCol : cancelledCol
+      const cardBox = boxOf(card, `卡片（${label}）`)
+      expect(
+        cardBox.left,
+        `${label}栏卡片应落在栏内：card ${fmt(cardBox)} vs 栏 ${fmt(col)}`
+      ).toBeGreaterThanOrEqual(col.left - EPS)
+      expect(
+        cardBox.right,
+        `${label}栏卡片不应越出右边界：card ${fmt(cardBox)} vs 栏 ${fmt(col)}`
+      ).toBeLessThanOrEqual(col.right + EPS)
+    }
+
+    // 双栏互斥口径（几何面）：左栏卡的右边界不越过右栏左边界
+    const longCandidate = boxOf(
+      (await screen.getByText(LONG_CANDIDATE_TITLE).element())?.closest(
+        'article'
+      ),
+      '左栏超长标题卡'
+    )
+    expect(
+      longCandidate.right,
+      `左栏卡压进右栏：card ${fmt(longCandidate)} vs 右栏 left=${cancelledCol.left.toFixed(1)}`
+    ).toBeLessThanOrEqual(cancelledCol.left + EPS)
+  })
+
+  it('窄屏退化为上下堆叠：两栏垂直互斥，卡片仍在各自栏内，无横向溢出', async () => {
+    await page.viewport(375, 900)
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(overlapRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('候选：一键对账需求'))
+      .toBeInTheDocument()
+
+    const candidateCol = boxOf(
+      await screen.getByRole('region', { name: '候选' }).element(),
+      '候选栏'
+    )
+    const cancelledCol = boxOf(
+      await screen.getByRole('region', { name: '已放弃' }).element(),
+      '已放弃栏'
+    )
+
+    // 窄屏（md 以下）上下堆叠：候选栏整体在已放弃栏上方
+    expect(
+      candidateCol.bottom,
+      `窄屏应上下堆叠：候选 ${fmt(candidateCol)} 已放弃 ${fmt(cancelledCol)}`
+    ).toBeLessThanOrEqual(cancelledCol.top + EPS)
+
+    // 卡片不越栏（含超长标题卡），即不产生横向溢出
+    const cards = await screen.getByRole('article').elements()
+    expect(cards.length).toBe(4)
+    for (const card of cards) {
+      const label = columnOf(card)
+      const col = label === '候选' ? candidateCol : cancelledCol
+      const cardBox = boxOf(card, `卡片（${label}）`)
+      expect(
+        cardBox.right,
+        `${label}栏卡片不应越出栏右边界：card ${fmt(cardBox)} vs 栏 ${fmt(col)}`
+      ).toBeLessThanOrEqual(col.right + EPS)
+    }
+  })
+
+  it('栏头计数与该栏卡片数一致（左候选右已放各自的行数）', async () => {
+    vi.mocked(listDiscoveryTasks).mockResolvedValue(overlapRows())
+    const screen = await mount()
+    await expect
+      .element(screen.getByText('候选：一键对账需求'))
+      .toBeInTheDocument()
+
+    const cards = await screen.getByRole('article').elements()
+    const perColumn = { 候选: 0, 已放弃: 0 }
+    for (const card of cards) {
+      const label = columnOf(card)
+      if (label === '候选' || label === '已放弃') perColumn[label] += 1
+    }
+
+    // 栏头旁的计数 span（h2 的下一个兄弟）与几何归属的卡片数一致
+    for (const label of ['候选', '已放弃'] as const) {
+      const header = await screen
+        .getByRole('heading', { name: label, exact: true })
+        .element()
+      const count = Number(header?.nextElementSibling?.textContent)
+      expect(count, `「${label}」栏头计数应为 ${perColumn[label]}`).toBe(
+        perColumn[label]
+      )
+    }
   })
 })
