@@ -44,18 +44,26 @@ type RequirementStats struct {
 // GET /api/pending-decisions 的响应载荷形态）。ID 即 delivery ID，
 // 前端以其跳转既有需求详情；ProjectName 由查询 JOIN projects 带回。
 type PendingDecision struct {
-	ID               string    `json:"id"`
-	ProjectID        string    `json:"project_id"`
-	ProjectName      string    `json:"project_name"`
-	Title            string    `json:"title"`
-	Status           string    `json:"status"`
-	PendingGate      string    `json:"pending_gate"`
-	CurrentStage     string    `json:"current_stage"`
-	ExternalIssueKey string    `json:"external_issue_key"` // ''=本地需求（非同步来源）
-	Assignee         string    `json:"assignee"`           // 任务同步展示数据；''=无
-	Priority         string    `json:"priority"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string `json:"id"`
+	ProjectID        string `json:"project_id"`
+	ProjectName      string `json:"project_name"`
+	Title            string `json:"title"`
+	Status           string `json:"status"`
+	PendingGate      string `json:"pending_gate"`
+	CurrentStage     string `json:"current_stage"`
+	ExternalIssueKey string `json:"external_issue_key"` // ''=本地需求（非同步来源）
+	Assignee         string `json:"assignee"`           // 任务同步展示数据；''=无
+	Priority         string `json:"priority"`
+	// Source 来源（INFERA-267 对冻结契约的加法扩展）：源头需求的
+	// requirements.source，''=无来源/不可解析（前端回退 —）。store 层不解析
+	// （不读 requirements 表），恒产出 ''；api 层按 RootExternalIssueID 回填。
+	Source string `json:"source"`
+	// RootExternalIssueID 链根（沿 parent_id 爬到无父）的 external_issue_id，
+	// ''=链根非同步来源。内部键不序列化（json:"-"）：仅供 api 层 enrichment，
+	// 线上行形状保持纯加法——新增序列化键只有 source。
+	RootExternalIssueID string    `json:"-"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type Delivery struct {

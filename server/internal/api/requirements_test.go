@@ -36,6 +36,7 @@ type fakeReq struct {
 	policy       flow.MergePolicy
 	mergeRes     github.MergeResult
 	prReview     *reqservice.PRReview
+	list         []reqservice.RequirementListItem // List 按需回放（decisions enrichment 用）
 }
 
 type feedbackCall struct {
@@ -58,6 +59,9 @@ func (f *fakeReq) Create(ctx context.Context, in reqservice.CreateInput) (*reqse
 func (f *fakeReq) List(ctx context.Context) ([]reqservice.RequirementListItem, error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.list != nil {
+		return f.list, nil
 	}
 	return []reqservice.RequirementListItem{}, nil
 }

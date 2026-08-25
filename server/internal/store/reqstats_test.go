@@ -125,3 +125,66 @@ func TestMemoryListPendingDecisions(t *testing.T) {
 func TestPgListPendingDecisions(t *testing.T) {
 	checkListPendingDecisions(t, testPool(t))
 }
+
+// seedRootChainStore 铺链根解析用例（INFERA-267）：同步父（链根，external
+// mi-root）下挂同步子（external mi-child，parent=父）与本地孙（engine 拆分
+// 建，无 external，parent=子），另有本地普通行（无父无 external）。四行都有门。
+func seedRootChainStore(t *testing.T, st Store) (root, syncedChild, splitGrand, local *Delivery) {
+	t.Helper()
+	ctx := context.Background()
+	p := &Project{Name: "链根项目"}
+	require.NoError(t, st.CreateProject(ctx, p))
+
+	root = &Delivery{ProjectID: p.ID, Title: "同步父（链根）", Status: "active", PendingGate: "spec_approval", CurrentStage: "spec"}
+	root.ExternalIssueID = "mi-root"
+	root.ExternalIssueKey = "INFERA-260"
+	require.NoError(t, st.UpsertDeliveryByExternalID(ctx, root))
+
+	syncedChild = &Delivery{ProjectID: p.ID, Title: "同步子", Status: "active", PendingGate: "design_approval", CurrentStage: "design", ParentID: root.ID}
+	syncedChild.ExternalIssueID = "mi-child"
+	syncedChild.ExternalIssueKey = "INFERA-267"
+	require.NoError(t, st.UpsertDeliveryByExternalID(ctx, syncedChild))
+
+	splitGrand = &Delivery{ProjectID: p.ID, Title: "拆分孙", Status: "active", PendingGate: "tasks_approval", CurrentStage: "tasks", ParentID: syncedChild.ID}
+	require.NoError(t, st.CreateDelivery(ctx, splitGrand))
+
+	local = &Delivery{ProjectID: p.ID, Title: "本地普通行", Status: "active", PendingGate: "spec_approval", CurrentStage: "spec"}
+	require.NoError(t, st.CreateDelivery(ctx, local))
+	return
+}
+
+// checkListPendingDecisionsRootChain 链根 external_issue_id 解析（INFERA-267
+// 冻结语义）：沿 parent_id 爬到链根取根的 external_issue_id，供 api 层对
+// requirements.source 做 enrichment；store 层不读 requirements 表。
+func checkListPendingDecisionsRootChain(t *testing.T, st Store) {
+	t.Helper()
+	root, syncedChild, splitGrand, local := seedRootChainStore(t, st)
+	rows, err := st.ListPendingDecisions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, rows, 4)
+
+	byID := make(map[string]PendingDecision, len(rows))
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	// 普通行（无父）：链根 = 自身。
+	require.Equal(t, "mi-root", byID[root.ID].RootExternalIssueID)
+	// 同步子：链根 = 父的 external id（不是自己的 mi-child）。
+	require.Equal(t, "mi-root", byID[syncedChild.ID].RootExternalIssueID)
+	// 本地孙（engine 拆分建，自身无 external）：多级爬链到同步根。
+	require.Equal(t, "mi-root", byID[splitGrand.ID].RootExternalIssueID)
+	// 本地普通行（链根无 external）：根键 ''——api 层不可解析，前端回退 —。
+	require.Empty(t, byID[local.ID].RootExternalIssueID)
+	// Source 由 api 层回填：store 层产出恒 ''。
+	for _, r := range rows {
+		require.Empty(t, r.Source)
+	}
+}
+
+func TestMemoryListPendingDecisionsRootChain(t *testing.T) {
+	checkListPendingDecisionsRootChain(t, NewMemory())
+}
+
+func TestPgListPendingDecisionsRootChain(t *testing.T) {
+	checkListPendingDecisionsRootChain(t, testPool(t))
+}

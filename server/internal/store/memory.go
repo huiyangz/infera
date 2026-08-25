@@ -184,6 +184,8 @@ func (m *Memory) RequirementStats(ctx context.Context, id string) (RequirementSt
 
 // ListPendingDecisions 跨项目取全部待人工决策需求（pending_gate 非空且未
 // 完结），带 ProjectName，按 updated_at 降序（语义与 Pg 一致）。
+// RootExternalIssueID 沿 parent_id 爬链根（INFERA-267）：父行缺失或成环
+// （构造上不可达，防御）时以已到的最深行为根。
 func (m *Memory) ListPendingDecisions(_ context.Context) ([]PendingDecision, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -198,6 +200,15 @@ func (m *Memory) ListPendingDecisions(_ context.Context) ([]PendingDecision, err
 			ExternalIssueKey: d.ExternalIssueKey, Assignee: d.Assignee, Priority: d.Priority,
 			CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 		}
+		root := d
+		for i := 0; root.ParentID != "" && i < len(m.deliveries); i++ {
+			parent, ok := m.deliveries[root.ParentID]
+			if !ok {
+				break
+			}
+			root = parent
+		}
+		row.RootExternalIssueID = root.ExternalIssueID
 		if p, ok := m.projects[d.ProjectID]; ok {
 			row.ProjectName = p.Name
 		}

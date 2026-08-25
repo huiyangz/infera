@@ -46,6 +46,7 @@ describe('decisions API client（契约冻结于 INFERA-108 T01）', () => {
         external_issue_key: 'INFERA-108',
         assignee: 'agent:7bc775bc-db05-47bc-8f45-5c3baecc3fe3',
         priority: '',
+        source: 'web', // INFERA-267 加法扩展：''=无来源/不可解析
         created_at: '2026-08-22T05:00:00Z',
         updated_at: '2026-08-22T05:10:00Z',
       },
