@@ -20,7 +20,11 @@ import type {
   TaskChild,
   TaskGroupRow,
 } from '@/lib/infera-types'
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import {
+  Sidebar,
+  SidebarInset,
+  SidebarProvider,
+} from '@/components/ui/sidebar'
 import { createProjectRequirement } from './api'
 import { ProjectTasks } from './project-tasks'
 
@@ -134,19 +138,42 @@ function makeGroup(overrides: Partial<TaskGroupRow> = {}): TaskGroupRow {
   }
 }
 
+/** 侧栏变体（与 src/context/layout-provider.tsx 的 Variant 同源，
+ *  应用默认 DEFAULT_VARIANT = 'inset'） */
+type SidebarVariant = 'inset' | 'sidebar' | 'floating'
+
+/**
+ * 与 AuthenticatedLayout 的 SidebarInset 相同的高度锁类（INFERA-271）：
+ * 后代带 data-layout='fixed' 时锁 h-svh，inset 变体（peer m-2 上下共
+ * 16px 边距）下锁 calc(100svh - 1rem) 抵掉边距。该类在布局组件内联，
+ * 无法 import 复用；layout 组件为硬边界不可改，这里镜像内联值——
+ * 布局侧若调整需同步此处。
+ */
+const FIXED_LAYOUT_INSET_CLASS =
+  '@container/content has-data-[layout=fixed]:h-svh peer-data-[variant=inset]:has-data-[layout=fixed]:h-[calc(100svh-(var(--spacing)*4))]'
+
 async function renderProjectTasks(
   project: Project,
-  groups: TaskGroupRow[]
+  groups: TaskGroupRow[],
+  opts: { sidebarVariant?: SidebarVariant } = {}
 ): Promise<RenderResult> {
   vi.mocked(getProject).mockResolvedValue(project)
   vi.mocked(listProjectTaskGroups).mockResolvedValue(groups)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
+  // 带 sidebarVariant 时走真实应用布局路径（INFERA-271）：真实 Sidebar peer
+  // 把 data-variant 落到 DOM，SidebarInset 的 md:peer-data-[variant=inset]:m-2
+  // 边距才会在 md+ 生效。无 peer 时边距永不生效——滚动断言走那条路径
+  // 等于没验证真实布局（INFERA-270 审查 blocker/major 同根因）。
+  const { sidebarVariant } = opts
   return await render(
     <QueryClientProvider client={queryClient}>
       <SidebarProvider>
-        <SidebarInset>
+        {sidebarVariant && <Sidebar variant={sidebarVariant} />}
+        <SidebarInset
+          className={sidebarVariant ? FIXED_LAYOUT_INSET_CLASS : undefined}
+        >
           <ProjectTasks projectId={project.id} />
         </SidebarInset>
       </SidebarProvider>
@@ -684,9 +711,12 @@ describe('ProjectTasks 页内一级导航（INFERA-248：任务页渲染 tab 条
   })
 })
 
-/** 标签 fixture（INFERA-220）：Multica 标签库的真实三色——auto/候选/情报 */
+/** 标签 fixture（INFERA-220）：Multica 标签库的真实色值。auto/文档 为本视图
+ *  可见标签；候选/情报 是需求挖掘域分类，本视图不渲染（INFERA-261，由
+ *  「不渲染情报候选」describe 单独覆盖） */
 const LABELS = {
   auto: { name: 'auto', color: '#22c55e' },
+  docs: { name: '文档', color: '#eab308' },
   candidate: { name: '候选', color: '#a855f7' },
   intel: { name: '情报', color: '#3b82f6' },
 }
@@ -731,7 +761,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
   it('AC1-a: 父任务卡片显示标签 chip，名称与底色（hex 原值）与后端一致', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([LABELS.auto, LABELS.candidate], [])
+      labeledGroupsFixture([LABELS.auto, LABELS.docs], [])
     )
     await waitForTasks(screen, '本地任务')
 
@@ -739,7 +769,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
       .element(screen.getByText('auto', { exact: true }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('候选', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
     const chip = (await screen.getByText('auto', { exact: true }).element())!
     expect(getComputedStyle(chip).backgroundColor).toBe('rgb(34, 197, 94)')
@@ -748,20 +778,20 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
   it('AC1-b: 子任务行同样显示标签 chip', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([], [LABELS.intel])
+      labeledGroupsFixture([], [LABELS.docs])
     )
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '同步子任务甲')
 
     await expect
-      .element(screen.getByText('情报', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
   })
 
   it('AC2: 同步来源的交付（external 标记）同样显示标签', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([LABELS.auto], [LABELS.candidate])
+      labeledGroupsFixture([LABELS.auto], [LABELS.docs])
     )
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '同步子任务甲')
@@ -771,7 +801,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
       .element(screen.getByText('auto', { exact: true }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('候选', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
   })
 
@@ -797,6 +827,208 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
     const chip = document.querySelector('[data-slot="label-chip"]')!
     expect(chip.getAttribute('title')).toBe(long)
     expect(chip.scrollWidth).toBeGreaterThan(chip.clientWidth)
+  })
+})
+
+/** 足够长的父任务列表：左栏内容高过自身可视高度，才会触发栏内滚动 */
+function longListFixture(count = 40): TaskGroupRow[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeGroup({ id: `g-long-${i}`, title: `长列表任务 ${String(i + 1).padStart(2, '0')}` })
+  )
+}
+
+/** 右栏内容超高：单个父任务带大量子任务，详情卡高过右栏可视高度 */
+function tallDetailFixture(count = 40): TaskGroupRow[] {
+  return [
+    makeGroup({
+      id: 'g-tall',
+      title: '多子任务父任务',
+      child_total: count,
+      child_completed: 0,
+      stages: [
+        {
+          stage: 1,
+          tasks: Array.from({ length: count }, (_, i) =>
+            makeChild({
+              id: `c-tall-${i}`,
+              title: `右栏子任务 ${String(i + 1).padStart(2, '0')}`,
+              current_stage: '',
+              external_issue_key: `INFERA-${100 + i}`,
+            })
+          ),
+        },
+      ],
+    }),
+  ]
+}
+
+/** 滚动收敛断言用的三个锚点元素（渲染完成后才可取） */
+const masterPane = () =>
+  document.querySelector("[data-slot='task-master-list']") as HTMLElement
+const detailPane = () =>
+  document.querySelector("[data-slot='task-detail-pane']") as HTMLElement
+const tabsNav = () =>
+  document.querySelector("nav[aria-label='项目导航']") as HTMLElement
+
+describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab 头与右栏不动）', () => {
+  // INFERA-271：滚动断言一律走真实布局路径（真实 variant='inset' Sidebar
+  // peer + 高度锁），使 SidebarInset 的 inset 边距真正生效——否则断言验证
+  // 的不是应用默认布局（DEFAULT_VARIANT = 'inset'），测试绿但真实页面仍滚
+  it('AC1-a: 整页锁定一屏，不产生文档级滚动（默认 inset 布局，含 m-2 边距）', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture(), {
+      sidebarVariant: 'inset',
+    })
+    await waitForTasks(screen, '长列表任务 01')
+
+    // 前置钉死：inset 边距确已生效（m-2 → 上下各 8px）。peer 缺失时边距为 0，
+    // 下方断言会退化成空转（测试绿但没验证真实布局），这里先把它变成显式失败
+    const insetEl = document.querySelector(
+      "[data-slot='sidebar-inset']"
+    ) as HTMLElement
+    const insetCs = getComputedStyle(insetEl)
+    expect(insetCs.marginTop).toBe('8px')
+    expect(insetCs.marginBottom).toBe('8px')
+
+    const de = document.documentElement
+    expect(de.scrollHeight).toBeLessThanOrEqual(de.clientHeight + 1)
+    expect(de.scrollTop).toBe(0)
+
+    // tab 头完整落在视口内（不因列表过长被顶出屏幕）
+    const navRect = tabsNav().getBoundingClientRect()
+    expect(navRect.bottom).toBeGreaterThan(0)
+    expect(navRect.bottom).toBeLessThanOrEqual(window.innerHeight)
+  })
+
+  it('AC1-b: 左栏自身是滚动容器，长列表在栏内溢出而非撑高页面', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture(), {
+      sidebarVariant: 'inset',
+    })
+    await waitForTasks(screen, '长列表任务 01')
+
+    const master = masterPane()
+    expect(getComputedStyle(master).overflowY).toBe('auto')
+    expect(master.scrollHeight).toBeGreaterThan(master.clientHeight)
+  })
+
+  it('AC1-c: 左栏滚到底不再外溢滚动链，顶部 tab 头与右栏面板位置不动', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture(), {
+      sidebarVariant: 'inset',
+    })
+    await waitForTasks(screen, '长列表任务 01')
+
+    const master = masterPane()
+    const nav = tabsNav()
+    const detail = detailPane()
+    const navBefore = nav.getBoundingClientRect()
+    const detailBefore = detail.getBoundingClientRect()
+
+    // 直接滚到底（scrollTop 赋最大值）：列表末端到达，滚动链不外溢到文档
+    master.scrollTop = master.scrollHeight
+    expect(master.scrollTop).toBeGreaterThan(0)
+    expect(master.scrollTop).toBe(master.scrollHeight - master.clientHeight)
+
+    // 左栏滚动不外溢：文档不动，锚点元素 rect 逐轴不变
+    expect(document.documentElement.scrollTop).toBe(0)
+    const navAfter = nav.getBoundingClientRect()
+    expect(navAfter.top).toBe(navBefore.top)
+    expect(navAfter.bottom).toBe(navBefore.bottom)
+    const detailAfter = detail.getBoundingClientRect()
+    expect(detailAfter.top).toBe(detailBefore.top)
+    expect(detailAfter.bottom).toBe(detailBefore.bottom)
+  })
+
+  it('AC2: 右栏自身是滚动容器，内容超高时栏内滚动、tab 头不动', async () => {
+    const screen = await renderProjectTasks(makeProject(), tallDetailFixture(), {
+      sidebarVariant: 'inset',
+    })
+    await waitForTasks(screen, '右栏子任务 01')
+
+    const detail = detailPane()
+    expect(getComputedStyle(detail).overflowY).toBe('auto')
+    expect(detail.scrollHeight).toBeGreaterThan(detail.clientHeight)
+
+    const nav = tabsNav()
+    const navBefore = nav.getBoundingClientRect()
+    detail.scrollTop = 80
+    expect(detail.scrollTop).toBeGreaterThan(0)
+    expect(document.documentElement.scrollTop).toBe(0)
+    expect(nav.getBoundingClientRect().top).toBe(navBefore.top)
+  })
+
+  // INFERA-271 AC2：sidebar / floating 变体无 inset 边距（高度锁走 h-svh），
+  // 修复不得给这两种变体引入新的页面级滚动
+  it.each(['sidebar', 'floating'] as const)(
+    '变体无回归: %s 布局下同样不产生文档级滚动',
+    async (variant) => {
+      const screen = await renderProjectTasks(makeProject(), longListFixture(), {
+        sidebarVariant: variant,
+      })
+      await waitForTasks(screen, '长列表任务 01')
+
+      // 该变体确实无 inset 边距（区分于 inset 路径的 8px）
+      const insetEl = document.querySelector(
+        "[data-slot='sidebar-inset']"
+      ) as HTMLElement
+      const insetCs = getComputedStyle(insetEl)
+      expect(insetCs.marginTop).toBe('0px')
+      expect(insetCs.marginBottom).toBe('0px')
+
+      const de = document.documentElement
+      expect(de.scrollHeight).toBeLessThanOrEqual(de.clientHeight + 1)
+      expect(de.scrollTop).toBe(0)
+
+      const master = masterPane()
+      expect(getComputedStyle(master).overflowY).toBe('auto')
+      expect(master.scrollHeight).toBeGreaterThan(master.clientHeight)
+    }
+  )
+})
+
+describe('ProjectTasks 不渲染「情报」「候选」（INFERA-261：需求挖掘域分类不进项目任务页）', () => {
+  it('AC3-a: 父任务卡片不渲染「情报」「候选」chip，其余标签照常显示', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.auto, LABELS.candidate, LABELS.intel], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    await expect
+      .element(screen.getByText('auto', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('候选', { exact: true }).query()).toBeNull()
+    expect(await screen.getByText('情报', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3-b: 子任务行同样不渲染「情报」「候选」chip', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture(
+        [LABELS.auto],
+        [LABELS.candidate, LABELS.intel, LABELS.auto]
+      )
+    )
+    await selectParent(screen, '同步父任务')
+    await waitForTasks(screen, '同步子任务甲')
+
+    // 父卡与子行都只剩 auto；两枚挖掘域标签在整页任何位置都不出现
+    const chips = Array.from(
+      document.querySelectorAll("[data-slot='label-chip']")
+    )
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips.map((c) => c.textContent)).toEqual(['auto', 'auto'])
+    expect(await screen.getByText('候选', { exact: true }).query()).toBeNull()
+    expect(await screen.getByText('情报', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3-c: 标签全为「情报」「候选」时不留空壳 chip 行（不占位）', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.intel, LABELS.candidate], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    expect(document.querySelector('[data-slot="label-chip"]')).toBeNull()
+    expect(document.querySelector('[data-slot="label-chip-row"]')).toBeNull()
   })
 })
 
