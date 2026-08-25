@@ -684,9 +684,12 @@ describe('ProjectTasks 页内一级导航（INFERA-248：任务页渲染 tab 条
   })
 })
 
-/** 标签 fixture（INFERA-220）：Multica 标签库的真实三色——auto/候选/情报 */
+/** 标签 fixture（INFERA-220）：Multica 标签库的真实色值。auto/文档 为本视图
+ *  可见标签；候选/情报 是需求挖掘域分类，本视图不渲染（INFERA-261，由
+ *  「不渲染情报候选」describe 单独覆盖） */
 const LABELS = {
   auto: { name: 'auto', color: '#22c55e' },
+  docs: { name: '文档', color: '#eab308' },
   candidate: { name: '候选', color: '#a855f7' },
   intel: { name: '情报', color: '#3b82f6' },
 }
@@ -731,7 +734,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
   it('AC1-a: 父任务卡片显示标签 chip，名称与底色（hex 原值）与后端一致', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([LABELS.auto, LABELS.candidate], [])
+      labeledGroupsFixture([LABELS.auto, LABELS.docs], [])
     )
     await waitForTasks(screen, '本地任务')
 
@@ -739,7 +742,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
       .element(screen.getByText('auto', { exact: true }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('候选', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
     const chip = (await screen.getByText('auto', { exact: true }).element())!
     expect(getComputedStyle(chip).backgroundColor).toBe('rgb(34, 197, 94)')
@@ -748,20 +751,20 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
   it('AC1-b: 子任务行同样显示标签 chip', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([], [LABELS.intel])
+      labeledGroupsFixture([], [LABELS.docs])
     )
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '同步子任务甲')
 
     await expect
-      .element(screen.getByText('情报', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
   })
 
   it('AC2: 同步来源的交付（external 标记）同样显示标签', async () => {
     const screen = await renderProjectTasks(
       makeProject(),
-      labeledGroupsFixture([LABELS.auto], [LABELS.candidate])
+      labeledGroupsFixture([LABELS.auto], [LABELS.docs])
     )
     await selectParent(screen, '同步父任务')
     await waitForTasks(screen, '同步子任务甲')
@@ -771,7 +774,7 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
       .element(screen.getByText('auto', { exact: true }))
       .toBeInTheDocument()
     await expect
-      .element(screen.getByText('候选', { exact: true }))
+      .element(screen.getByText('文档', { exact: true }))
       .toBeInTheDocument()
   })
 
@@ -797,6 +800,158 @@ describe('ProjectTasks 标签展示（INFERA-220：交付列表渲染 Multica �
     const chip = document.querySelector('[data-slot="label-chip"]')!
     expect(chip.getAttribute('title')).toBe(long)
     expect(chip.scrollWidth).toBeGreaterThan(chip.clientWidth)
+  })
+})
+
+/** 足够长的父任务列表：左栏内容高过自身可视高度，才会触发栏内滚动 */
+function longListFixture(count = 40): TaskGroupRow[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeGroup({ id: `g-long-${i}`, title: `长列表任务 ${String(i + 1).padStart(2, '0')}` })
+  )
+}
+
+/** 右栏内容超高：单个父任务带大量子任务，详情卡高过右栏可视高度 */
+function tallDetailFixture(count = 40): TaskGroupRow[] {
+  return [
+    makeGroup({
+      id: 'g-tall',
+      title: '多子任务父任务',
+      child_total: count,
+      child_completed: 0,
+      stages: [
+        {
+          stage: 1,
+          tasks: Array.from({ length: count }, (_, i) =>
+            makeChild({
+              id: `c-tall-${i}`,
+              title: `右栏子任务 ${String(i + 1).padStart(2, '0')}`,
+              current_stage: '',
+              external_issue_key: `INFERA-${100 + i}`,
+            })
+          ),
+        },
+      ],
+    }),
+  ]
+}
+
+/** 滚动收敛断言用的三个锚点元素（渲染完成后才可取） */
+const masterPane = () =>
+  document.querySelector("[data-slot='task-master-list']") as HTMLElement
+const detailPane = () =>
+  document.querySelector("[data-slot='task-detail-pane']") as HTMLElement
+const tabsNav = () =>
+  document.querySelector("nav[aria-label='项目导航']") as HTMLElement
+
+describe('ProjectTasks 滚动区域收敛（INFERA-261：仅左栏滚动，tab 头与右栏不动）', () => {
+  it('AC1-a: 整页锁定一屏，不产生文档级滚动', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture())
+    await waitForTasks(screen, '长列表任务 01')
+
+    const de = document.documentElement
+    expect(de.scrollHeight).toBeLessThanOrEqual(de.clientHeight + 1)
+    expect(de.scrollTop).toBe(0)
+
+    // tab 头完整落在视口内（不因列表过长被顶出屏幕）
+    const navRect = tabsNav().getBoundingClientRect()
+    expect(navRect.bottom).toBeGreaterThan(0)
+    expect(navRect.bottom).toBeLessThanOrEqual(window.innerHeight)
+  })
+
+  it('AC1-b: 左栏自身是滚动容器，长列表在栏内溢出而非撑高页面', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture())
+    await waitForTasks(screen, '长列表任务 01')
+
+    const master = masterPane()
+    expect(getComputedStyle(master).overflowY).toBe('auto')
+    expect(master.scrollHeight).toBeGreaterThan(master.clientHeight)
+  })
+
+  it('AC1-c: 滚动左栏时顶部 tab 头与右栏面板位置不动', async () => {
+    const screen = await renderProjectTasks(makeProject(), longListFixture())
+    await waitForTasks(screen, '长列表任务 01')
+
+    const master = masterPane()
+    const nav = tabsNav()
+    const detail = detailPane()
+    const navBefore = nav.getBoundingClientRect()
+    const detailBefore = detail.getBoundingClientRect()
+
+    master.scrollTop = 120
+    expect(master.scrollTop).toBeGreaterThan(0)
+
+    // 左栏滚动不外溢：文档不动，锚点元素 rect 逐轴不变
+    expect(document.documentElement.scrollTop).toBe(0)
+    const navAfter = nav.getBoundingClientRect()
+    expect(navAfter.top).toBe(navBefore.top)
+    expect(navAfter.bottom).toBe(navBefore.bottom)
+    const detailAfter = detail.getBoundingClientRect()
+    expect(detailAfter.top).toBe(detailBefore.top)
+    expect(detailAfter.bottom).toBe(detailBefore.bottom)
+  })
+
+  it('AC2: 右栏自身是滚动容器，内容超高时栏内滚动、tab 头不动', async () => {
+    const screen = await renderProjectTasks(makeProject(), tallDetailFixture())
+    await waitForTasks(screen, '右栏子任务 01')
+
+    const detail = detailPane()
+    expect(getComputedStyle(detail).overflowY).toBe('auto')
+    expect(detail.scrollHeight).toBeGreaterThan(detail.clientHeight)
+
+    const nav = tabsNav()
+    const navBefore = nav.getBoundingClientRect()
+    detail.scrollTop = 80
+    expect(detail.scrollTop).toBeGreaterThan(0)
+    expect(document.documentElement.scrollTop).toBe(0)
+    expect(nav.getBoundingClientRect().top).toBe(navBefore.top)
+  })
+})
+
+describe('ProjectTasks 不渲染「情报」「候选」（INFERA-261：需求挖掘域分类不进项目任务页）', () => {
+  it('AC3-a: 父任务卡片不渲染「情报」「候选」chip，其余标签照常显示', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.auto, LABELS.candidate, LABELS.intel], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    await expect
+      .element(screen.getByText('auto', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('候选', { exact: true }).query()).toBeNull()
+    expect(await screen.getByText('情报', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3-b: 子任务行同样不渲染「情报」「候选」chip', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture(
+        [LABELS.auto],
+        [LABELS.candidate, LABELS.intel, LABELS.auto]
+      )
+    )
+    await selectParent(screen, '同步父任务')
+    await waitForTasks(screen, '同步子任务甲')
+
+    // 父卡与子行都只剩 auto；两枚挖掘域标签在整页任何位置都不出现
+    const chips = Array.from(
+      document.querySelectorAll("[data-slot='label-chip']")
+    )
+    expect(chips.length).toBeGreaterThan(0)
+    expect(chips.map((c) => c.textContent)).toEqual(['auto', 'auto'])
+    expect(await screen.getByText('候选', { exact: true }).query()).toBeNull()
+    expect(await screen.getByText('情报', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3-c: 标签全为「情报」「候选」时不留空壳 chip 行（不占位）', async () => {
+    const screen = await renderProjectTasks(
+      makeProject(),
+      labeledGroupsFixture([LABELS.intel, LABELS.candidate], [])
+    )
+    await waitForTasks(screen, '本地任务')
+
+    expect(document.querySelector('[data-slot="label-chip"]')).toBeNull()
+    expect(document.querySelector('[data-slot="label-chip-row"]')).toBeNull()
   })
 })
 

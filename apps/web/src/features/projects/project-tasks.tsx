@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { getProject, listProjectTaskGroups } from '@/lib/infera-api'
 import {
+  type DeliveryLabel,
   type DeliveryStatus,
   type TaskChild,
   type TaskGroupRow,
@@ -31,6 +32,18 @@ import { ProjectTabs } from './dashboard/project-tabs'
 import { CreateRequirementDialog } from './requirement-create-dialog'
 
 /**
+ * 本视图不渲染的标签名（INFERA-261）：「情报」「候选」是需求挖掘域的分类
+ * 口径，属于发现页；项目任务页只讲任务，两类标签在这里是噪音，直接不渲染
+ * （不加开关/配置项）。按名匹配，任务本体与计数不受影响。
+ */
+const HIDDEN_LABEL_NAMES = new Set(['情报', '候选'])
+
+/** 过滤掉挖掘域标签后的可见标签：全被滤掉时给空数组（chip 行渲染 null，不占位） */
+function visibleLabels(labels?: DeliveryLabel[]): DeliveryLabel[] {
+  return (labels ?? []).filter((l) => l && !HIDDEN_LABEL_NAMES.has(l.name))
+}
+
+/**
  * 项目任务列表页（INFERA-173 左右分栏 master-detail）：左栏为主/子任务树
  * （INFERA-229）——每个父任务一条（含无子任务的独立任务），其子任务以
  * 缩进 + 竖向连线的紧凑行组挂在父行之下；主/子以图标区分（父行状态图标
@@ -39,6 +52,8 @@ import { CreateRequirementDialog } from './requirement-create-dialog'
  * 父卡片 + 子任务按阶段分组的纵向列表（「子任务 n/n」进度头、「阶段 N」
  * 分组标题（stage 0 =「无阶段」）、缩进的单行子任务行：状态图标 + 粗体
  * issue key）。默认选中第一个父任务。
+ * 滚动骨架（INFERA-261）：整页锁一屏，只有左右两栏各自内部滚动——tab 头
+ * 与右栏不随左侧列表滚动移动。标签口径同需求：本视图不渲染「情报」「候选」。
  * 唯一数据源 GET /api/projects/{id}/task-groups（契约冻结于
  * server/internal/api/taskgroups.go）；只读，每条可点击进入任务详情。
  * 口径统一为「任务/父任务/子任务」。
@@ -61,7 +76,9 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
   const selected = rows.find((g) => g.id === selectedId) ?? rows[0] ?? null
 
   return (
-    <>
+    // 页面骨架（INFERA-261）：整页锁定一屏（头部 → tab 头 → 内容区），文档
+    // 不再滚动；滚动收敛进左右两栏各自内部，tab 头与右栏不随列表滚动移动
+    <div className='flex h-svh flex-col'>
       <Header fixed>
         <div className='flex w-full min-w-0 items-start justify-between gap-4'>
           <div className='flex min-w-0 flex-col gap-1'>
@@ -89,74 +106,83 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
       </Header>
 
       {/* 项目域页内一级导航（INFERA-248）：任务页与总览页共用同一条 tab，
-          「项目任务」为当前页——否则任务页无法切回总览 */}
+          「项目任务」为当前页——否则任务页无法切回总览。
+          骨架内位于内容区之前，随页钉住不参与滚动 */}
       <ProjectTabs projectId={projectId} active='tasks' />
 
-      <div className='mx-auto w-full max-w-6xl p-6'>
-        {isLoading ? (
-          <div className='space-y-4'>
-            <Skeleton className='h-24 w-full rounded-lg' />
-            <Skeleton className='h-24 w-full rounded-lg' />
-          </div>
-        ) : !rows.length ? (
-          <div className='flex flex-col items-center gap-2 p-16 text-center'>
-            <Inbox className='size-5 text-muted-foreground' />
-            <p className='text-sm text-muted-foreground'>还没有任务</p>
-          </div>
-        ) : (
-          <div className='flex flex-col gap-6 lg:flex-row'>
-            {/* 左栏：主/子任务树（master）。窄屏堆叠为上列表下详情 */}
-            <aside
-              data-slot='task-master-list'
-              className='w-full shrink-0 lg:w-72 lg:border-e lg:pe-6'
-            >
-              <ul className='space-y-1'>
-                {rows.map((g) => {
-                  // 阶段分组语义由右栏承载；左栏按 stages 顺序展平成紧凑树
-                  const children = g.stages.flatMap((s) => s.tasks)
-                  return (
-                    <li key={g.id}>
-                      <ParentListItem
-                        g={g}
-                        selected={selected?.id === g.id}
-                        onSelect={() => setSelectedId(g.id)}
-                      />
-                      {children.length > 0 && (
-                        <ChildTaskList
-                          tasks={children}
-                          active={selected?.id === g.id}
+      {/* 内容区：窄屏（<lg 两栏堆叠）整区滚动；lg 起锁高，滚动只发生在两栏内部 */}
+      <div className='min-h-0 flex-1 overflow-y-auto lg:overflow-hidden'>
+        <div className='mx-auto w-full max-w-6xl p-6 lg:h-full'>
+          {isLoading ? (
+            <div className='space-y-4'>
+              <Skeleton className='h-24 w-full rounded-lg' />
+              <Skeleton className='h-24 w-full rounded-lg' />
+            </div>
+          ) : !rows.length ? (
+            <div className='flex flex-col items-center gap-2 p-16 text-center'>
+              <Inbox className='size-5 text-muted-foreground' />
+              <p className='text-sm text-muted-foreground'>还没有任务</p>
+            </div>
+          ) : (
+            <div className='flex flex-col gap-6 lg:h-full lg:flex-row'>
+              {/* 左栏：主/子任务树（master）。窄屏堆叠为上列表下详情；lg 起
+                  栏内滚动——列表再长也只滚自己，不推走 tab 头与右栏 */}
+              <aside
+                data-slot='task-master-list'
+                className='w-full shrink-0 lg:w-72 lg:overflow-y-auto lg:border-e lg:pe-6'
+              >
+                <ul className='space-y-1'>
+                  {rows.map((g) => {
+                    // 阶段分组语义由右栏承载；左栏按 stages 顺序展平成紧凑树
+                    const children = g.stages.flatMap((s) => s.tasks)
+                    return (
+                      <li key={g.id}>
+                        <ParentListItem
+                          g={g}
+                          selected={selected?.id === g.id}
                           onSelect={() => setSelectedId(g.id)}
                         />
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </aside>
-            {/* 右栏：选中父任务的父子任务树（detail），只含该父任务及其子任务 */}
-            <div data-slot='task-detail-pane' className='min-w-0 flex-1'>
-              {selected && (
-                <ParentTaskCard
-                  g={selected}
-                  expanded={!collapsed.has(selected.id)}
-                  onToggle={
-                    selected.child_total
-                      ? () =>
-                          setCollapsed((prev) => {
-                            const next = new Set(prev)
-                            if (next.has(selected.id)) next.delete(selected.id)
-                            else next.add(selected.id)
-                            return next
-                          })
-                      : undefined
-                  }
-                />
-              )}
+                        {children.length > 0 && (
+                          <ChildTaskList
+                            tasks={children}
+                            active={selected?.id === g.id}
+                            onSelect={() => setSelectedId(g.id)}
+                          />
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </aside>
+              {/* 右栏：选中父任务的父子任务树（detail），只含该父任务及其子任务；
+                  不随左栏滚动移动，仅自身内容溢出时栏内滚动 */}
+              <div
+                data-slot='task-detail-pane'
+                className='min-w-0 flex-1 lg:overflow-y-auto'
+              >
+                {selected && (
+                  <ParentTaskCard
+                    g={selected}
+                    expanded={!collapsed.has(selected.id)}
+                    onToggle={
+                      selected.child_total
+                        ? () =>
+                            setCollapsed((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(selected.id)) next.delete(selected.id)
+                              else next.add(selected.id)
+                              return next
+                            })
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -265,6 +291,8 @@ function ParentTaskCard({
 }) {
   const assignee = assigneeLabel(g.assignee)
   const hasChildren = g.child_total > 0
+  // 本视图可见标签（挖掘域两类被滤掉）：为空且无徽标时整行不渲染，不留空壳
+  const labels = visibleLabels(g.labels)
   return (
     <article className='rounded-lg border bg-card'>
       <div className='flex items-start'>
@@ -305,12 +333,13 @@ function ParentTaskCard({
               {timeAgo(g.updated_at)}
             </span>
           </span>
-          {(g.labels?.length ||
+          {(labels.length ||
             g.pending_gate ||
             (g.split_mode && g.merge_state === 'conflict')) && (
             <span className='mt-1.5 flex flex-wrap items-center gap-1.5'>
-              {/* 标签 chip（INFERA-220）：Multica hex 原值底色，空标签不占位 */}
-              <LabelChipRow labels={g.labels} />
+              {/* 标签 chip（INFERA-220）：Multica hex 原值底色，空标签不占位。
+                  挖掘域「情报」「候选」在本视图不渲染（INFERA-261） */}
+              <LabelChipRow labels={labels} />
               {g.pending_gate && (
                 <span className='inline-block rounded-full bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground'>
                   待审批
@@ -404,8 +433,9 @@ function ChildTaskRow({ d }: { d: TaskChild }) {
         <span>{d.title}</span>
         {d.pending_gate && <span> · 待审批</span>}
       </span>
-      {/* 单行式行内标签：保持单行，超长名由 chip 截断（INFERA-220） */}
-      <LabelChipRow labels={d.labels} nowrap />
+      {/* 单行式行内标签：保持单行，超长名由 chip 截断（INFERA-220）；
+          挖掘域「情报」「候选」在本视图不渲染（INFERA-261） */}
+      <LabelChipRow labels={visibleLabels(d.labels)} nowrap />
       <span className='shrink-0 text-[11px] tabular-nums text-muted-foreground'>
         {timeAgo(d.updated_at)}
       </span>
