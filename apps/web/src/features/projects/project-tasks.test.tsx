@@ -48,15 +48,18 @@ vi.mock('sonner', () => ({
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
-  // Link 脱离 Router 上下文无法渲染，用 <a> 替身（带 $id 参数替换）
+  // Link 脱离 Router 上下文无法渲染，用 <a> 替身（带 $id 参数替换）；
+  // to/params/activeOptions 为 Link 自有 props，真实实现不透传 DOM，替身同样剥掉
   const MockLink = ({
     children,
     to,
     params,
+    activeOptions: _activeOptions,
     ...props
   }: React.ComponentProps<'a'> & {
     to?: string
     params?: Record<string, string>
+    activeOptions?: unknown
   }) => (
     <a href={(to ?? '#').replace('$id', params?.id ?? '')} {...props}>
       {children}
@@ -653,6 +656,29 @@ describe('ProjectTasks 项目任务页（L202608222116-1-T02 阶段分组语义�
 
     const back = await screen.getByRole('link', { name: '演示项目' }).element()
     expect(back?.getAttribute('href')).toBe('/projects/p1')
+  })
+})
+
+describe('ProjectTasks 页内一级导航（INFERA-248：任务页渲染 tab 条，可切回总览）', () => {
+  it('AC1: 任务页渲染「项目导航」tab 条——总览 / 项目任务两入口，总览链回 /projects/{id}', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const nav = await screen.getByRole('navigation', { name: '项目导航' }).element()
+    const links = nav?.querySelectorAll('a') ?? []
+    expect(links.length).toBe(2)
+    expect(links[0]?.getAttribute('href')).toBe('/projects/p1')
+    expect(links[1]?.getAttribute('href')).toBe('/projects/p1/tasks')
+  })
+
+  it('AC2: 当前页为项目任务——「项目任务」tab 激活、「总览」待切换（与路由一致）', async () => {
+    const screen = await renderProjectTasks(makeProject(), groupsFixture())
+    await waitForTasks(screen, '本地任务')
+
+    const tasks = await screen.getByRole('link', { name: /项目任务/ }).element()
+    expect(tasks?.getAttribute('aria-current')).toBe('page')
+    const overview = await screen.getByRole('link', { name: /总览/ }).element()
+    expect(overview?.getAttribute('aria-current')).toBeNull()
   })
 })
 

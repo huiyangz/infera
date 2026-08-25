@@ -9,11 +9,13 @@ import { cleanup, render } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
 import {
   getProject,
+  getProjectStageRuns,
   getProjectStats,
   listProjectTaskGroups,
   listProjects,
   me,
 } from '@/lib/infera-api'
+import { getTaskSyncStatus } from '@/features/task-sync/api'
 import type {
   Delivery,
   Project,
@@ -36,6 +38,17 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
     getProject: vi.fn(),
     getProjectStats: vi.fn(),
     listProjectTaskGroups: vi.fn(),
+    getProjectStageRuns: vi.fn(),
+  }
+})
+
+vi.mock('@/features/task-sync/api', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/features/task-sync/api')>()
+  return {
+    ...actual,
+    // 侧栏自动同步状态轮询与本文件断言无关——mock 掉，避免真实 fetch 打到 vite 代理报错
+    getTaskSyncStatus: vi.fn(),
   }
 })
 
@@ -134,6 +147,17 @@ async function renderApp(initialPath: string) {
     last_synced_at: null,
   })
   vi.mocked(listProjectTaskGroups).mockResolvedValue([makeTaskGroup()])
+  // 时序接口与本文件断言无关——mock 掉，避免真实 fetch 打到 vite 代理报错
+  vi.mocked(getProjectStageRuns).mockResolvedValue({
+    project_id: 'p1',
+    runs: [],
+    by_stage: [],
+  })
+  vi.mocked(getTaskSyncStatus).mockResolvedValue({
+    lastSyncAt: null,
+    status: 'idle',
+    error: '',
+  })
   vi.mocked(listRequirements).mockResolvedValue([])
   vi.mocked(getRequirement).mockResolvedValue({
     id: 'r1',
@@ -219,6 +243,72 @@ describe('projects 域路由接线（INFERA-119）', () => {
       .element(screen.getByRole('link', { name: '项目任务' }).first())
       .toBeInTheDocument()
     expect(router.state.location.pathname).toBe('/projects/p1')
+  })
+})
+
+describe('项目详情 tab 双向切换（INFERA-248：总览 ⇄ 项目任务）', () => {
+  it('AC1-回归: 任务页渲染 tab 条，点击「总览」切回项目总览（URL 与内容一致）', async () => {
+    const { screen, router } = await renderApp('/projects/p1/tasks')
+    await expect
+      .element(
+        screen.getByText('本项目的父任务与子任务，子任务按阶段分组（只读）')
+      )
+      .toBeInTheDocument()
+
+    // 回归点：任务页此前没有 tab 条（INFERA-234 只给总览页加了导航）
+    await expect
+      .element(screen.getByRole('navigation', { name: '项目导航' }))
+      .toBeInTheDocument()
+
+    await screen.getByRole('link', { name: /总览/ }).click()
+
+    await expect
+      .element(screen.getByText('项目统计'))
+      .toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects/p1')
+  })
+
+  it('AC1-正向: 总览页点击「项目任务」tab 切到任务页（双向另一半）', async () => {
+    const { screen, router } = await renderApp('/projects/p1')
+    await expect
+      .element(screen.getByText('项目统计'))
+      .toBeInTheDocument()
+
+    await screen.getByRole('link', { name: /项目任务/ }).first().click()
+
+    await expect
+      .element(
+        screen.getByText('本项目的父任务与子任务，子任务按阶段分组（只读）')
+      )
+      .toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/projects/p1/tasks')
+  })
+
+  it('AC2: 当前路由与 tab 激活态一致——任务 URL 高亮「项目任务」，总览 URL 高亮「总览」', async () => {
+    const { screen: tasksPage } = await renderApp('/projects/p1/tasks')
+    await expect
+      .element(
+        tasksPage.getByText('本项目的父任务与子任务，子任务按阶段分组（只读）')
+      )
+      .toBeInTheDocument()
+    const tasksNav = await tasksPage.getByRole('navigation', {
+      name: '项目导航',
+    }).element()
+    const tasksLinks = tasksNav?.querySelectorAll('a') ?? []
+    expect(tasksLinks[1]?.getAttribute('aria-current')).toBe('page')
+    expect(tasksLinks[0]?.getAttribute('aria-current')).toBeNull()
+    await tasksPage.unmount()
+
+    const { screen: overviewPage } = await renderApp('/projects/p1')
+    await expect
+      .element(overviewPage.getByText('项目统计'))
+      .toBeInTheDocument()
+    const overviewNav = await overviewPage.getByRole('navigation', {
+      name: '项目导航',
+    }).element()
+    const overviewLinks = overviewNav?.querySelectorAll('a') ?? []
+    expect(overviewLinks[0]?.getAttribute('aria-current')).toBe('page')
+    expect(overviewLinks[1]?.getAttribute('aria-current')).toBeNull()
   })
 })
 

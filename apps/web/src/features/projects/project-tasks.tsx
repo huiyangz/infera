@@ -27,6 +27,7 @@ import { LabelChipRow } from '@/components/label-chip'
 import { StatusBadge } from '@/components/status-badge'
 import { Header } from '@/components/layout/header'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ProjectTabs } from './dashboard/project-tabs'
 import { CreateRequirementDialog } from './requirement-create-dialog'
 
 /**
@@ -86,6 +87,10 @@ export function ProjectTasks({ projectId }: { projectId: string }) {
           <CreateRequirementDialog projectId={projectId} />
         </div>
       </Header>
+
+      {/* 项目域页内一级导航（INFERA-248）：任务页与总览页共用同一条 tab，
+          「项目任务」为当前页——否则任务页无法切回总览 */}
+      <ProjectTabs projectId={projectId} active='tasks' />
 
       <div className='mx-auto w-full max-w-6xl p-6'>
         {isLoading ? (
