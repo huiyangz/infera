@@ -120,4 +120,20 @@ describe('KpiHeader（dashboard 头部统计区）', () => {
       await screen.getByText('任务总数', { exact: true }).query()
     ).toBeNull()
   })
+
+  it('stats 未就绪时骨架不触发 <p> 嵌套 <div> 的 DOM 嵌套报错（KpiTile 路径）', async () => {
+    // Skeleton 渲染为 <div>：KpiTile 里包它的外层若还是 <p>，React 会在
+    // 控制台报 "`<p>` cannot contain a nested `<div>`"（INFERA-301）。该
+    // 告警被 React 按组件去重，断言 console 会偶发漏报；这里直接锁定其
+    // 结构成因——骨架已渲染的前提下，KPI 网格内任何 <p> 都不得再包 <div>。
+    await render(<KpiHeader stats={undefined} />)
+
+    const grid = document.querySelector('[data-kpi-grid]')
+    expect(
+      grid?.querySelectorAll('[data-slot="skeleton"]').length
+    ).toBeGreaterThan(0)
+    grid?.querySelectorAll('p').forEach((p) => {
+      expect(p.querySelector('div')).toBeNull()
+    })
+  })
 })
