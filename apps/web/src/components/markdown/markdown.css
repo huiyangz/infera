@@ -1,0 +1,146 @@
+/*
+ * Markdown 渲染排版（DESIGN.md：墨/纸白、hairline 分隔、编辑式的克制层级）。
+ * 文档节点由 react-markdown 在运行时生成，标签不可枚举，Tailwind 的类名扫描
+ * 覆盖不到，所以这里用作用域类 + 元素选择器写。色值全部走 theme.css 语义
+ * token（--foreground / --border / --muted…），深色模式随 token 自动翻转。
+ */
+
+.md-render {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--foreground);
+  overflow-wrap: break-word;
+}
+
+/* 首尾不产生多余留白：组件嵌进信息卡时上下间距由卡片控制 */
+.md-render > :first-child {
+  margin-block-start: 0;
+}
+.md-render > :last-child {
+  margin-block-end: 0;
+}
+
+.md-render h1,
+.md-render h2,
+.md-render h3,
+.md-render h4,
+.md-render h5,
+.md-render h6 {
+  margin: 1.5em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+.md-render h1 {
+  font-size: 1.5rem;
+}
+.md-render h2 {
+  font-size: 1.25rem;
+}
+.md-render h3 {
+  font-size: 1.0625rem;
+}
+.md-render h4,
+.md-render h5,
+.md-render h6 {
+  font-size: 1rem;
+}
+
+.md-render p {
+  margin: 0.75em 0;
+}
+
+.md-render ul,
+.md-render ol {
+  margin: 0.75em 0;
+  padding-inline-start: 1.5em;
+}
+.md-render ul {
+  list-style: disc;
+}
+.md-render ol {
+  list-style: decimal;
+}
+.md-render li {
+  margin: 0.25em 0;
+}
+/* 嵌套列表不叠加外边距 */
+.md-render li > ul,
+.md-render li > ol {
+  margin: 0.25em 0;
+}
+
+.md-render a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border);
+}
+.md-render a:hover {
+  text-decoration-color: var(--foreground);
+}
+
+.md-render code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.md-render pre {
+  margin: 0.75em 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+  overflow-x: auto;
+}
+.md-render pre code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+}
+
+.md-render blockquote {
+  margin: 0.75em 0;
+  padding-inline-start: 1rem;
+  border-inline-start: 2px solid var(--border);
+  color: var(--muted-foreground);
+}
+.md-render blockquote > :first-child {
+  margin-block-start: 0;
+}
+.md-render blockquote > :last-child {
+  margin-block-end: 0;
+}
+
+.md-render table {
+  width: 100%;
+  margin: 0.75em 0;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.md-render th,
+.md-render td {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  text-align: start;
+}
+.md-render th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+.md-render hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.md-render img {
+  max-width: 100%;
+  border-radius: 8px;
+}
