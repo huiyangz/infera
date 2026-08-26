@@ -133,7 +133,11 @@ export function KpiHeader({ stats }: { stats?: RequirementStats }) {
   )
 }
 
-/** 单张 KPI 瓦片：label 恒占位（加载中不显示 label 文本，避免半成品排版） */
+/**
+ * 单张 KPI 瓦片：label 恒占位（加载中不显示 label 文本，避免半成品排版）。
+ * label/value 外层用 <div> 而非 <p>——加载态两者都要包 Skeleton（渲染为
+ * <div>），<p> 嵌套 <div> 属非法 DOM，React 会报嵌套错误（INFERA-301）。
+ */
 function KpiTile({
   label,
   loading,
@@ -147,17 +151,17 @@ function KpiTile({
 }) {
   return (
     <Card className='gap-1 px-4 py-4'>
-      <p className='text-xs text-muted-foreground'>
+      <div className='text-xs text-muted-foreground'>
         {loading ? <Skeleton className='h-3.5 w-12' /> : label}
-      </p>
-      <p
+      </div>
+      <div
         className={cn(
           'font-semibold tracking-[-0.3px] tabular-nums',
           valueClass
         )}
       >
         {children}
-      </p>
+      </div>
     </Card>
   )
 }
