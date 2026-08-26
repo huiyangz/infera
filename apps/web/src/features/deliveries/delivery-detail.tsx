@@ -46,6 +46,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
 import { LabelChipRow } from '@/components/label-chip'
 import { StatusBadge } from '@/components/status-badge'
+import { ChildProgressCard } from '@/features/deliveries/child-progress'
 import { LocalHandleButton } from '@/features/deliveries/local-handle-button'
 import {
   parkedAtLocalNode,
@@ -567,18 +568,15 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
           </Card>
         )}
 
-        {/* 子任务清单（拆分父专属） */}
+        {/* 子任务进度（INFERA-297）：只读聚合接口为唯一数据源，拆分父与
+            任务同步镜像父同样展示（无子任务时组件自判空态不渲染） */}
+        <ChildProgressCard deliveryId={deliveryId} />
+
+        {/* 子任务清单（拆分父专属；进度数字归上方聚合区，不再由平表自算） */}
         {delivery.split_mode && children.length > 0 && (
           <Card>
             <CardHeader className='pb-0'>
-              <div className='flex items-center justify-between'>
-                <CardTitle className='text-sm font-medium'>
-                  子任务清单
-                </CardTitle>
-                <span className='text-xs text-muted-foreground'>
-                  {kidsDone} / {children.length} 完成
-                </span>
-              </div>
+              <CardTitle className='text-sm font-medium'>子任务清单</CardTitle>
             </CardHeader>
             <CardContent>
               {children.map((c, i) => (

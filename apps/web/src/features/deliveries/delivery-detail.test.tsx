@@ -12,8 +12,8 @@ import {
 } from 'vitest'
 import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
-import { getDelivery } from '@/lib/infera-api'
-import type { Delivery } from '@/lib/infera-types'
+import { getDelivery, getChildProgress } from '@/lib/infera-api'
+import type { ChildProgress, Delivery } from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { DeliveryDetail } from './delivery-detail'
 
@@ -22,6 +22,26 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
   return {
     ...actual,
     getDelivery: vi.fn(),
+    // 进度聚合默认空（无子任务）：既有用例不渲染进度卡、无 query 噪音
+    getChildProgress: vi.fn().mockResolvedValue({
+      delivery_id: 'd1',
+      active_stage: null,
+      total: 0,
+      done: 0,
+      in_progress: 0,
+      in_review: 0,
+      blocked: 0,
+      todo: 0,
+      cancelled: 0,
+      by_status: {
+        active: 0,
+        queued: 0,
+        completed: 0,
+        blocked: 0,
+        cancelled: 0,
+      },
+      stages: [],
+    } satisfies ChildProgress),
     // useLocalNodes 依赖的两条查询（空绑定即可，不触发本机停车 UI）
     listAgents: vi.fn().mockResolvedValue([]),
     getProjectPipeline: vi.fn().mockResolvedValue({ nodes: [], bindings: {} }),
@@ -432,5 +452,175 @@ describe('DeliveryDetail 标签展示（INFERA-220：任务详情渲染 Multica 
       .toBeInTheDocument()
     const chips = document.querySelectorAll('[data-slot="label-chip"]')
     expect(chips).toHaveLength(1)
+  })
+})
+
+// —— 子任务进度区接入（INFERA-297：消费 L202608260142-1-T01 只读聚合接口） ——
+
+/** 单维度计数（后端契约：by_status 恒含五键） */
+function aggCounts(overrides: Record<string, number> = {}) {
+  return {
+    total: 0,
+    done: 0,
+    in_progress: 0,
+    in_review: 0,
+    blocked: 0,
+    todo: 0,
+    cancelled: 0,
+    by_status: {
+      active: 0,
+      queued: 0,
+      completed: 0,
+      blocked: 0,
+      cancelled: 0,
+    },
+    ...overrides,
+  }
+}
+
+/** 冻结契约形状的聚合 fixture：混合状态、两编号阶段 + 无阶段组、活跃阶段 2 */
+function makeAggregation(overrides: Partial<ChildProgress> = {}): ChildProgress {
+  return {
+    delivery_id: 'd1',
+    active_stage: 2,
+    ...aggCounts({
+      total: 5,
+      done: 2,
+      in_progress: 1,
+      in_review: 1,
+      blocked: 1,
+      todo: 0,
+      cancelled: 0,
+    }),
+    stages: [
+      { stage: 1, ...aggCounts({ total: 2, done: 2 }) },
+      {
+        stage: 2,
+        ...aggCounts({
+          total: 3,
+          done: 0,
+          in_progress: 1,
+          in_review: 1,
+          blocked: 1,
+        }),
+      },
+      { stage: 0, ...aggCounts({ total: 0 }) },
+    ],
+    ...overrides,
+  }
+}
+
+describe('DeliveryDetail 子任务进度区（INFERA-297：真实执行对齐）', () => {
+  it('AC1: 拆分父的进度区消费聚合接口——混合状态可见、按阶段分组、活跃阶段可辨', async () => {
+    vi.mocked(getChildProgress).mockResolvedValue(makeAggregation())
+    const screen = await renderDetail(
+      makeDelivery({ split_mode: true, complexity: 'large', current_stage: 'code_gen' }),
+      [
+        makeDelivery({ id: 'c1', title: '子需求甲', wave: 1, status: 'completed' }),
+        makeDelivery({
+          id: 'c2',
+          title: '子需求乙',
+          wave: 2,
+          status: 'active',
+          pending_gate: 'code_review',
+        }),
+        makeDelivery({ id: 'c3', title: '子需求丙', wave: 2, status: 'blocked' }),
+      ]
+    )
+    await waitForLoad(screen)
+
+    // 进度卡出现，总体计数逐字来自聚合（可对照核验）
+    await expect
+      .element(screen.getByText('子任务进度', { exact: true }))
+      .toBeInTheDocument()
+    expect(vi.mocked(getChildProgress)).toHaveBeenCalledWith('d1')
+    await expect
+      .element(screen.getByText('2 / 5 完成 · 40%', { exact: true }))
+      .toBeInTheDocument()
+    // 运行中 / 待审批 / 已阻塞 在进度区可见；按阶段分组、活跃阶段标注
+    for (const label of ['运行中 1', '待审批 1', '已阻塞 1']) {
+      await expect
+        .element(screen.getByText(label, { exact: true }).first())
+        .toBeInTheDocument()
+    }
+    for (const title of ['阶段 1', '阶段 2']) {
+      await expect
+        .element(screen.getByText(title, { exact: true }))
+        .toBeInTheDocument()
+    }
+    // 子任务清单（导航列表）仍在，不回退
+    await expect
+      .element(screen.getByText('子任务清单', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('AC2: 子任务清单的头部计数不再由 children 平表自算（撤掉装饰性数字，进度数字归聚合区）', async () => {
+    // children 平表 3 个全 completed（旧口径会显示「3 / 3 完成」）；聚合另有口径 2/3
+    vi.mocked(getChildProgress).mockResolvedValue(
+      makeAggregation({
+        ...aggCounts({ total: 3, done: 2, in_progress: 1 }),
+        stages: [
+          { stage: 1, ...aggCounts({ total: 3, done: 2, in_progress: 1 }) },
+        ],
+      })
+    )
+    const screen = await renderDetail(
+      makeDelivery({ split_mode: true, current_stage: 'code_gen' }),
+      [
+        makeDelivery({ id: 'c1', title: '子需求甲', wave: 1, status: 'completed' }),
+        makeDelivery({ id: 'c2', title: '子需求乙', wave: 1, status: 'completed' }),
+        makeDelivery({ id: 'c3', title: '子需求丙', wave: 2, status: 'completed' }),
+      ]
+    )
+    await waitForLoad(screen)
+
+    // 聚合区显示后端口径 2/3；旧 children 自算的「3 / 3 完成」不复存在
+    await expect
+      .element(screen.getByText('2 / 3 完成 · 67%', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('3 / 3 完成', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3: 任务同步镜像父（非拆分）同样显示子任务进度——聚合不区分父类型', async () => {
+    vi.mocked(getChildProgress).mockResolvedValue(
+      makeAggregation({
+        ...aggCounts({ total: 2, done: 1, in_review: 1 }),
+        stages: [
+          {
+            stage: 1,
+            ...aggCounts({ total: 2, done: 1, in_review: 1 }),
+          },
+        ],
+      })
+    )
+    // 镜像父：split_mode=false、children 不随详情返回（后端仅拆分父返回）
+    const screen = await renderDetail(
+      makeDelivery({ external_issue_key: 'INFERA-77', current_stage: '' })
+    )
+    await waitForLoad(screen)
+
+    await expect
+      .element(screen.getByText('子任务进度', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('待审批 1', { exact: true }).first())
+      .toBeInTheDocument()
+    // 非拆分父不渲染子任务清单列表
+    expect(await screen.getByText('子任务清单', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC4: 无子任务（聚合 total=0）不渲染进度区——空态不占位', async () => {
+    // 默认 mock 即空聚合（factory 里的空 fixture），显式声明便于阅读
+    vi.mocked(getChildProgress).mockResolvedValue({
+      delivery_id: 'd1',
+      active_stage: null,
+      ...aggCounts(),
+      stages: [],
+    } satisfies ChildProgress)
+    const screen = await renderDetail(makeDelivery())
+    await waitForLoad(screen)
+
+    expect(await screen.getByText('子任务进度', { exact: true }).query()).toBeNull()
+    expect(document.querySelector('[data-slot="child-progress"]')).toBeNull()
   })
 })

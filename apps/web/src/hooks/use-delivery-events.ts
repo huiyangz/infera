@@ -44,6 +44,8 @@ export function useDeliveryEvents(deliveryId: string, projectId?: string) {
     const invalidate = () => {
       qc.invalidateQueries({ queryKey: ['delivery', deliveryId] })
       qc.invalidateQueries({ queryKey: ['gate', deliveryId] })
+      // 子任务进度聚合（INFERA-297）：进度区随真实执行事件同步刷新
+      qc.invalidateQueries({ queryKey: ['delivery-progress', deliveryId] })
       // 主从布局：左侧列表与项目卡片统计也要跟着刷新（限定所属项目）
       if (projectId) {
         qc.invalidateQueries({ queryKey: ['project', projectId] })

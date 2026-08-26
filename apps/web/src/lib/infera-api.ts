@@ -4,6 +4,7 @@
 import type {
   Agent,
   BindingMap,
+  ChildProgress,
   ChildSpec,
   Delivery,
   DeliveryDetail,
@@ -146,6 +147,14 @@ export async function putProjectPipeline(
 // —— delivery 详情 / gate ——
 export async function getDelivery(id: string): Promise<DeliveryDetail> {
   return json(await fetch(`/api/deliveries/${id}`))
+}
+/**
+ * 子任务真实进度只读聚合（L202608260142-1-T01 冻结契约，形状见
+ * ChildProgress）：任务详情页进度区以此端点为唯一数据源，不得另开
+ * 并行入口。交付不存在 → ApiError(404)。
+ */
+export async function getChildProgress(id: string): Promise<ChildProgress> {
+  return json(await fetch(`/api/deliveries/${id}/progress`))
 }
 export async function getGate(id: string): Promise<GateInfo> {
   return json(await fetch(`/api/deliveries/${id}/gate`))
