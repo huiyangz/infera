@@ -46,13 +46,18 @@
 
 任务卡详情 SHALL 返回任务行 + 时间线事件 + 阶段产物（拆分父另附子任务清单）。
 任务行头部 SHALL 展示优先级徽标：优先级为 `none` 或空时 SHALL NOT 渲染徽标，其余值按「项目内新建任务卡」透传的上游词表渲染对应样式；词表外的优先级值 SHALL 回退显示原文，页面不崩。
-阶段条 SHALL 按复杂度派生展示：`small` 及老数据（complexity 空）走 7 阶段，`large` 走全 11 阶段（拆分父的 tasks/tasks_approval/test_gen 显示跳过态）；终态渲染规则：`completed` 全部 done、`blocked` 当前阶段 failed（之前 done、之后 pending、无进行中指示）、`cancelled` 停在放弃点不再推进。
+阶段条 SHALL 按复杂度派生展示：`small` 及老数据（complexity 空）走 7 阶段，`large` 走全 11 阶段（拆分父的 tasks/tasks_approval/test_gen 显示跳过态并附跳过原因——跳过是虚线勾选形态而非失败）；门禁节点 SHALL 带门禁标识，当前节点 SHALL 区分「进行中」与「等待审批」两种活动态；终态渲染规则：`completed` 全部 done、`blocked` 当前阶段 failed（之前 done、之后 pending、无进行中指示）、`cancelled` 停在放弃点不再推进。
 `large` 模式的逐任务实现进度 SHALL 由 tasks/task_done 产物推导（无清单产物时回退 task_done 事件拼装，进度持久不丢）；未知阶段/事件词表外的值 SHALL 回退原文显示不崩；镜像任务卡无 current_stage 时 SHALL 以占位符或 issue key 顶替阶段位，不留悬空「阶段」标签。（`GET /api/deliveries/{id}`；web `features/deliveries/delivery-detail.tsx`、`lib/infera-types.ts`）
 
 #### Scenario: large 拆分父的阶段条与子任务清单
 
 - **WHEN** 读取一张 `complexity=large` 的拆分父任务详情
 - **THEN** 阶段条展示全 11 阶段且 tasks/tasks_approval/test_gen 为跳过态，`code_gen` 位显示等待子任务进度（已完成/总数），另附子任务清单（各带批次徽标、阶段、状态、标签）
+
+#### Scenario: 门禁标识与两种活动态
+
+- **WHEN** 一张交付分别停在 agent 执行节点与人工门禁节点
+- **THEN** 阶段条上门禁节点带门禁标识；agent 节点的当前阶段显示「进行中」，停驻门禁的当前阶段显示「等待审批」，两种活动态可辨
 
 #### Scenario: blocked 卡当前阶段显示失败
 
@@ -79,7 +84,7 @@
   `task-management` 的区块，无缺漏；
 - **名称逐字一致**：`### Requirement: 任务卡详情与阶段呈现` 与
   `specs/task-management/spec.md` 现有标题逐字相同（抄错即并回失败）；
-- **MODIFIED 是全文**：替换后文本包含原有全部 3 条 Scenario（没变的也抄回来了）
+- **MODIFIED 是全文**：替换后文本包含原有全部 4 条 Scenario（没变的也抄回来了）
   + 新增 1 条，评审看到的就是并回后的最终形态；
 - **What Changes ↔ 改动**：列了「徽标 + 回退」两条行为，diff 里恰好对应这两处
   渲染逻辑，不多报、不漏报。
@@ -95,11 +100,11 @@
    ## Requirement: 任务卡详情与阶段呈现
 
    任务卡详情 SHALL 返回任务行 + 时间线事件 + 阶段产物（拆分父另附子任务清单）。
-   任务行头部 SHALL 展示优先级徽标：……（提案 MODIFIED 段全文，含 4 条 Scenario）……
+   任务行头部 SHALL 展示优先级徽标：……（提案 MODIFIED 段全文，含 5 条 Scenario）……
    ```
 
 2. **核对**：该域 spec 无重名 Requirement（新全文未引入与其它 Requirement 同名的段）、
-   无空 Scenario（4 条都有 WHEN/THEN）、`## Purpose` 未被动过（本例 Purpose 不涉及
+   无空 Scenario（5 条都有 WHEN/THEN）、`## Purpose` 未被动过（本例 Purpose 不涉及
    ——若 Purpose 也要改，必须在提案 What Changes 里显式说明并走 MODIFIED）。
 3. **归档**：`git mv openspec/changes/infera-900-add-delivery-priority-badge
    openspec/changes/archive/2026-08-25-infera-900-add-delivery-priority-badge`
