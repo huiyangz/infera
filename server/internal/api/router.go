@@ -113,6 +113,9 @@ func (s *Server) Mux() http.Handler {
 		// 需求发现视图（INFERA-225 冻结契约）：两类 agent 任务跨项目列表。
 		r.Get("/api/discovery-tasks", s.handleDiscoveryTasks)
 		r.Get("/api/deliveries/{id}", s.handleGetDelivery)
+		// 子任务真实进度只读聚合（L202608260142-1-T01 冻结契约）：任务详情页
+		// 进度区唯一数据源。
+		r.Get("/api/deliveries/{id}/progress", s.handleChildProgress)
 		r.Get("/api/deliveries/{id}/gate", s.handleGate)
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)
 		r.Post("/api/deliveries/{id}/reject", s.handleReject)
