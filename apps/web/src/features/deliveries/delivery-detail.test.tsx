@@ -187,7 +187,7 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     expect(bodyTitle!.scrollWidth).toBeLessThanOrEqual(bodyTitle!.clientWidth + 1)
   })
 
-  it('AC1-3: 正文任务信息卡完整展示描述（whitespace-pre-wrap 保留换行），排在阶段推进之前', async () => {
+  it('AC1-3: 正文任务信息卡完整展示描述（Markdown 渲染），排在阶段推进之前', async () => {
     const screen = await renderDetail(
       makeDelivery({ description: LONG_DESC })
     )
@@ -197,11 +197,16 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     await expect
       .element(screen.getByText('描述', { exact: true }))
       .toBeInTheDocument()
+    // INFERA-296 起描述经 MarkdownEditor 渲染：多行内容逐行完整出现在
+    // 渲染容器内（不截断、不丢行），并取到 markdown 排版字号
     const descEl = await screen
       .getByText('描述面板归位到正文卡片内', { exact: false })
       .element()
-    // pre-wrap：多行描述的换行符在渲染中保留（不折叠成一行）
-    expect(getComputedStyle(descEl!).whiteSpace).toBe('pre-wrap')
+    const mdRender = descEl!.closest('.md-render')
+    expect(mdRender).toBeTruthy()
+    expect(mdRender!.textContent).toContain('第二行带超长不可折行片段')
+    expect(mdRender!.textContent).toContain('第三行：描述面板归位到正文卡片内')
+    expect(getComputedStyle(descEl!).fontSize).toBe('14px') // 0.875rem
     // 信息卡在阶段推进卡之前（阅读顺序：先任务信息，再阶段推进）
     const stageCardTitle = await screen
       .getByText('阶段推进', { exact: true })
@@ -242,6 +247,79 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     // 对齐 project-tasks 的 `stageLabel(...) || '—'` 占位写法：阶段位显示占位符
     await expect
       .element(screen.getByText('阶段 — ·', { exact: false }))
+      .toBeInTheDocument()
+  })
+})
+
+describe('DeliveryDetail 描述区 Markdown 接入（INFERA-296：渲染 / 预览源码切换 / 编辑）', () => {
+  // 真实任务描述形态：issue 正文同步而来的 Markdown（标题 + 列表）
+  const MD_DESC = [
+    '## 目标',
+    '',
+    '统一接入 Markdown 组件：',
+    '',
+    '- 列表项正常渲染',
+    '- 预览与源码一键切换',
+  ].join('\n')
+
+  it('AC1: 描述按 Markdown 渲染（标题/列表成节点），不再原样显示源码', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('列表项正常渲染', { exact: true }))
+      .toBeInTheDocument()
+    // 旧版 <p> 原样显示源码的问题消失：字面「## 目标」不再出现在页面上
+    expect(
+      await screen.getByText('## 目标', { exact: true }).query()
+    ).toBeNull()
+  })
+
+  it('AC2: 默认预览（无编辑框）；一键切源码显示原始 Markdown，可切回预览', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    // 默认预览：只有渲染结果，没有编辑框
+    expect(document.querySelector('textarea')).toBeNull()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+
+    // 切源码：编辑框出现并携带原始 Markdown，渲染节点退场
+    await screen.getByRole('button', { name: '源码' }).click()
+    const box = screen.getByRole('textbox')
+    await expect.element(box).toBeInTheDocument()
+    expect(((await box.element()) as HTMLTextAreaElement).value).toContain(
+      '## 目标'
+    )
+    expect(
+      await screen.getByRole('heading', { level: 2, name: '目标' }).query()
+    ).toBeNull()
+
+    // 切回预览：恢复渲染
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+  })
+
+  it('AC3: 源码模式可直接编辑——草稿受控回显，切回预览即见改后渲染', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    await screen.getByRole('button', { name: '源码' }).click()
+    const box = screen.getByRole('textbox')
+    await box.fill('## 改后的目标\n\n- 新草稿内容')
+    expect(((await box.element()) as HTMLTextAreaElement).value).toContain(
+      '改后的目标'
+    )
+
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '改后的目标' }))
       .toBeInTheDocument()
   })
 })

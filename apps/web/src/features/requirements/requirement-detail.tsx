@@ -4,6 +4,7 @@ import { ChevronLeft, ExternalLink, Inbox } from 'lucide-react'
 import { ApiError } from '@/lib/infera-api'
 import { dateTime } from '@/lib/time'
 import { Header } from '@/components/layout/header'
+import { MarkdownEditor } from '@/components/markdown/markdown-editor'
 import { Badge } from '@/components/ui/badge'
 import {
   Card,
@@ -170,9 +171,9 @@ export function RequirementDetailPage({
                 <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
                   描述
                 </h3>
-                <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-                  {data.description}
-                </p>
+                {/* issue 正文是 Markdown：统一走 MarkdownEditor 渲染（INFERA-296）。
+                    需求内容由 agent/上游驱动，页面无更新写路径 → 只读展示 */}
+                <MarkdownEditor value={data.description} editable={false} />
               </div>
             )}
             {data.acceptance_criteria && (
@@ -180,9 +181,10 @@ export function RequirementDetailPage({
                 <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
                   验收标准
                 </h3>
-                <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-                  {data.acceptance_criteria}
-                </p>
+                <MarkdownEditor
+                  value={data.acceptance_criteria}
+                  editable={false}
+                />
               </div>
             )}
             <div className='flex flex-wrap items-center justify-between gap-3 border-t pt-3'>

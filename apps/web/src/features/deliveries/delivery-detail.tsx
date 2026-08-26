@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -26,6 +26,7 @@ import {
 } from '@/lib/infera-types'
 import { dateTime, timeAgo } from '@/lib/time'
 import { useDeliveryEvents } from '@/hooks/use-delivery-events'
+import { MarkdownEditor } from '@/components/markdown/markdown-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -203,6 +204,9 @@ const EMPTY_ARTIFACTS: Artifact[] = []
 
 export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
   const qc = useQueryClient()
+  // 描述区编辑草稿（INFERA-296）：null = 未编辑，跟随服务端数据；源码模式
+  // 的编辑落在草稿上（预览即时可见），轮询/WS 刷新不打断进行中的编辑
+  const [descDraft, setDescDraft] = useState<string | null>(null)
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
     queryFn: () => getDelivery(deliveryId),
@@ -326,9 +330,18 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
             <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
               描述
             </h3>
-            <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-              {delivery.description || '（无补充描述）'}
-            </p>
+            {/* 描述是 issue 正文同步而来的 Markdown：统一走 MarkdownEditor
+                （默认预览渲染，一键切源码可编辑）。编辑落在本地草稿；持久化
+                保存接口后端尚未提供（见 INFERA-296 交付说明），故不传 onSave */}
+            {delivery.description ? (
+              <MarkdownEditor
+                value={descDraft ?? delivery.description}
+                onChange={setDescDraft}
+                placeholder='补充任务描述（支持 Markdown）'
+              />
+            ) : (
+              <p className='text-sm text-muted-foreground'>（无补充描述）</p>
+            )}
           </CardContent>
         </Card>
 

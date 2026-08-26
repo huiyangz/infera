@@ -72,6 +72,41 @@ afterEach(async () => {
   await cleanup()
 })
 
+describe('GateCard 触发评论正文 Markdown 接入（INFERA-296）', () => {
+  const MD_PAYLOAD = '## 实现计划\n\n- 计划要点一\n- 计划要点二'
+
+  it('AC1: 正文按 Markdown 渲染（标题/列表成节点），不再以源码形式平铺', async () => {
+    const screen = await mount(
+      <ApprovalCard
+        card={card({ kind: 'approval', payload: MD_PAYLOAD })}
+        requirement={REQ}
+      />
+    )
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '实现计划' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('计划要点一', { exact: true }))
+      .toBeInTheDocument()
+    // 旧版 <pre> 原样显示源码：字面标题标记不再出现
+    expect(await screen.getByText('## 实现计划', { exact: true }).query()).toBeNull()
+  })
+
+  it('Scope: 正文只读——不渲染预览/源码切换与编辑框', async () => {
+    const screen = await mount(
+      <ApprovalCard
+        card={{ ...card({ kind: 'approval', payload: MD_PAYLOAD }) }}
+        requirement={REQ}
+      />
+    )
+    expect(await screen.getByRole('button', { name: '源码' }).query()).toBeNull()
+    // 审批卡自带的「驳回反馈」输入框不受影响；断言的是无 Markdown 编辑框
+    expect(
+      document.querySelector("textarea[aria-label='Markdown 源码']")
+    ).toBeNull()
+  })
+})
+
 describe('ApprovalCard 审批卡', () => {
   it('渲染计划正文；批准回调 approveCard(r1,c1)', async () => {
     const screen = await mount(
@@ -215,6 +250,29 @@ describe('MergeCard 合并卡', () => {
     const pr = screen.getByRole('link', { name: /PR/ })
     expect((await pr.element()).getAttribute('href')).toBe(REQ.pr_url)
     expect(getRequirementPRReview).toHaveBeenCalledWith('r1')
+  })
+
+  it('AC1-INFERA-296: 行级评审评论正文按 Markdown 渲染（行内标记成节点）', async () => {
+    vi.mocked(getRequirementPRReview).mockResolvedValue({
+      ...REVIEW,
+      comments: [
+        {
+          ...REVIEW.comments[0]!,
+          body: '**重点**：补充 `鉴权` 的边界用例\n\n- 用例一',
+        },
+      ],
+    })
+    const screen = await mount(
+      <MergeCard card={card({ kind: 'merge', payload: PAYLOAD })} requirement={REQ} />
+    )
+    const strong = screen.getByText('重点', { exact: true })
+    await expect.element(strong).toBeInTheDocument()
+    expect((await strong.element())!.tagName).toBe('STRONG')
+    const code = screen.getByText('鉴权', { exact: true })
+    expect((await code.element())!.tagName).toBe('CODE')
+    await expect
+      .element(screen.getByText('用例一', { exact: true }))
+      .toBeInTheDocument()
   })
 
   it('需求未关联 PR（pr_url 为空）时不请求评审面，verdict 与动作照常', async () => {
