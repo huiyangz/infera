@@ -45,6 +45,10 @@ type Server struct {
 	// 共用同一批 TASK_SYNC_* 凭据装配，main 后置注入。
 	reqCreator RequirementCreatorAPI
 
+	// descEditor 任务描述编辑编排（可选：未装配 → 端点 503）。同样共用
+	// TASK_SYNC_* 凭据装配，main 后置注入。
+	descEditor DescriptionEditorAPI
+
 	// cookieSecure session cookie 的 Secure 属性：HTTPS 终端开启（防明文泄露），
 	// 本地 http 开发保持关闭（否则浏览器丢弃 cookie）。main 按 env 装配。
 	cookieSecure bool
@@ -113,7 +117,13 @@ func (s *Server) Mux() http.Handler {
 		// 需求发现视图（INFERA-225 冻结契约）：两类 agent 任务跨项目列表。
 		r.Get("/api/discovery-tasks", s.handleDiscoveryTasks)
 		r.Get("/api/deliveries/{id}", s.handleGetDelivery)
+		// 子任务真实进度只读聚合（L202608260142-1-T01 冻结契约）：任务详情页
+		// 进度区唯一数据源。
+		r.Get("/api/deliveries/{id}/progress", s.handleChildProgress)
 		r.Get("/api/deliveries/{id}/gate", s.handleGate)
+		// 任务描述编辑（INFERA-298 冻结契约）：上游优先写路径，前端任务
+		// 详情页描述编辑的唯一保存入口。
+		r.Patch("/api/deliveries/{id}/description", s.handleUpdateDeliveryDescription)
 		r.Post("/api/deliveries/{id}/approve", s.handleApprove)
 		r.Post("/api/deliveries/{id}/reject", s.handleReject)
 		r.Post("/api/deliveries/{id}/merge/resume", s.handleMergeResume)

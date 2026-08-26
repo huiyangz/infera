@@ -12,8 +12,13 @@ import {
 } from 'vitest'
 import { cleanup, render, type RenderResult } from 'vitest-browser-react'
 import { page } from 'vitest/browser'
-import { getDelivery } from '@/lib/infera-api'
-import type { Delivery } from '@/lib/infera-types'
+import {
+  ApiError,
+  getDelivery,
+  getChildProgress,
+  updateDeliveryDescription,
+} from '@/lib/infera-api'
+import type { ChildProgress, Delivery } from '@/lib/infera-types'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { DeliveryDetail } from './delivery-detail'
 
@@ -22,6 +27,28 @@ vi.mock('@/lib/infera-api', async (importOriginal) => {
   return {
     ...actual,
     getDelivery: vi.fn(),
+    // 描述保存（INFERA-299）：默认无断言外的成功，用例各自 mock
+    updateDeliveryDescription: vi.fn(),
+    // 进度聚合默认空（无子任务）：既有用例不渲染进度卡、无 query 噪音
+    getChildProgress: vi.fn().mockResolvedValue({
+      delivery_id: 'd1',
+      active_stage: null,
+      total: 0,
+      done: 0,
+      in_progress: 0,
+      in_review: 0,
+      blocked: 0,
+      todo: 0,
+      cancelled: 0,
+      by_status: {
+        active: 0,
+        queued: 0,
+        completed: 0,
+        blocked: 0,
+        cancelled: 0,
+      },
+      stages: [],
+    } satisfies ChildProgress),
     // useLocalNodes 依赖的两条查询（空绑定即可，不触发本机停车 UI）
     listAgents: vi.fn().mockResolvedValue([]),
     getProjectPipeline: vi.fn().mockResolvedValue({ nodes: [], bindings: {} }),
@@ -187,7 +214,7 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     expect(bodyTitle!.scrollWidth).toBeLessThanOrEqual(bodyTitle!.clientWidth + 1)
   })
 
-  it('AC1-3: 正文任务信息卡完整展示描述（whitespace-pre-wrap 保留换行），排在阶段推进之前', async () => {
+  it('AC1-3: 正文任务信息卡完整展示描述（Markdown 渲染），排在阶段推进之前', async () => {
     const screen = await renderDetail(
       makeDelivery({ description: LONG_DESC })
     )
@@ -197,11 +224,16 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     await expect
       .element(screen.getByText('描述', { exact: true }))
       .toBeInTheDocument()
+    // INFERA-296 起描述经 MarkdownEditor 渲染：多行内容逐行完整出现在
+    // 渲染容器内（不截断、不丢行），并取到 markdown 排版字号
     const descEl = await screen
       .getByText('描述面板归位到正文卡片内', { exact: false })
       .element()
-    // pre-wrap：多行描述的换行符在渲染中保留（不折叠成一行）
-    expect(getComputedStyle(descEl!).whiteSpace).toBe('pre-wrap')
+    const mdRender = descEl!.closest('.md-render')
+    expect(mdRender).toBeTruthy()
+    expect(mdRender!.textContent).toContain('第二行带超长不可折行片段')
+    expect(mdRender!.textContent).toContain('第三行：描述面板归位到正文卡片内')
+    expect(getComputedStyle(descEl!).fontSize).toBe('14px') // 0.875rem
     // 信息卡在阶段推进卡之前（阅读顺序：先任务信息，再阶段推进）
     const stageCardTitle = await screen
       .getByText('阶段推进', { exact: true })
@@ -242,6 +274,79 @@ describe('DeliveryDetail 任务详情页布局（INFERA-137：描述面板归位
     // 对齐 project-tasks 的 `stageLabel(...) || '—'` 占位写法：阶段位显示占位符
     await expect
       .element(screen.getByText('阶段 — ·', { exact: false }))
+      .toBeInTheDocument()
+  })
+})
+
+describe('DeliveryDetail 描述区 Markdown 接入（INFERA-296：渲染 / 预览源码切换 / 编辑）', () => {
+  // 真实任务描述形态：issue 正文同步而来的 Markdown（标题 + 列表）
+  const MD_DESC = [
+    '## 目标',
+    '',
+    '统一接入 Markdown 组件：',
+    '',
+    '- 列表项正常渲染',
+    '- 预览与源码一键切换',
+  ].join('\n')
+
+  it('AC1: 描述按 Markdown 渲染（标题/列表成节点），不再原样显示源码', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('列表项正常渲染', { exact: true }))
+      .toBeInTheDocument()
+    // 旧版 <p> 原样显示源码的问题消失：字面「## 目标」不再出现在页面上
+    expect(
+      await screen.getByText('## 目标', { exact: true }).query()
+    ).toBeNull()
+  })
+
+  it('AC2: 默认预览（无编辑框）；一键切源码显示原始 Markdown，可切回预览', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    // 默认预览：只有渲染结果，没有编辑框
+    expect(document.querySelector('textarea')).toBeNull()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+
+    // 切源码：编辑框出现并携带原始 Markdown，渲染节点退场
+    await screen.getByRole('button', { name: '源码' }).click()
+    const box = screen.getByRole('textbox')
+    await expect.element(box).toBeInTheDocument()
+    expect(((await box.element()) as HTMLTextAreaElement).value).toContain(
+      '## 目标'
+    )
+    expect(
+      await screen.getByRole('heading', { level: 2, name: '目标' }).query()
+    ).toBeNull()
+
+    // 切回预览：恢复渲染
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '目标' }))
+      .toBeInTheDocument()
+  })
+
+  it('AC3: 源码模式可直接编辑——草稿受控回显，切回预览即见改后渲染', async () => {
+    const screen = await renderDetail(makeDelivery({ description: MD_DESC }))
+    await waitForLoad(screen)
+
+    await screen.getByRole('button', { name: '源码' }).click()
+    const box = screen.getByRole('textbox')
+    await box.fill('## 改后的目标\n\n- 新草稿内容')
+    expect(((await box.element()) as HTMLTextAreaElement).value).toContain(
+      '改后的目标'
+    )
+
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '改后的目标' }))
       .toBeInTheDocument()
   })
 })
@@ -354,5 +459,304 @@ describe('DeliveryDetail 标签展示（INFERA-220：任务详情渲染 Multica 
       .toBeInTheDocument()
     const chips = document.querySelectorAll('[data-slot="label-chip"]')
     expect(chips).toHaveLength(1)
+  })
+})
+
+// —— 子任务进度区接入（INFERA-297：消费 L202608260142-1-T01 只读聚合接口） ——
+
+/** 单维度计数（后端契约：by_status 恒含五键） */
+function aggCounts(overrides: Record<string, number> = {}) {
+  return {
+    total: 0,
+    done: 0,
+    in_progress: 0,
+    in_review: 0,
+    blocked: 0,
+    todo: 0,
+    cancelled: 0,
+    by_status: {
+      active: 0,
+      queued: 0,
+      completed: 0,
+      blocked: 0,
+      cancelled: 0,
+    },
+    ...overrides,
+  }
+}
+
+/** 冻结契约形状的聚合 fixture：混合状态、两编号阶段 + 无阶段组、活跃阶段 2 */
+function makeAggregation(overrides: Partial<ChildProgress> = {}): ChildProgress {
+  return {
+    delivery_id: 'd1',
+    active_stage: 2,
+    ...aggCounts({
+      total: 5,
+      done: 2,
+      in_progress: 1,
+      in_review: 1,
+      blocked: 1,
+      todo: 0,
+      cancelled: 0,
+    }),
+    stages: [
+      { stage: 1, ...aggCounts({ total: 2, done: 2 }) },
+      {
+        stage: 2,
+        ...aggCounts({
+          total: 3,
+          done: 0,
+          in_progress: 1,
+          in_review: 1,
+          blocked: 1,
+        }),
+      },
+      { stage: 0, ...aggCounts({ total: 0 }) },
+    ],
+    ...overrides,
+  }
+}
+
+describe('DeliveryDetail 子任务进度区（INFERA-297：真实执行对齐）', () => {
+  it('AC1: 拆分父的进度区消费聚合接口——混合状态可见、按阶段分组、活跃阶段可辨', async () => {
+    vi.mocked(getChildProgress).mockResolvedValue(makeAggregation())
+    const screen = await renderDetail(
+      makeDelivery({ split_mode: true, complexity: 'large', current_stage: 'code_gen' }),
+      [
+        makeDelivery({ id: 'c1', title: '子需求甲', wave: 1, status: 'completed' }),
+        makeDelivery({
+          id: 'c2',
+          title: '子需求乙',
+          wave: 2,
+          status: 'active',
+          pending_gate: 'code_review',
+        }),
+        makeDelivery({ id: 'c3', title: '子需求丙', wave: 2, status: 'blocked' }),
+      ]
+    )
+    await waitForLoad(screen)
+
+    // 进度卡出现，总体计数逐字来自聚合（可对照核验）
+    await expect
+      .element(screen.getByText('子任务进度', { exact: true }))
+      .toBeInTheDocument()
+    expect(vi.mocked(getChildProgress)).toHaveBeenCalledWith('d1')
+    await expect
+      .element(screen.getByText('2 / 5 完成 · 40%', { exact: true }))
+      .toBeInTheDocument()
+    // 运行中 / 待审批 / 已阻塞 在进度区可见；按阶段分组、活跃阶段标注
+    for (const label of ['运行中 1', '待审批 1', '已阻塞 1']) {
+      await expect
+        .element(screen.getByText(label, { exact: true }).first())
+        .toBeInTheDocument()
+    }
+    for (const title of ['阶段 1', '阶段 2']) {
+      await expect
+        .element(screen.getByText(title, { exact: true }))
+        .toBeInTheDocument()
+    }
+    // 子任务清单（导航列表）仍在，不回退
+    await expect
+      .element(screen.getByText('子任务清单', { exact: true }))
+      .toBeInTheDocument()
+  })
+
+  it('AC2: 子任务清单的头部计数不再由 children 平表自算（撤掉装饰性数字，进度数字归聚合区）', async () => {
+    // children 平表 3 个全 completed（旧口径会显示「3 / 3 完成」）；聚合另有口径 2/3
+    vi.mocked(getChildProgress).mockResolvedValue(
+      makeAggregation({
+        ...aggCounts({ total: 3, done: 2, in_progress: 1 }),
+        stages: [
+          { stage: 1, ...aggCounts({ total: 3, done: 2, in_progress: 1 }) },
+        ],
+      })
+    )
+    const screen = await renderDetail(
+      makeDelivery({ split_mode: true, current_stage: 'code_gen' }),
+      [
+        makeDelivery({ id: 'c1', title: '子需求甲', wave: 1, status: 'completed' }),
+        makeDelivery({ id: 'c2', title: '子需求乙', wave: 1, status: 'completed' }),
+        makeDelivery({ id: 'c3', title: '子需求丙', wave: 2, status: 'completed' }),
+      ]
+    )
+    await waitForLoad(screen)
+
+    // 聚合区显示后端口径 2/3；旧 children 自算的「3 / 3 完成」不复存在
+    await expect
+      .element(screen.getByText('2 / 3 完成 · 67%', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('3 / 3 完成', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC3: 任务同步镜像父（非拆分）同样显示子任务进度——聚合不区分父类型', async () => {
+    vi.mocked(getChildProgress).mockResolvedValue(
+      makeAggregation({
+        ...aggCounts({ total: 2, done: 1, in_review: 1 }),
+        stages: [
+          {
+            stage: 1,
+            ...aggCounts({ total: 2, done: 1, in_review: 1 }),
+          },
+        ],
+      })
+    )
+    // 镜像父：split_mode=false、children 不随详情返回（后端仅拆分父返回）
+    const screen = await renderDetail(
+      makeDelivery({ external_issue_key: 'INFERA-77', current_stage: '' })
+    )
+    await waitForLoad(screen)
+
+    await expect
+      .element(screen.getByText('子任务进度', { exact: true }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('待审批 1', { exact: true }).first())
+      .toBeInTheDocument()
+    // 非拆分父不渲染子任务清单列表
+    expect(await screen.getByText('子任务清单', { exact: true }).query()).toBeNull()
+  })
+
+  it('AC4: 无子任务（聚合 total=0）不渲染进度区——空态不占位', async () => {
+    // 默认 mock 即空聚合（factory 里的空 fixture），显式声明便于阅读
+    vi.mocked(getChildProgress).mockResolvedValue({
+      delivery_id: 'd1',
+      active_stage: null,
+      ...aggCounts(),
+      stages: [],
+    } satisfies ChildProgress)
+    const screen = await renderDetail(makeDelivery())
+    await waitForLoad(screen)
+
+    expect(await screen.getByText('子任务进度', { exact: true }).query()).toBeNull()
+    expect(document.querySelector('[data-slot="child-progress"]')).toBeNull()
+  })
+})
+
+// —— 描述编辑接通保存（INFERA-299：onSave → PATCH description → 回灌） ——
+
+/** 手动放行的挂起 Promise：压「保存中」这一瞬态 */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('DeliveryDetail 描述保存（INFERA-299：编辑 → onSave → 写端点 → 回灌）', () => {
+  const ORIG_DESC = '## 原描述\n\n- 旧内容'
+  const EDITED_DESC = '## 保存后的目标\n\n- 新草稿内容'
+
+  /** 源码模式输入草稿并点保存 */
+  async function editAndSave(screen: RenderResult, text: string) {
+    await screen.getByRole('button', { name: '源码' }).click()
+    await screen.getByRole('textbox').fill(text)
+    await screen.getByRole('button', { name: '保存' }).click()
+  }
+
+  it('AC1: 编辑后保存——onSave 携带草稿调用写端点（id + 草稿全文）', async () => {
+    vi.mocked(updateDeliveryDescription).mockResolvedValue(
+      makeDelivery({ description: EDITED_DESC })
+    )
+    const screen = await renderDetail(makeDelivery({ description: ORIG_DESC }))
+    await waitForLoad(screen)
+
+    await editAndSave(screen, EDITED_DESC)
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(updateDeliveryDescription)).toHaveBeenCalledTimes(1)
+    })
+    expect(vi.mocked(updateDeliveryDescription)).toHaveBeenCalledWith(
+      'd1',
+      EDITED_DESC
+    )
+  })
+
+  it('AC2: 保存成功以 200 响应回灌——展示保存值而非详情缓存里的旧值', async () => {
+    // 详情缓存始终返回旧描述：若保存后重新拉取，页面会退回旧值；
+    // 只有把 200 响应写回缓存（回灌）才会显示保存值
+    vi.mocked(updateDeliveryDescription).mockResolvedValue(
+      makeDelivery({ description: EDITED_DESC, updated_at: '2026-08-26T11:00:00Z' })
+    )
+    const screen = await renderDetail(makeDelivery({ description: ORIG_DESC }))
+    await waitForLoad(screen)
+
+    await editAndSave(screen, EDITED_DESC)
+
+    // 保存值生效（预览渲染的是 200 响应里的描述），旧描述退场。
+    // 保存后仍在源码模式，切回预览看渲染结果
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(
+        screen.getByRole('heading', { level: 2, name: '保存后的目标' })
+      )
+      .toBeInTheDocument()
+    expect(await screen.getByText('旧内容', { exact: true }).query()).toBeNull()
+    // 回灌是本地写缓存：详情接口没有被再次拉取
+    expect(vi.mocked(getDelivery)).toHaveBeenCalledTimes(1)
+  })
+
+  it('AC3: 保存失败反馈可见、草稿保留——不产生假成功', async () => {
+    vi.mocked(updateDeliveryDescription).mockRejectedValue(
+      new ApiError(409, '交付已被并发修改，请刷新后重试')
+    )
+    const screen = await renderDetail(makeDelivery({ description: ORIG_DESC }))
+    await waitForLoad(screen)
+
+    await editAndSave(screen, EDITED_DESC)
+
+    // 失败态内联可见（带后端文案），且没有成功提示
+    await expect
+      .element(
+        screen.getByText('保存失败：交付已被并发修改，请刷新后重试', {
+          exact: true,
+        })
+      )
+      .toBeInTheDocument()
+    expect(await screen.getByText('描述已保存', { exact: true }).query()).toBeNull()
+    // 草稿不丢：仍在源码模式看到编辑稿（未悄悄回退成服务端旧值）
+    const box = screen.getByRole('textbox')
+    expect(((await box.element()) as HTMLTextAreaElement).value).toContain(
+      '新草稿内容'
+    )
+    // 失败后可重试：再次保存仍会发起请求
+    await screen.getByRole('button', { name: '保存' }).click()
+    await vi.waitFor(() => {
+      expect(vi.mocked(updateDeliveryDescription)).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('AC4: 保存中状态可见，且挂起期间重复点击不重复发请求', async () => {
+    const d = deferred<Delivery>()
+    vi.mocked(updateDeliveryDescription).mockReturnValueOnce(d.promise)
+    const screen = await renderDetail(makeDelivery({ description: ORIG_DESC }))
+    await waitForLoad(screen)
+
+    await editAndSave(screen, EDITED_DESC)
+
+    // 保存中：内联可见（无成功提示）
+    await expect
+      .element(screen.getByText('保存中…', { exact: true }))
+      .toBeInTheDocument()
+    expect(await screen.getByText('描述已保存', { exact: true }).query()).toBeNull()
+
+    // 挂起期间再点保存：不堆第二个在途请求（并发 PATCH 会撞 409）
+    await screen.getByRole('button', { name: '保存' }).click()
+    await screen.getByRole('button', { name: '保存' }).click()
+    expect(vi.mocked(updateDeliveryDescription)).toHaveBeenCalledTimes(1)
+
+    // 放行后落成功回灌（仍在源码模式，切回预览看渲染结果）
+    d.resolve(makeDelivery({ description: EDITED_DESC }))
+    await screen.getByRole('button', { name: '预览' }).click()
+    await expect
+      .element(
+        screen.getByRole('heading', { level: 2, name: '保存后的目标' })
+      )
+      .toBeInTheDocument()
+    expect(
+      await screen.getByText('保存中…', { exact: true }).query()
+    ).toBeNull()
   })
 })

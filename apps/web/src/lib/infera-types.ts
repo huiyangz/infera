@@ -114,6 +114,50 @@ export interface TaskSpec {
   detail: string
 }
 
+// —— 子任务真实进度聚合（契约冻结于 L202608260142-1-T01：
+// GET /api/deliveries/{id}/progress ← server/internal/store
+// store.ChildProgress / ChildStageProgress / ChildProgressCounts，
+// 逐字段镜像，不得静默变更） ——
+
+/**
+ * 单一维度（总体或单个阶段组）的子任务真实状态计数。
+ * 六个展示计数互斥且恰好覆盖五个已知状态（in_progress + in_review 拆完
+ * active），可直接相加不去重；by_status 恒含五键（无行为 0），未知状态只
+ * 计入 total。
+ */
+export interface ChildProgressCounts {
+  total: number
+  done: number
+  in_progress: number
+  in_review: number
+  blocked: number
+  todo: number
+  cancelled: number
+  by_status: {
+    active: number
+    queued: number
+    completed: number
+    blocked: number
+    cancelled: number
+  }
+}
+
+/** 一个阶段组的子任务聚合：stage = wave（0 = 无阶段组，编号组之后垫底） */
+export interface ChildStageProgress extends ChildProgressCounts {
+  stage: number
+}
+
+/**
+ * 父任务子任务真实进度整体。active_stage = 当前活跃阶段（最小编号、仍存在
+ * 非终态子任务者）；全部完结或只有无阶段子任务 → null。无子任务时 stages
+ * 为 []（非 null）。
+ */
+export interface ChildProgress extends ChildProgressCounts {
+  delivery_id: string
+  active_stage: number | null
+  stages: ChildStageProgress[]
+}
+
 /** 单条结构化审查意见（R10 双道审查契约，与 server store.Finding 对齐） */
 export interface Finding {
   /** 关联任务序号（1-based；0=整体意见，不关联具体任务） */

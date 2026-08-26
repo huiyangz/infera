@@ -4,6 +4,7 @@
 import type {
   Agent,
   BindingMap,
+  ChildProgress,
   ChildSpec,
   Delivery,
   DeliveryDetail,
@@ -147,6 +148,14 @@ export async function putProjectPipeline(
 export async function getDelivery(id: string): Promise<DeliveryDetail> {
   return json(await fetch(`/api/deliveries/${id}`))
 }
+/**
+ * 子任务真实进度只读聚合（L202608260142-1-T01 冻结契约，形状见
+ * ChildProgress）：任务详情页进度区以此端点为唯一数据源，不得另开
+ * 并行入口。交付不存在 → ApiError(404)。
+ */
+export async function getChildProgress(id: string): Promise<ChildProgress> {
+  return json(await fetch(`/api/deliveries/${id}/progress`))
+}
 export async function getGate(id: string): Promise<GateInfo> {
   return json(await fetch(`/api/deliveries/${id}/gate`))
 }
@@ -188,6 +197,25 @@ export async function rejectGate(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
+    })
+  )
+}
+/**
+ * 任务描述编辑（端点契约冻结于 INFERA-298）：PATCH
+ * /api/deliveries/{id}/description，body {"description": string}，200 返回
+ * 保存后的 Delivery（与详情 delivery 同形，labels 恒为数组）。空白/超长 →
+ * 400；未登录 401；不存在 404；无上游映射或并发冲突 409；上游写失败 502；
+ * 未装配 503 —— 一律以 ApiError 抛出，调用方只负责展示文案。
+ */
+export async function updateDeliveryDescription(
+  id: string,
+  description: string
+): Promise<Delivery> {
+  return json(
+    await fetch(`/api/deliveries/${id}/description`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
     })
   )
 }

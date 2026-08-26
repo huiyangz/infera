@@ -81,6 +81,39 @@ afterEach(async () => {
   await cleanup()
 })
 
+describe('RequirementDetailPage Markdown 区域接入（INFERA-296）', () => {
+  it('AC1: 描述与验收标准按 Markdown 渲染（标题/列表成节点），不再原样显示源码', async () => {
+    vi.mocked(getRequirement).mockResolvedValue(
+      detail({
+        description: '## 背景\n\n需求描述正文：\n\n- 描述列表项',
+        acceptance_criteria: '- 验收标准一\n- 验收标准二',
+      })
+    )
+    const screen = await mount()
+
+    await expect
+      .element(screen.getByRole('heading', { level: 2, name: '背景' }))
+      .toBeInTheDocument()
+    await expect
+      .element(screen.getByText('描述列表项', { exact: true }))
+      .toBeInTheDocument()
+    for (const t of ['验收标准一', '验收标准二']) {
+      await expect.element(screen.getByText(t, { exact: true })).toBeInTheDocument()
+    }
+    // 字面源码不再出现（旧版 <p> 原样显示 Markdown 源码）
+    expect(await screen.getByText('## 背景', { exact: true }).query()).toBeNull()
+  })
+
+  it('Scope: 描述/验收标准为只读展示——无切换、无编辑框、无保存按钮', async () => {
+    vi.mocked(getRequirement).mockResolvedValue(detail())
+    const screen = await mount()
+
+    expect(document.querySelector('textarea')).toBeNull()
+    expect(await screen.getByRole('button', { name: '源码' }).query()).toBeNull()
+    expect(await screen.getByRole('button', { name: '保存' }).query()).toBeNull()
+  })
+})
+
 describe('RequirementDetailPage 需求详情', () => {
   it('渲染需求信息、时间线、深链（外部任务源 issue / PR 新窗口）与审计记录', async () => {
     vi.mocked(getRequirement).mockResolvedValue(detail())

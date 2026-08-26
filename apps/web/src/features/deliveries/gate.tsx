@@ -24,6 +24,7 @@ import type {
   GateReview,
   TaskSpec,
 } from '@/lib/infera-types'
+import { MarkdownEditor } from '@/components/markdown/markdown-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -369,7 +370,9 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
             <CardDescription>{meta.approveHint}</CardDescription>
           </CardHeader>
           <CardContent className='space-y-5'>
-            {/* 任务门的原始产出（清单 JSON）由下方编辑器承载；解析失败时兜底展示 */}
+            {/* 任务门的原始产出是清单 JSON（解析失败兜底）：保持 <pre> 原样
+                展示；Spec/设计文档是 agent 产出的 Markdown → 只读渲染
+                （INFERA-296，不再以源码形式平铺） */}
             {(!isTasks || data.tasks == null) && (
               <div>
                 <h3 className='mb-2 text-sm font-medium'>
@@ -377,9 +380,20 @@ export function GatePage({ deliveryId }: { deliveryId: string }) {
                     ? `${meta.artifactLabel}（原始产出）`
                     : meta.artifactLabel}
                 </h3>
-                <pre className='min-h-24 rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
-                  {data.agent_output?.output || '（无 Agent 产出）'}
-                </pre>
+                {!data.agent_output?.output ? (
+                  <p className='min-h-24 rounded-lg border bg-muted/50 p-4 text-xs text-muted-foreground'>
+                    （无 Agent 产出）
+                  </p>
+                ) : isTasks ? (
+                  <pre className='min-h-24 rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
+                    {data.agent_output.output}
+                  </pre>
+                ) : (
+                  <MarkdownEditor
+                    value={data.agent_output.output}
+                    editable={false}
+                  />
+                )}
               </div>
             )}
 

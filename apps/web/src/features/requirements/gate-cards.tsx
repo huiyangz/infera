@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ExternalLink, MessageSquareOff, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { MarkdownEditor } from '@/components/markdown/markdown-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -71,9 +72,13 @@ function GateCardShell({
         <CardDescription>{description}</CardDescription>
       </CardHeader>
       <CardContent className='grid gap-4 px-5'>
-        <pre className='max-h-72 overflow-auto rounded-lg border bg-muted/50 p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap'>
-          {payload || '（无正文）'}
-        </pre>
+        {/* 触发评论正文是 agent 产出的 Markdown：只读渲染（INFERA-296，
+            不再以 <pre> 原样平铺源码）；无正文时保留占位文案 */}
+        {payload ? (
+          <MarkdownEditor value={payload} editable={false} />
+        ) : (
+          <p className='text-sm text-muted-foreground'>（无正文）</p>
+        )}
         {children}
       </CardContent>
       {footer && <CardFooter className='px-5'>{footer}</CardFooter>}
@@ -256,9 +261,8 @@ function PRReviewSection({ review }: { review: PRReview }) {
                 <span>{c.side === 'LEFT' ? '删除行' : '新增行'}</span>
                 <span>{c.author}</span>
               </div>
-              <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-                {c.body}
-              </p>
+              {/* 评论正文按 Markdown 渲染（INFERA-296）；行级评论为只读 */}
+              <MarkdownEditor value={c.body} editable={false} />
             </li>
           ))}
         </ul>

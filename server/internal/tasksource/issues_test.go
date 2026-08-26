@@ -159,6 +159,51 @@ func TestSetStatusSuppressRun(t *testing.T) {
 	})
 }
 
+// TestUpdateIssueDescription：描述更新走 PUT /api/issues/{id}——与 SetStatus
+// 同一端点（官方 CLI `issue update --description` 同族）。suppress_run 恒为
+// true：描述编辑是元数据修正而非工作交接，不得唤醒 assignee 的下一次 run。
+func TestUpdateIssueDescription(t *testing.T) {
+	var gotMethod, gotPath, gotAuth, gotWS string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		gotAuth, gotWS = r.Header.Get("Authorization"), r.Header.Get("X-Workspace-Id")
+		decodeBody(t, r, &gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	require.NoError(t, c.UpdateIssueDescription(context.Background(), "i-7", "## 新描述\n\n编辑后的正文"))
+	require.Equal(t, "PUT", gotMethod)
+	require.Equal(t, "/api/issues/i-7", gotPath)
+	require.Equal(t, "Bearer mul_t", gotAuth)
+	require.Equal(t, "ws-1", gotWS, "X-Workspace-Id 头随写端点注入（坑1）")
+	require.Equal(t, "## 新描述\n\n编辑后的正文", gotBody["description"])
+	require.Equal(t, true, gotBody["suppress_run"], "描述编辑不得唤醒 assignee 的 run")
+}
+
+// TestUpdateIssueDescriptionUpstreamError：上游非 2xx 如实带回（含状态码与
+// 回显体），不吞成假成功——调用方要靠它区分「上游已生效」与「没写成」。
+func TestUpdateIssueDescriptionUpstreamError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":"description too long"}`))
+	}))
+	defer ts.Close()
+
+	c, err := New(ts.URL, "mul_t", "ws-1")
+	require.NoError(t, err)
+
+	err = c.UpdateIssueDescription(context.Background(), "i-7", "x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "HTTP 422")
+	require.Contains(t, err.Error(), "description too long")
+}
+
 func TestListTaskRuns(t *testing.T) {
 	var gotPath string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

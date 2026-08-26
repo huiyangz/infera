@@ -90,6 +90,34 @@ issue 上挂的标签随同步一并镜像：先落 infera 标签库（名称 + 
    审批流（见 README 的阶段图）。
 3. **真跑前**把 `AGENT_CMD` 从 `echo` 换回真 agent 命令（如 `claude`）。
 
+## 任务描述编辑（上游优先写路径）
+
+任务详情页的描述编辑不是本地改库——同步是全量镜像，`importIssue` 每轮都用上游
+快照整行 upsert 描述，任何本地写都会在下一轮被覆盖。唯一正确路径是**先写上游**：
+
+```bash
+curl -b cookies -X PATCH http://localhost:8080/api/deliveries/<id>/description \
+  -H 'Content-Type: application/json' -d '{"description":"## 编辑后的描述"}'
+# → 200 交付对象（含 labels 数组，与其余交付变更端点同形）
+```
+
+链路：校验 → 读交付 → 经 tasksource `PUT /api/issues/{id}` 改上游描述
+（`suppress_run=true`，描述编辑不唤醒 assignee 的 run）→ `GET /api/issues/{id}`
+读回 → 本地**只落描述一列**。落库的值取自上游读回（与全量同步同一映射），因此
+下一轮同步导入的是同一个值，不会回滚。
+
+错误口径与既有写端点一致：401 未登录、404 交付不存在（畸形 id 同口径）、
+400 空/纯空白/超长（上限 64KiB）/坏 body、409 交付无上游映射
+（`external_issue_id` 为空的老本地交付没有可写的上游对象）、502 上游写失败、
+503 未装配（`TASK_SYNC_*` 三键不齐）。
+
+两个刻意的设计取舍：
+
+- **不做整行重导入**（`UpsertDeliveryByExternalID`）——那会把非终态镜像打回
+  `queued`、冲掉停在门禁的交付的引擎字段；描述编辑只该动描述。
+- **读回失败不转为编辑失败**——上游写已确认成功，按已发送的请求体降级落库，
+  下一轮同步用上游真相校正。重试只会对上游重复一次幂等的 PUT。
+
 ## 边界与坑
 
 - **同步结果不持久化**：最近一轮结果只存进程内存，重启即空（`GET` 回

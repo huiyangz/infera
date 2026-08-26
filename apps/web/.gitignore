@@ -14,6 +14,7 @@
 /coverage
 # vitest browser 模式跑测试时写出的运行截图，非视觉基线
 __screenshots__/
+.vitest-attachments/
 
 # next.js
 /.next/

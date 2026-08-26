@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -11,7 +11,11 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { getDelivery, mergeResume } from '@/lib/infera-api'
+import {
+  getDelivery,
+  mergeResume,
+  updateDeliveryDescription,
+} from '@/lib/infera-api'
 import {
   GATES,
   SPLIT_PARENT_SKIPPED,
@@ -19,6 +23,7 @@ import {
   stageLabel,
   stagesForDelivery,
   type Artifact,
+  type DeliveryDetail,
   type DeliveryStatus,
   type StageName,
   type TaskSpec,
@@ -26,6 +31,7 @@ import {
 } from '@/lib/infera-types'
 import { dateTime, timeAgo } from '@/lib/time'
 import { useDeliveryEvents } from '@/hooks/use-delivery-events'
+import { MarkdownEditor } from '@/components/markdown/markdown-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -45,6 +51,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Header } from '@/components/layout/header'
 import { LabelChipRow } from '@/components/label-chip'
 import { StatusBadge } from '@/components/status-badge'
+import { ChildProgressCard } from '@/features/deliveries/child-progress'
 import { LocalHandleButton } from '@/features/deliveries/local-handle-button'
 import {
   parkedAtLocalNode,
@@ -203,6 +210,9 @@ const EMPTY_ARTIFACTS: Artifact[] = []
 
 export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
   const qc = useQueryClient()
+  // 描述区编辑草稿（INFERA-296）：null = 未编辑，跟随服务端数据；源码模式
+  // 的编辑落在草稿上（预览即时可见），轮询/WS 刷新不打断进行中的编辑
+  const [descDraft, setDescDraft] = useState<string | null>(null)
   const { data, isLoading } = useQuery({
     queryKey: ['delivery', deliveryId],
     queryFn: () => getDelivery(deliveryId),
@@ -218,6 +228,20 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
       toast.success('合并已恢复，流水线继续')
     },
     onError: (e: Error) => toast.error(e.message),
+  })
+  // 描述保存（INFERA-299）：MarkdownEditor.onSave → PATCH 描述端点。成功把
+  // 200 响应写回详情缓存（回灌，不重拉全量），草稿退场跟随服务端数据；失败
+  // 保留草稿（用户的编辑不因一次失败丢失），内联展示失败文案
+  const saveDesc = useMutation({
+    mutationFn: (next: string) => updateDeliveryDescription(deliveryId, next),
+    onSuccess: (saved) => {
+      setDescDraft(null)
+      qc.setQueryData<DeliveryDetail>(['delivery', deliveryId], (old) =>
+        old ? { ...old, delivery: saved } : old
+      )
+      toast.success('描述已保存')
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
   })
 
   // 派生数据集中在 memo 里：timeline/artifacts 的全量 reverse/filter
@@ -323,12 +347,45 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
             <LabelChipRow labels={delivery.labels} className='mt-1.5 gap-1.5' />
           </CardHeader>
           <CardContent className='px-5'>
-            <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
-              描述
-            </h3>
-            <p className='text-sm leading-relaxed whitespace-pre-wrap'>
-              {delivery.description || '（无补充描述）'}
-            </p>
+            <div className='mb-1 flex items-center justify-between gap-2'>
+              <h3 className='text-xs font-medium text-muted-foreground'>
+                描述
+              </h3>
+              {/* 保存状态内联可见（INFERA-299）：组件契约冻结，保存按钮归
+                  MarkdownEditor，进行中/失败态由详情页在描述区头部承担 */}
+              {saveDesc.isPending && (
+                <span
+                  data-slot='desc-save-status'
+                  className='flex items-center gap-1 text-xs text-muted-foreground'
+                >
+                  <Loader2 className='size-3 animate-spin' />
+                  保存中…
+                </span>
+              )}
+              {saveDesc.isError && (
+                <span
+                  data-slot='desc-save-status'
+                  className='text-xs text-destructive'
+                >
+                  保存失败：{saveDesc.error.message}
+                </span>
+              )}
+            </div>
+            {/* 描述是 issue 正文同步而来的 Markdown：统一走 MarkdownEditor
+                （默认预览渲染，一键切源码可编辑）。编辑落在本地草稿，保存经
+                onSave 走描述写端点（INFERA-299）；在途请求不重复发起 */}
+            {delivery.description ? (
+              <MarkdownEditor
+                value={descDraft ?? delivery.description}
+                onChange={setDescDraft}
+                onSave={(next) => {
+                  if (!saveDesc.isPending) saveDesc.mutate(next)
+                }}
+                placeholder='补充任务描述（支持 Markdown）'
+              />
+            ) : (
+              <p className='text-sm text-muted-foreground'>（无补充描述）</p>
+            )}
           </CardContent>
         </Card>
 
@@ -554,18 +611,15 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
           </Card>
         )}
 
-        {/* 子任务清单（拆分父专属） */}
+        {/* 子任务进度（INFERA-297）：只读聚合接口为唯一数据源，拆分父与
+            任务同步镜像父同样展示（无子任务时组件自判空态不渲染） */}
+        <ChildProgressCard deliveryId={deliveryId} />
+
+        {/* 子任务清单（拆分父专属；进度数字归上方聚合区，不再由平表自算） */}
         {delivery.split_mode && children.length > 0 && (
           <Card>
             <CardHeader className='pb-0'>
-              <div className='flex items-center justify-between'>
-                <CardTitle className='text-sm font-medium'>
-                  子任务清单
-                </CardTitle>
-                <span className='text-xs text-muted-foreground'>
-                  {kidsDone} / {children.length} 完成
-                </span>
-              </div>
+              <CardTitle className='text-sm font-medium'>子任务清单</CardTitle>
             </CardHeader>
             <CardContent>
               {children.map((c, i) => (

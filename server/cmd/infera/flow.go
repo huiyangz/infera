@@ -17,16 +17,16 @@ import (
 
 // assembleTaskSync 装配任务同步（INFERA-169）：凭据三键齐 → client + 同步
 // 服务 + 自动同步调度器（启动即同步一轮，之后按 cfg.TaskSyncInterval 周期
-// 轮询；0 = 仅启动轮）+ （配置了 Tech Lead 时的）需求创建编排器。三键
-// 全空 = 未接入，返回全 nil 无错；半配交给 tasksource.New 显式报错（与
-// assembleFlow 同一组键，错误更早暴露）。
-func assembleTaskSync(cfg config.Config, st store.Store) (*syncsvc.Service, *syncsvc.Scheduler, *syncsvc.Creator, error) {
+// 轮询；0 = 仅启动轮）+ （配置了 Tech Lead 时的）需求创建编排器 + 描述编辑
+// 编排器（INFERA-298，无额外配置项）。三键全空 = 未接入，返回全 nil 无错；
+// 半配交给 tasksource.New 显式报错（与 assembleFlow 同一组键，错误更早暴露）。
+func assembleTaskSync(cfg config.Config, st store.Store) (*syncsvc.Service, *syncsvc.Scheduler, *syncsvc.Creator, *syncsvc.Editor, error) {
 	if cfg.TaskSyncServerURL == "" && cfg.TaskSyncToken == "" && cfg.TaskSyncWorkspaceID == "" {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	client, err := tasksource.New(cfg.TaskSyncServerURL, cfg.TaskSyncToken, cfg.TaskSyncWorkspaceID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	svc := syncsvc.New(client, st)
 	var creator *syncsvc.Creator
@@ -35,10 +35,14 @@ func assembleTaskSync(cfg config.Config, st store.Store) (*syncsvc.Service, *syn
 			TechLeadAgentID: cfg.TaskSyncTechLeadAgentID,
 		})
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	}
-	return svc, syncsvc.NewScheduler(svc, cfg.TaskSyncInterval), creator, nil
+	editor, err := syncsvc.NewEditor(client, st)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return svc, syncsvc.NewScheduler(svc, cfg.TaskSyncInterval), creator, editor, nil
 }
 
 // flowConfigured 报告是否尝试接入需求流转：全部流转键为空 = 未接入
