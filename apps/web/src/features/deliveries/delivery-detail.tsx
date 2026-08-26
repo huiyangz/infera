@@ -11,7 +11,11 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { getDelivery, mergeResume } from '@/lib/infera-api'
+import {
+  getDelivery,
+  mergeResume,
+  updateDeliveryDescription,
+} from '@/lib/infera-api'
 import {
   GATES,
   SPLIT_PARENT_SKIPPED,
@@ -19,6 +23,7 @@ import {
   stageLabel,
   stagesForDelivery,
   type Artifact,
+  type DeliveryDetail,
   type DeliveryStatus,
   type StageName,
   type TaskSpec,
@@ -224,6 +229,20 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
     },
     onError: (e: Error) => toast.error(e.message),
   })
+  // 描述保存（INFERA-299）：MarkdownEditor.onSave → PATCH 描述端点。成功把
+  // 200 响应写回详情缓存（回灌，不重拉全量），草稿退场跟随服务端数据；失败
+  // 保留草稿（用户的编辑不因一次失败丢失），内联展示失败文案
+  const saveDesc = useMutation({
+    mutationFn: (next: string) => updateDeliveryDescription(deliveryId, next),
+    onSuccess: (saved) => {
+      setDescDraft(null)
+      qc.setQueryData<DeliveryDetail>(['delivery', deliveryId], (old) =>
+        old ? { ...old, delivery: saved } : old
+      )
+      toast.success('描述已保存')
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  })
 
   // 派生数据集中在 memo 里：timeline/artifacts 的全量 reverse/filter
   // 只在数据变化时执行，不再每次 render 重算
@@ -328,16 +347,40 @@ export function DeliveryDetail({ deliveryId }: { deliveryId: string }) {
             <LabelChipRow labels={delivery.labels} className='mt-1.5 gap-1.5' />
           </CardHeader>
           <CardContent className='px-5'>
-            <h3 className='mb-1 text-xs font-medium text-muted-foreground'>
-              描述
-            </h3>
+            <div className='mb-1 flex items-center justify-between gap-2'>
+              <h3 className='text-xs font-medium text-muted-foreground'>
+                描述
+              </h3>
+              {/* 保存状态内联可见（INFERA-299）：组件契约冻结，保存按钮归
+                  MarkdownEditor，进行中/失败态由详情页在描述区头部承担 */}
+              {saveDesc.isPending && (
+                <span
+                  data-slot='desc-save-status'
+                  className='flex items-center gap-1 text-xs text-muted-foreground'
+                >
+                  <Loader2 className='size-3 animate-spin' />
+                  保存中…
+                </span>
+              )}
+              {saveDesc.isError && (
+                <span
+                  data-slot='desc-save-status'
+                  className='text-xs text-destructive'
+                >
+                  保存失败：{saveDesc.error.message}
+                </span>
+              )}
+            </div>
             {/* 描述是 issue 正文同步而来的 Markdown：统一走 MarkdownEditor
-                （默认预览渲染，一键切源码可编辑）。编辑落在本地草稿；持久化
-                保存接口后端尚未提供（见 INFERA-296 交付说明），故不传 onSave */}
+                （默认预览渲染，一键切源码可编辑）。编辑落在本地草稿，保存经
+                onSave 走描述写端点（INFERA-299）；在途请求不重复发起 */}
             {delivery.description ? (
               <MarkdownEditor
                 value={descDraft ?? delivery.description}
                 onChange={setDescDraft}
+                onSave={(next) => {
+                  if (!saveDesc.isPending) saveDesc.mutate(next)
+                }}
                 placeholder='补充任务描述（支持 Markdown）'
               />
             ) : (

@@ -200,3 +200,22 @@ export async function rejectGate(
     })
   )
 }
+/**
+ * 任务描述编辑（端点契约冻结于 INFERA-298）：PATCH
+ * /api/deliveries/{id}/description，body {"description": string}，200 返回
+ * 保存后的 Delivery（与详情 delivery 同形，labels 恒为数组）。空白/超长 →
+ * 400；未登录 401；不存在 404；无上游映射或并发冲突 409；上游写失败 502；
+ * 未装配 503 —— 一律以 ApiError 抛出，调用方只负责展示文案。
+ */
+export async function updateDeliveryDescription(
+  id: string,
+  description: string
+): Promise<Delivery> {
+  return json(
+    await fetch(`/api/deliveries/${id}/description`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description }),
+    })
+  )
+}
