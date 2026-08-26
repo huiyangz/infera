@@ -121,7 +121,7 @@
 
 ## Requirement: 按项目合并策略自动合并
 
-系统 SHALL 支持合并策略三档，档位经 `GET/PUT /api/projects/{id}/merge-policy` 按项目读写（UPSERT 以 project_id 为键）：`manual`（默认，未设置即手动档）——自动合并完全不动作，合并卡留待人点；`auto_pass`——verdict PASS 的 pending 合并卡每轮清扫时立即自动合并；`threshold`——PR diff 行数（additions+deletions）≤ 阈值自动合并，超过弹卡留人。**自动合并清扫解析档位时是部署级单行语义**：requirements 冻结 schema 无项目关联列，清扫器取 `project_settings` 中 `project_id` 最小的一行对全部需求生效——单项目部署下与「项目级」等价，多项目部署下后写的其它项目档位对自动合并不生效（见交付说明「建议后续」）。档位校验 SHALL 拒绝 manual/auto_pass 携带阈值、threshold 缺正阈值与未知档位；解析不出有效档位时 SHALL 回落手动档（自动合并是风险动作，数据异常取最保守行为）。自动合并成功 SHALL 一次性收口：卡 resolved、审计 actor=system、节点直达 delivered、游标落库。合并暂被阻塞 SHALL 保持卡 pending、下一轮自然重试；PR 已 closed 且未合并（被驳回关闭）SHALL NOT 视为了结——卡转人工，不误置已交付、不误记 merge 审计；PR 已 closed 且已合并（合并后收口丢失的崩溃窗口）SHALL 收敛收口。FAIL 结论 SHALL NOT 被自动动作（拒绝返工是人决策）。清扫中除「稍后可重试」类外的失败（diff 统计/PR 读取失败、鉴权或网络错误等硬失败）SHALL 只记服务端日志并保持卡 pending 留待人工——不落卡、不写审计、不动节点，自动合并对该卡静默停手。
+系统 SHALL 支持合并策略三档，档位经 `GET/PUT /api/projects/{id}/merge-policy` 按项目读写（UPSERT 以 project_id 为键）：`manual`（默认，未设置即手动档）——自动合并完全不动作，合并卡留待人点；`auto_pass`——verdict PASS 的 pending 合并卡每轮清扫时立即自动合并；`threshold`——PR diff 行数（additions+deletions）≤ 阈值自动合并，超过弹卡留人。**自动合并清扫解析档位时是部署级单行语义**：requirements 冻结 schema 无项目关联列，清扫器取 `project_settings` 中 `project_id` 最小的一行对全部需求生效——单项目部署下与「项目级」等价，多项目部署下后写的其它项目档位对自动合并不生效。这是冻结 schema 下的已知限定而非待修缺陷：按项目精确生效需先给 requirements 增加项目关联列（schema 变更），不在本 spec 范围。档位校验 SHALL 拒绝 manual/auto_pass 携带阈值、threshold 缺正阈值与未知档位；解析不出有效档位时 SHALL 回落手动档（自动合并是风险动作，数据异常取最保守行为）。自动合并成功 SHALL 一次性收口：卡 resolved、审计 actor=system、节点直达 delivered、游标落库。合并暂被阻塞 SHALL 保持卡 pending、下一轮自然重试；PR 已 closed 且未合并（被驳回关闭）SHALL NOT 视为了结——卡转人工，不误置已交付、不误记 merge 审计；PR 已 closed 且已合并（合并后收口丢失的崩溃窗口）SHALL 收敛收口。FAIL 结论 SHALL NOT 被自动动作（拒绝返工是人决策）。清扫中除「稍后可重试」类外的失败（diff 统计/PR 读取失败、鉴权或网络错误等硬失败）SHALL 只记服务端日志并保持卡 pending 留待人工——不落卡、不写审计、不动节点，自动合并对该卡静默停手。
 
 #### Scenario: auto_pass 即时合并
 
@@ -145,7 +145,7 @@
 
 ## Requirement: 挂起交付门禁并按裁定流转
 
-交付流水线 SHALL 在四个人工门禁（spec_approval / design_approval / tasks_approval / code_review）暂停等人：推进到门禁节点时先执行前置——code_review 门先固化产出（commit、push 分支、开 PR、落 diff 产物），再跑门禁前置预审（code_review 角色 agent，产出 agent_output 产物）与双道审查——然后置 pending_gate、发 `gate_pending` 事件并停住。批准 SHALL 清 pending_gate、发 `gate_approved` 并前进到后继阶段（code_review 批准即交付完成、释放 workspace，但 SHALL NOT 自动合并 PR——交付 PR 的合并由人在 GitHub 完成）。打回 SHALL 清 pending_gate、把理由持久化在交付上、发 `gate_rejected`（含理由）并回退到该门的打回目标（spec_approval→spec、design_approval→design、tasks_approval→tasks、code_review→code_gen）；打回成功后两个驾驶面（Web / MCP）SHALL 把锁移交给后台驱动立即重跑被打回的阶段，理由在该次重跑的 prompt 注入一次后清空（引擎裸调用 Reject 只回退停车不重点火，但产品入口都经后台驱动）。交付无待审批门禁时，门禁读取 / 批准 / 打回 SHALL 报错（400）。门禁事件 SHALL 全部进入交付时间线（append-only，按发生序）。
+交付流水线 SHALL 在四个人工门禁（spec_approval / design_approval / tasks_approval / code_review）暂停等人：推进到门禁节点时先执行前置——code_review 门先固化产出（commit、push 分支、开 PR、落 diff 产物），再跑门禁前置预审（code_review 角色 agent，产出 agent_output 产物）与双道审查——然后置 pending_gate、发 `gate_pending` 事件并停住。批准 SHALL 清 pending_gate、发 `gate_approved` 并前进到后继阶段（code_review 批准即交付完成、释放 workspace，但 SHALL NOT 自动合并 PR——交付 PR 的合并由人在 GitHub 完成）。打回 SHALL 清 pending_gate、把理由持久化在交付上、发 `gate_rejected`（含理由）并回退到该门的打回目标（spec_approval→spec、design_approval→design、tasks_approval→tasks、code_review→code_gen）；打回成功后两个驾驶面（Web / MCP）SHALL 立即由后台驱动重跑被打回的阶段，理由在该次重跑的 prompt 注入一次后清空（引擎裸调用 Reject 只回退停车不重点火，但产品入口都经后台驱动）；锁的交接方式按面区分——Web 面把锁所有权移交给后台驱动 goroutine（驱动跑完才放锁），MCP 面簿记后先放锁、由后台驱动自行重取同一把锁（放锁到重取之间另一面可先拿锁，安全：所有引擎入口各自做状态校验，锁只保证不并发进引擎）。交付无待审批门禁时，门禁读取 / 批准 / 打回 SHALL 被拒绝：Web 面报错（400）；MCP 工具面同一冲突以 `isError: true` 的工具结果表达，文本说明无挂起门禁及交付当前所停阶段。门禁事件 SHALL 全部进入交付时间线（append-only，按发生序）。
 
 #### Scenario: code_review 门挂起时序
 
