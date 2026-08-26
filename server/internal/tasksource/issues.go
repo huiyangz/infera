@@ -100,6 +100,20 @@ func (c *Client) SetStatus(ctx context.Context, issueID, status string, suppress
 	return c.do(ctx, http.MethodPut, "/api/issues/"+issueID, body, nil)
 }
 
+// UpdateIssueDescription 更新 issue 描述（PUT /api/issues/{id}——与 SetStatus
+// 同一端点，官方 CLI `issue update --description` 同族载荷）。
+//
+// suppress_run 恒为 true：描述编辑是元数据修正，不是工作交接——不带上它，
+// 服务端会入队 assignee 的下一次 run（坑3），一次页面上的文案修订就会唤醒
+// 一次计费执行。响应体不消费：上游生效与否由调用方随后的 GetIssue 读回确认。
+func (c *Client) UpdateIssueDescription(ctx context.Context, issueID, description string) error {
+	body := struct {
+		Description string `json:"description"`
+		SuppressRun bool   `json:"suppress_run"`
+	}{Description: description, SuppressRun: true}
+	return c.do(ctx, http.MethodPut, "/api/issues/"+issueID, body, nil)
+}
+
 // ListTaskRuns 拉取 issue 的 task-runs（GET /api/issues/{id}/task-runs），
 // 服务端按时间排序，末位为最新一次执行。
 func (c *Client) ListTaskRuns(ctx context.Context, issueID string) ([]TaskRun, error) {
